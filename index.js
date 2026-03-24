@@ -63,11 +63,7 @@ const DRIVE_FOLDERS = [
   {
     id:    "1RfOBOFJQs7mvtkOsoyg_uG52gJuJ3KVu",
     label: "Documents mairie (Drive)",
-  },
-  {
-    id:    "1LpWP5HaidxJZWblnxUUA_n09VigOWp1a",
-    label: "PLU (Drive)",
-  },
+  }
 ];
 
 // ─── Cache ─────────────────────────────────────────────────────────────────────
@@ -348,13 +344,13 @@ async function handleMessage(senderId, userText) {
 
 ─────────────────────────────────────────
 CONTENU DES SOURCES (mis à jour le ${siteCache.lastUpdate?.toLocaleDateString("fr-FR") || "inconnu"}) :
-${siteCache.content.substring(0, 60000)}
+${siteCache.content.substring(0, 20000)}
 ─────────────────────────────────────────`;
 
     addToHistory(senderId, "user", userText);
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 500,
       system: systemPrompt,
       messages: getHistory(senderId),
