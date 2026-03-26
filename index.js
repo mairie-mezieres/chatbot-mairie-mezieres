@@ -1,100 +1,109 @@
-const express   = require("express");
-const axios     = require("axios");
+const express  = require("express");
+const axios    = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 
 const app = express();
 app.use(express.json());
 
 // ─── Configuration ─────────────────────────────────────────────────────────────
-const PAGE_ACCESS_TOKEN   = process.env.PAGE_ACCESS_TOKEN;
-const VERIFY_TOKEN        = process.env.VERIFY_TOKEN;
-const ANTHROPIC_API_KEY   = process.env.ANTHROPIC_API_KEY;
+const PAGE_ACCESS_TOKEN    = process.env.PAGE_ACCESS_TOKEN;
+const VERIFY_TOKEN         = process.env.VERIFY_TOKEN;
+const ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY;
 const GOOGLE_CALENDAR_ICAL = process.env.GOOGLE_CALENDAR_ICAL;
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
-// ─── Sources web ───────────────────────────────────────────────────────────────
-const MEZIERES_PAGES = [
-  { url: "https://mezieres-lez-clery.fr/",                                          topics: ["general","contact","horaires"] },
-  { url: "https://mezieres-lez-clery.fr/2018/10/25/178/",                           topics: ["demarches","administratif"] },
-  { url: "https://mezieres-lez-clery.fr/2018/10/25/gestion-des-dechets/",           topics: ["dechets","tri","collecte","recyclage"] },
-  { url: "https://mezieres-lez-clery.fr/2018/10/24/location-de-materiel/",          topics: ["location","materiel"] },
-  { url: "https://mezieres-lez-clery.fr/2018/10/23/numeros-utiles/",                topics: ["contact","numeros","urgence"] },
-  { url: "https://mezieres-lez-clery.fr/2018/11/03/les-services-municipaux/",       topics: ["services","mairie","general"] },
-  { url: "https://mezieres-lez-clery.fr/2018/11/04/le-conseil-municipal/",          topics: ["conseil","elus","municipal"] },
-  { url: "https://mezieres-lez-clery.fr/2018/10/22/presentation-de-la-commune/",   topics: ["commune","histoire","general"] },
-  { url: "https://mezieres-lez-clery.fr/2018/10/21/randonnees-pedestres/",          topics: ["randonnee","balade","nature","velo"] },
-  { url: "https://mezieres-lez-clery.fr/2018/11/03/lecole-de-la-foret/",            topics: ["ecole","scolaire","enfant"] },
-  { url: "https://mezieres-lez-clery.fr/2018/11/01/le-restaurant-scolaire/",        topics: ["cantine","restaurant","scolaire","repas"] },
-  { url: "https://mezieres-lez-clery.fr/2018/11/02/308/",                           topics: ["periscolaire","garderie","enfant","scolaire"] },
-  { url: "https://mezieres-lez-clery.fr/2020/09/12/regles-durbanisme/",             topics: ["urbanisme","plu","construction","zone"] },
-  { url: "https://mezieres-lez-clery.fr/2021/03/13/fiche-pratique/",                topics: ["demarches","administratif","fiche"] },
-  { url: "https://mezieres-lez-clery.fr/2020/06/12/assainissement/",                topics: ["assainissement","eau","spanc"] },
-  { url: "https://mezieres-lez-clery.fr/2018/10/20/tourisme/",                      topics: ["tourisme","visite","patrimoine"] },
-  { url: "https://mezieres-lez-clery.fr/2021/06/14/dicrim/",                        topics: ["dicrim","risque","inondation","nucleaire","danger","securite"] },
-  { url: "https://mezieres-lez-clery.fr/2018/11/02/plan-local-durbanisme/",         topics: ["plu","urbanisme","zone","terrain"] },
-  { url: "https://mezieres-lez-clery.fr/2024/02/04/permis-de-construire-et-declarations-prealables/", topics: ["permis","construire","declaration","travaux"] },
-  { url: "https://mezieres-lez-clery.fr/les-associations/",                          topics: ["association","subvention","club"] },
-];
-
-const CCTVL_PAGES = [
-  { url: "https://www.ccterresduvaldeloire.fr/",                  topics: ["general","cctvl","intercommunalite"] },
-  { url: "https://www.ccterresduvaldeloire.fr/presentation/",     topics: ["cctvl","intercommunalite"] },
-  { url: "https://www.ccterresduvaldeloire.fr/dechets/",          topics: ["dechets","tri","collecte","recyclage"] },
-  { url: "https://www.ccterresduvaldeloire.fr/petite-enfance/",   topics: ["creche","enfant","petite-enfance","marmousets"] },
-  { url: "https://www.ccterresduvaldeloire.fr/contact/",          topics: ["contact","cctvl"] },
-];
-
-// ─── Mots-clés → topics ────────────────────────────────────────────────────────
-const KEYWORD_TOPICS = {
-  "bus|car|rémi|remi|ligne 8|transport|horaire|bréau|breau|arrêt|autocar": "transport",
-  "permis|construire|plu|urbanisme|zone|terrain|déclaration|travaux|lotissement": "urbanisme",
-  "école|ecole|cantine|périscolaire|periscolaire|enfant|crèche|creche|marmousets|garderie|restaurant scolaire": "scolaire",
-  "déchet|dechet|poubelle|tri|recyclage|collecte|bac|ordures|verre|papier|déchetterie": "dechets",
-  "risque|inondation|nucléaire|nucleaire|dicrim|danger|sécurité|securite|catastrophe": "dicrim",
-  "manifestation|fête|fete|événement|evenement|agenda|concert|spectacle|animation|sortie": "agenda",
-  "association|subvention|club|sport|loisir": "association",
-  "randonnée|randonnee|balade|sentier|chemin|vélo|velo|nature|forêt|foret": "tourisme",
-  "assainissement|eau|spanc|fosse|égout": "assainissement",
-  "horaire|ouverte|ouverture|fermé|ferme|accueil|permanence|rendez-vous": "horaires",
-  "élu|elu|maire|conseil|municipal|romuald|genty|fabrice": "conseil",
-  "contact|téléphone|telephone|email|adresse|mail": "contact",
+// ─── Sources par sujet ─────────────────────────────────────────────────────────
+const SOURCES = {
+  mairie_general: [
+    "https://mezieres-lez-clery.fr/",
+    "https://mezieres-lez-clery.fr/2018/11/03/les-services-municipaux/",
+    "https://mezieres-lez-clery.fr/2018/10/23/numeros-utiles/",
+    "https://mezieres-lez-clery.fr/2018/10/22/presentation-de-la-commune/",
+    "https://mezieres-lez-clery.fr/2018/11/04/le-conseil-municipal/",
+  ],
+  demarches: [
+    "https://mezieres-lez-clery.fr/2018/10/25/178/",
+    "https://mezieres-lez-clery.fr/2021/03/13/fiche-pratique/",
+  ],
+  dechets: [
+    "https://mezieres-lez-clery.fr/2018/10/25/gestion-des-dechets/",
+    "https://www.ccterresduvaldeloire.fr/dechets/",
+  ],
+  urbanisme: [
+    "https://mezieres-lez-clery.fr/2020/09/12/regles-durbanisme/",
+    "https://mezieres-lez-clery.fr/2018/11/02/plan-local-durbanisme/",
+    "https://mezieres-lez-clery.fr/2024/02/04/permis-de-construire-et-declarations-prealables/",
+  ],
+  scolaire: [
+    "https://mezieres-lez-clery.fr/2018/11/03/lecole-de-la-foret/",
+    "https://mezieres-lez-clery.fr/2018/11/01/le-restaurant-scolaire/",
+    "https://mezieres-lez-clery.fr/2018/11/02/308/",
+    "https://mezieres-lez-clery.fr/2018/10/29/creche-familiale-les-marmousets/",
+    "https://mezieres-lez-clery.fr/2018/10/30/centre-de-loisirs/",
+  ],
+  associations: [
+    "https://mezieres-lez-clery.fr/les-associations/",
+    "https://mezieres-lez-clery.fr/2021/12/06/demande-subvention/",
+  ],
+  dicrim: [
+    "https://mezieres-lez-clery.fr/2021/06/14/dicrim/",
+  ],
+  randonnees: [
+    "https://mezieres-lez-clery.fr/2018/10/21/randonnees-pedestres/",
+    "https://mezieres-lez-clery.fr/2018/10/20/tourisme/",
+  ],
+  assainissement: [
+    "https://mezieres-lez-clery.fr/2020/06/12/assainissement/",
+  ],
+  location: [
+    "https://mezieres-lez-clery.fr/2018/10/24/location-de-materiel/",
+  ],
+  cctvl: [
+    "https://www.ccterresduvaldeloire.fr/presentation/",
+    "https://www.ccterresduvaldeloire.fr/competences/",
+  ],
 };
 
-// ─── Cache par sujet ───────────────────────────────────────────────────────────
-let contentCache = {}; // { topic: { content, lastUpdate } }
-let calendarCache = { events: "", lastUpdate: null };
-let busCache      = { content: "", lastUpdate: null };
+// ─── Mots-clés par sujet ───────────────────────────────────────────────────────
+const KEYWORDS = {
+  transport:      ["bus", "car", "rémi", "remi", "ligne 8", "ligne8", "transport", "horaire", "bréau", "breau", "arrêt", "navette", "trajet", "orléans"],
+  dechets:        ["déchet", "dechet", "poubelle", "tri", "recyclage", "collecte", "ordure", "verre", "papier", "déchetterie", "bac", "compost"],
+  urbanisme:      ["permis", "construire", "plu", "urbanisme", "zone", "terrain", "déclaration", "préalable", "construction", "bâtir", "parcelle"],
+  scolaire:       ["école", "ecole", "cantine", "restaurant scolaire", "périscolaire", "enfant", "crèche", "creche", "loisirs", "garderie", "marmousets", "classe"],
+  associations:   ["association", "asso", "subvention", "club", "bénévole"],
+  dicrim:         ["risque", "danger", "inondation", "nucléaire", "nucleaire", "dicrim", "catastrophe", "alerte", "sirène"],
+  randonnees:     ["randonnée", "rando", "balade", "promenade", "chemin", "circuit", "vélo", "forêt", "nature"],
+  assainissement: ["assainissement", "spanc", "fosse", "eaux usées", "raccordement"],
+  location:       ["louer", "location", "matériel", "salle", "table", "chaise", "barnum"],
+  demarches:      ["carte identité", "passeport", "naissance", "mariage", "décès", "état civil", "acte", "certificat"],
+  cctvl:          ["cctvl", "intercommunalité", "communauté de communes", "terres du val"],
+  agenda:         ["manifestation", "fête", "événement", "agenda", "concert", "animation", "sortie", "prochainement", "ce week", "bientôt", "calendrier"],
+};
 
-const CACHE_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours
-
-// ─── Détection intelligente du sujet ──────────────────────────────────────────
 function detectTopics(text) {
-  const lower = text.toLowerCase();
-  const detected = new Set(["general", "horaires", "contact"]); // toujours inclus
-
-  for (const [pattern, topic] of Object.entries(KEYWORD_TOPICS)) {
-    const regex = new RegExp(pattern, "i");
-    if (regex.test(lower)) {
-      detected.add(topic);
-      // Ajouter les topics liés
-      if (topic === "transport")   detected.add("transport");
-      if (topic === "urbanisme")   detected.add("urbanisme");
-      if (topic === "scolaire")    detected.add("scolaire");
-      if (topic === "agenda")      detected.add("agenda");
-    }
+  const lower  = text.toLowerCase();
+  const topics = new Set(["mairie_general"]);
+  for (const [topic, words] of Object.entries(KEYWORDS)) {
+    if (words.some(w => lower.includes(w))) topics.add(topic);
   }
-  return [...detected];
+  return [...topics];
 }
+
+// ─── Caches ────────────────────────────────────────────────────────────────────
+const topicCache    = {};
+let   remiCache     = { content: "", lastUpdate: null };
+let   calendarCache = { content: "", lastUpdate: null };
+const CACHE_MS      = 7 * 24 * 60 * 60 * 1000;
 
 // ─── Utilitaires ───────────────────────────────────────────────────────────────
 function cleanHtml(html) {
   return html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, "")
-    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, "")
-    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+    .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+    .replace(/<header[\s\S]*?<\/header>/gi, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s{3,}/g, "\n\n")
     .replace(/&[a-z]+;/g, " ")
@@ -102,88 +111,27 @@ function cleanHtml(html) {
     .substring(0, 2500);
 }
 
-async function fetchUrl(url, timeout = 10000) {
+async function fetchUrl(url) {
   try {
     const res = await axios.get(url, {
-      timeout,
+      timeout: 10000,
       responseType: "arraybuffer",
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; MEL-MairieBot/1.0)" },
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; MairieBot/2.0)" },
     });
     const ct = res.headers["content-type"] || "";
-    const buf = Buffer.from(res.data);
-    if (ct.includes("text") || ct.includes("calendar")) {
-      return { text: ct.includes("html") ? cleanHtml(buf.toString("utf-8")) : buf.toString("utf-8"), binary: null };
-    }
-    return { text: null, binary: buf.toString("base64"), contentType: ct };
-  } catch (err) {
-    console.warn(`⚠️ ${url} — ${err.message}`);
+    if (ct.includes("text")) return { text: cleanHtml(Buffer.from(res.data).toString("utf-8")), binary: null };
+    return { text: null, binary: Buffer.from(res.data).toString("base64") };
+  } catch (e) {
+    console.warn(`⚠️ ${url} : ${e.message}`);
     return { text: null, binary: null };
   }
 }
 
-// ─── Parsing iCal ──────────────────────────────────────────────────────────────
-function parseIcal(icsText) {
-  const events = [];
-  const blocks = icsText.split("BEGIN:VEVENT");
-
-  for (let i = 1; i < blocks.length; i++) {
-    const block = blocks[i];
-    const get = (key) => {
-      const match = block.match(new RegExp(`${key}[^:]*:([^\\r\\n]+)`));
-      return match ? match[1].trim() : "";
-    };
-
-    const dtstart = get("DTSTART");
-    const summary = get("SUMMARY");
-    const location = get("LOCATION");
-    const description = get("DESCRIPTION").replace(/\\n/g, " ").substring(0, 200);
-
-    if (!summary || !dtstart) continue;
-
-    // Parsing de la date
-    let dateStr = dtstart.replace(/T.*/, "").replace(/(\d{4})(\d{2})(\d{2})/, "$3/$2/$1");
-
-    // Filtrer les événements passés (garder 3 mois en avant + 1 semaine passée)
-    try {
-      const raw = dtstart.replace(/T.*/, "");
-      const d = new Date(`${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`);
-      const now = new Date();
-      const limit = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
-      const past  = new Date(now.getTime() - 7  * 24 * 60 * 60 * 1000);
-      if (d < past || d > limit) continue;
-    } catch (_) {}
-
-    events.push(`📅 ${dateStr} — ${summary}${location ? " 📍 " + location : ""}${description ? " — " + description : ""}`);
-  }
-
-  // Trier par date
-  events.sort();
-  return events.length > 0
-    ? events.join("\n")
-    : "Aucun événement à venir dans les 3 prochains mois.";
-}
-
-// ─── Chargement du calendrier ──────────────────────────────────────────────────
-async function refreshCalendar() {
-  if (!GOOGLE_CALENDAR_ICAL) return;
-  console.log("📅 Rafraîchissement du calendrier...");
-  const { text } = await fetchUrl(GOOGLE_CALENDAR_ICAL);
-  if (text) {
-    calendarCache.events    = parseIcal(text);
-    calendarCache.lastUpdate = new Date();
-    console.log(`✅ Calendrier mis à jour — ${calendarCache.events.split("\n").length} événements`);
-  } else {
-    console.warn("⚠️ Calendrier inaccessible");
-  }
-}
-
-// ─── Chargement du PDF bus (Drive) ────────────────────────────────────────────
-async function refreshBus() {
-  console.log("🚌 Rafraîchissement horaires bus...");
-  const url = "https://drive.google.com/uc?export=download&id=1Fn9SWsL7jdipI3G0xq61NjWuluSPSZie";
-  const { binary } = await fetchUrl(url);
-  if (!binary) { console.warn("⚠️ PDF bus non accessible"); return; }
-
+// ─── PDF Rémi ──────────────────────────────────────────────────────────────────
+async function refreshRemiCache() {
+  console.log("🚌 Mise à jour horaires Rémi...");
+  const { binary } = await fetchUrl("https://drive.google.com/uc?export=download&id=1Fn9SWsL7jdipI3G0xq61NjWuluSPSZie");
+  if (!binary) { remiCache.content = "[Horaires Rémi : PDF non accessible]"; return; }
   try {
     const resp = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -192,297 +140,296 @@ async function refreshBus() {
         role: "user",
         content: [
           { type: "document", source: { type: "base64", media_type: "application/pdf", data: binary } },
-          { type: "text", text: `Extrais UNIQUEMENT les horaires des arrêts de MÉZIÈRES-LEZ-CLÉRY.
-Il y a DEUX arrêts distincts : "Mairie" et "Le Bréau".
-Pour chacun, indique :
-- Direction (vers Orléans / vers St-Laurent-Nouan)
-- Horaires en période scolaire
-- Horaires en vacances scolaires
-- Jours de circulation (lundi-vendredi, samedi...)
-Indique aussi les dates des vacances scolaires mentionnées.
-Format concis et clair.` }
-        ]
-      }]
+          { type: "text", text: "Extrais UNIQUEMENT les horaires des deux arrêts de MÉZIÈRES-LEZ-CLÉRY : arrêt MAIRIE et arrêt LE BRÉAU. Pour chaque arrêt : direction vers Orléans et direction vers St-Laurent-Nouan, horaires période scolaire et vacances, jours de circulation. Ajoute les dates des vacances scolaires. Texte structuré sans markdown." }
+        ],
+      }],
     });
-    busCache.content    = resp.content[0].text;
-    busCache.lastUpdate = new Date();
-    console.log("✅ Horaires bus extraits");
+    remiCache.content    = `=== HORAIRES BUS LIGNE 8 RÉMI — ARRÊTS MÉZIÈRES-LEZ-CLÉRY ===\n${resp.content[0].text}`;
+    remiCache.lastUpdate = new Date();
+    console.log("✅ Cache Rémi mis à jour");
   } catch (e) {
-    console.warn(`⚠️ Extraction PDF bus : ${e.message}`);
+    remiCache.content = "[Horaires Rémi : erreur extraction PDF]";
+    console.warn("⚠️ Rémi PDF error:", e.message);
   }
 }
 
-// ─── Chargement du contenu web par sujet ──────────────────────────────────────
-async function refreshWebContent() {
-  console.log("🌐 Rafraîchissement contenu web...");
-  const byTopic = {};
+// ─── Calendrier iCal ──────────────────────────────────────────────────────────
+function parseIcal(icsText) {
+  const events = [];
+  const now    = new Date();
+  const limit  = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+  const blocks = icsText.split("BEGIN:VEVENT");
 
-  for (const page of [...MEZIERES_PAGES, ...CCTVL_PAGES]) {
-    const { text } = await fetchUrl(page.url);
-    if (!text) continue;
-    for (const topic of page.topics) {
-      if (!byTopic[topic]) byTopic[topic] = [];
-      byTopic[topic].push(`[${page.url}]\n${text}`);
-    }
+  for (let i = 1; i < blocks.length; i++) {
+    const b   = blocks[i];
+    const get = (key) => { const m = b.match(new RegExp(`${key}[^:]*:(.+)`)); return m ? m[1].replace(/\r/g, "").trim() : ""; };
+
+    const rawStart = get("DTSTART");
+    const summary  = get("SUMMARY");
+    const location = get("LOCATION");
+    const desc     = get("DESCRIPTION").replace(/\\n/g, " ").substring(0, 150);
+
+    if (!rawStart || !summary) continue;
+
+    const y = rawStart.substring(0, 4), mo = rawStart.substring(4, 6), d = rawStart.substring(6, 8);
+    const h = rawStart.length > 8 ? rawStart.substring(9, 11) : "00";
+    const mn = rawStart.length > 8 ? rawStart.substring(11, 13) : "00";
+    const dt = new Date(`${y}-${mo}-${d}T${h}:${mn}:00`);
+
+    if (isNaN(dt) || dt < now || dt > limit) continue;
+
+    const dateStr = dt.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    const timeStr = h !== "00" ? ` à ${h}h${mn}` : "";
+    let line = `📅 ${summary} — ${dateStr}${timeStr}`;
+    if (location) line += ` 📍 ${location}`;
+    if (desc)     line += `\n   ${desc}`;
+    events.push({ dt, line });
   }
 
-  // Stocker par topic
-  for (const [topic, contents] of Object.entries(byTopic)) {
-    contentCache[topic] = {
-      content:    contents.join("\n\n---\n\n").substring(0, 8000),
-      lastUpdate: new Date(),
-    };
+  events.sort((a, b) => a.dt - b.dt);
+  return events.map(e => e.line).join("\n\n");
+}
+
+async function refreshCalendarCache() {
+  if (!GOOGLE_CALENDAR_ICAL) { console.warn("⚠️ GOOGLE_CALENDAR_ICAL non défini"); return; }
+  console.log("📅 Mise à jour calendrier...");
+  try {
+    const res    = await axios.get(GOOGLE_CALENDAR_ICAL, { timeout: 10000 });
+    const parsed = parseIcal(res.data);
+    calendarCache.content    = parsed
+      ? `=== AGENDA DES MANIFESTATIONS (3 prochains mois) ===\n${parsed}`
+      : "=== AGENDA === Aucun événement dans les 3 prochains mois.";
+    calendarCache.lastUpdate = new Date();
+    const nb = (parsed.match(/📅/g) || []).length;
+    console.log(`✅ Calendrier mis à jour — ${nb} événement(s)`);
+  } catch (e) {
+    calendarCache.content = "[Agenda : non accessible]";
+    console.warn("⚠️ Calendar error:", e.message);
   }
-  console.log(`✅ Contenu web chargé — ${Object.keys(contentCache).length} topics`);
 }
 
-// ─── Rafraîchissement complet ──────────────────────────────────────────────────
-async function refreshAll() {
-  console.log("\n🔄 Rafraîchissement complet de MEL...");
-  await Promise.all([
-    refreshWebContent(),
-    refreshCalendar(),
-    refreshBus(),
-  ]);
-  console.log("✅ MEL est à jour !\n");
-}
-
-async function ensureUpToDate() {
+// ─── Cache par sujet ───────────────────────────────────────────────────────────
+async function getTopicContent(topic) {
   const now = Date.now();
-  const needsRefresh = !calendarCache.lastUpdate ||
-    now - calendarCache.lastUpdate.getTime() > CACHE_DURATION_MS;
-  if (needsRefresh) await refreshAll();
+  if (topicCache[topic]?.lastUpdate && now - topicCache[topic].lastUpdate.getTime() < CACHE_MS) {
+    return topicCache[topic].content;
+  }
+  const parts = [];
+  for (const url of (SOURCES[topic] || [])) {
+    const { text } = await fetchUrl(url);
+    if (text) parts.push(`--- ${url} ---\n${text}`);
+  }
+  const content = parts.join("\n\n");
+  topicCache[topic] = { content, lastUpdate: new Date() };
+  return content;
 }
 
-// ─── Sélection intelligente du contexte ───────────────────────────────────────
-function buildContext(detectedTopics) {
-  const sections = [];
+// ─── Construction contexte intelligent ────────────────────────────────────────
+async function buildContext(userText) {
+  const topics = detectTopics(userText);
+  const parts  = [];
 
-  // Informations générales (toujours)
-  if (contentCache["general"]) {
-    sections.push("=== INFOS GÉNÉRALES MAIRIE ===\n" + contentCache["general"].content);
-  }
-  if (contentCache["horaires"]) {
-    sections.push("=== HORAIRES & CONTACTS ===\n" + contentCache["horaires"].content);
-  }
+  // Calendrier toujours inclus (léger)
+  if (!calendarCache.lastUpdate || Date.now() - calendarCache.lastUpdate.getTime() > CACHE_MS) await refreshCalendarCache();
+  if (calendarCache.content) parts.push(calendarCache.content);
 
-  // Contenu spécifique selon les topics détectés
-  const topicLabels = {
-    transport:      "🚌 HORAIRES BUS LIGNE 8 RÉMI",
-    urbanisme:      "🏗️ URBANISME & PLU",
-    scolaire:       "🏫 VIE SCOLAIRE",
-    dechets:        "♻️ GESTION DES DÉCHETS",
-    dicrim:         "⚠️ DICRIM & RISQUES",
-    agenda:         "📅 AGENDA DES MANIFESTATIONS",
-    association:    "🤝 VIE ASSOCIATIVE",
-    tourisme:       "🥾 TOURISME & RANDONNÉES",
-    assainissement: "💧 ASSAINISSEMENT",
-    conseil:        "🏛️ CONSEIL MUNICIPAL",
-    contact:        "📞 CONTACTS UTILES",
-    cctvl:          "🏘️ INTERCOMMUNALITÉ CCTVL",
-  };
-
-  for (const topic of detectedTopics) {
-    if (topic === "general" || topic === "horaires") continue;
-
-    // Horaires bus : source spéciale
-    if (topic === "transport" && busCache.content) {
-      sections.push(`=== 🚌 HORAIRES BUS LIGNE 8 RÉMI ===\n⚠️ DEUX arrêts à Mézières : "Mairie" et "Le Bréau"\n${busCache.content}`);
-      continue;
-    }
-
-    // Agenda : source calendrier
-    if (topic === "agenda") {
-      const cal = calendarCache.events || "Calendrier non disponible";
-      sections.push(`=== 📅 AGENDA DES MANIFESTATIONS ===\n${cal}`);
-      // Ajouter aussi le contenu web si disponible
-      if (contentCache["agenda"]) {
-        sections.push(contentCache["agenda"].content);
-      }
-      continue;
-    }
-
-    if (contentCache[topic]) {
-      const label = topicLabels[topic] || topic.toUpperCase();
-      sections.push(`=== ${label} ===\n${contentCache[topic].content}`);
+  for (const topic of topics) {
+    if (topic === "transport") {
+      if (!remiCache.lastUpdate || Date.now() - remiCache.lastUpdate.getTime() > CACHE_MS) await refreshRemiCache();
+      parts.push(remiCache.content);
+    } else if (topic === "agenda") {
+      // déjà inclus via calendrier
+    } else if (SOURCES[topic]) {
+      const c = await getTopicContent(topic);
+      if (c) parts.push(`=== ${topic.toUpperCase()} ===\n${c}`);
     }
   }
 
-  return sections.join("\n\n").substring(0, 20000);
+  return parts.join("\n\n─────────────────────────────────────────\n\n");
 }
 
 // ─── Prompt système ────────────────────────────────────────────────────────────
-const BASE_SYSTEM_PROMPT = `Tu es MEL (Mézières En Ligne), l'assistante virtuelle de la mairie de Mézières-lez-Cléry (45370, Loiret) sur Facebook Messenger.
+const SYSTEM_PROMPT = `Tu es MEL (Mézières En Ligne), l'assistante virtuelle de la mairie de Mézières-lez-Cléry (45370, Loiret) sur Facebook Messenger. Présente-toi toujours sous le prénom MEL.
 
-INFOS PERMANENTES :
+INFORMATIONS PERMANENTES :
 📍 36 rue du bourg – 45370 MÉZIÈRES-LEZ-CLÉRY
-📞 02 38 45 61 76 | ✉️ mairie@mezieres-lez-clery.fr
-🌐 https://mezieres-lez-clery.fr
+📞 02 38 45 61 76 | ✉️ mairie@mezieres-lez-clery.fr | 🌐 mezieres-lez-clery.fr
+🕐 Lundi 14h-17h30 / Mercredi sur RDV / Vendredi 8h30-11h30
+CCTVL : 02 38 45 11 11 | ccterresduvaldeloire.fr
 
-🕐 HORAIRES MAIRIE : Lundi 14h-17h30 | Mercredi sur RDV | Vendredi 8h30-11h30
-
-🚌 BUS LIGNE 8 : La commune a DEUX arrêts distincts — "Mairie" et "Le Bréau". Toujours les mentionner séparément.
+⚠️ BUS LIGNE 8 : La commune a DEUX arrêts : "Mairie" et "Le Bréau". Toujours préciser lequel.
 
 INSTRUCTIONS :
-- Réponds en français, de façon conviviale et concise (3-5 phrases max).
-- Utilise les emojis pour structurer. Pas de Markdown (pas de **, pas de #).
-- Pour le bus : distingue toujours "arrêt Mairie" et "arrêt Le Bréau", et période scolaire vs vacances.
-- Si tu ne trouves pas la réponse : "Toutes mes excuses, je n'ai pas cette information pour le moment. 🙏 Romuald ou Fabrice vous répondront incessamment sous peu. Vous pouvez aussi nous contacter au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊"
-- Ne jamais inventer d'informations.`;
+- Français, convivial, concis (3-5 phrases max). Emojis pour structurer.
+- N'utilise jamais de Markdown : pas de **, pas de *, pas de #, pas de _.
+- Si tu ne trouves pas : "Toutes mes excuses, je n'ai pas cette information pour le moment. 🙏 Romuald ou Fabrice vous répondront incessamment sous peu. Vous pouvez aussi nous contacter au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊"
+- Ne jamais inventer.`;
 
-// ─── Historique conversations ──────────────────────────────────────────────────
-const conversations = new Map();
-const MAX_HISTORY = 6; // Réduit pour économiser les tokens
-
-function getHistory(senderId) {
-  if (!conversations.has(senderId)) conversations.set(senderId, []);
-  return conversations.get(senderId);
+// ─── Suppression du gras Markdown (** et *) ───────────────────────────────────
+// Messenger affiche **texte** tel quel, on le nettoie avant envoi
+function cleanMarkdown(text) {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1") // **gras** → gras
+    .replace(/\*(.+?)\*/g,     "$1") // *italique* → italique
+    .replace(/#{1,6}\s/g,      "")   // # titres → supprimés
+    .replace(/_{2}(.+?)_{2}/g, "$1") // __gras__ → gras
+    .trim();
 }
 
-function addToHistory(senderId, role, content) {
-  const history = getHistory(senderId);
-  history.push({ role, content });
-  if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY);
-}
+// ─── Présentation quotidienne ──────────────────────────────────────────────────
+const introductions = new Map(); // senderId → date du dernier bonjour (YYYY-MM-DD)
 
-// ─── Webhook Meta ──────────────────────────────────────────────────────────────
-app.get("/webhook", (req, res) => {
-  const mode      = req.query["hub.mode"];
-  const token     = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("✅ Webhook vérifié");
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
+function shouldIntroduce(senderId) {
+  const today = new Date().toISOString().slice(0, 10); // "2026-03-25"
+  if (introductions.get(senderId) !== today) {
+    introductions.set(senderId, today);
+    return true;
   }
+  return false;
+}
+
+const INTRO_MESSAGE = "🌲 Bonjour ! Je suis MEL, l'assistante virtuelle de la mairie de Mézières-lez-Cléry. Comment puis-je vous aider ? 😊";
+
+// ─── Historique ────────────────────────────────────────────────────────────────
+const conversations = new Map();
+function getHistory(id) { if (!conversations.has(id)) conversations.set(id, []); return conversations.get(id); }
+function addToHistory(id, role, content) {
+  const h = getHistory(id);
+  h.push({ role, content });
+  if (h.length > 6) h.splice(0, h.length - 6);
+}
+
+// ─── Webhook ───────────────────────────────────────────────────────────────────
+app.get("/webhook", (req, res) => {
+  if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === VERIFY_TOKEN) {
+    console.log("✅ Webhook vérifié"); res.status(200).send(req.query["hub.challenge"]);
+  } else res.sendStatus(403);
 });
 
 app.post("/webhook", async (req, res) => {
-  const body = req.body;
-  if (body.object !== "page") return res.sendStatus(404);
+  if (req.body.object !== "page") return res.sendStatus(404);
   res.status(200).send("EVENT_RECEIVED");
-
-  for (const entry of body.entry) {
-    for (const event of (entry.messaging || [])) {
-      const senderId = event.sender.id;
-      if (event.message?.text) {
-        console.log(`📩 ${senderId} : ${event.message.text}`);
-        await handleMessage(senderId, event.message.text);
-      }
+  for (const entry of req.body.entry || []) {
+    for (const event of entry.messaging || []) {
+      const sid = event.sender.id;
+      if (event.message?.text) { console.log(`📩 ${sid}: ${event.message.text}`); await handleMessage(sid, event.message.text); }
       if (event.postback?.payload === "GET_STARTED") {
-        await sendMessengerMessage(senderId,
-          "🌲 Bonjour ! Je suis MEL (Mézières En Ligne), l'assistante virtuelle de la mairie de Mézières-lez-Cléry.\n\nJe peux vous renseigner sur les horaires, le bus ligne 8, les démarches, l'école, les événements, le PLU, les risques et bien plus !\n\nComment puis-je vous aider ? 😊"
-        );
+        await sendMsg(sid, "🌲 Bonjour ! Je suis MEL (Mézières En Ligne), l'assistante virtuelle de la mairie de Mézières-lez-Cléry.\n\nJe peux vous renseigner sur les horaires d'ouverture, les démarches administratives, le bus ligne 8 (arrêts Mairie et Le Bréau), le PLU, le DICRIM, l'agenda des manifestations, l'école et bien plus !\n\nComment puis-je vous aider ? 😊");
       }
     }
   }
 });
 
-// ─── Traitement du message ─────────────────────────────────────────────────────
+// ─── Traitement message ────────────────────────────────────────────────────────
 async function handleMessage(senderId, userText) {
   try {
-    await sendTypingOn(senderId);
-    await ensureUpToDate();
+    await typingOn(senderId);
 
-    // Détection intelligente du sujet
-    const topics  = detectTopics(userText);
-    const context = buildContext(topics);
-    console.log(`🔍 Topics détectés : ${topics.join(", ")}`);
+    // Présentation quotidienne — une seule fois par jour par utilisateur
+    if (shouldIntroduce(senderId)) {
+      await sendMsg(senderId, INTRO_MESSAGE);
+    }
 
-    const systemPrompt = `${BASE_SYSTEM_PROMPT}
-
-─────────────────────────────────
-INFORMATIONS DISPONIBLES (mis à jour le ${calendarCache.lastUpdate?.toLocaleDateString("fr-FR") || "inconnu"}) :
-${context}
-─────────────────────────────────`;
-
+    const context = await buildContext(userText);
     addToHistory(senderId, "user", userText);
 
     const response = await anthropic.messages.create({
-      model:      "claude-haiku-4-5-20251001", // Modèle économique
-      max_tokens: 300,                          // Réponses courtes
-      system:     systemPrompt,
-      messages:   getHistory(senderId),
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 300,
+      system: `${SYSTEM_PROMPT}\n\n─── CONTEXTE ───\n${context}\n────────────────`,
+      messages: getHistory(senderId),
     });
 
-    const reply = response.content[0].text;
+    const raw   = response.content[0].text;
+    const reply = cleanMarkdown(raw); // Suppression du gras Markdown
     addToHistory(senderId, "assistant", reply);
-    await sendMessengerMessage(senderId, reply);
-
-    // Log de consommation estimée
-    const inputTokens  = response.usage?.input_tokens  || 0;
-    const outputTokens = response.usage?.output_tokens || 0;
-    console.log(`✅ Réponse envoyée — ${inputTokens} in / ${outputTokens} out tokens`);
-
-  } catch (error) {
-    console.error("❌ Erreur :", error.message);
-    await sendMessengerMessage(senderId,
-      "Désolé, je rencontre une difficulté technique. Contactez la mairie au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊"
-    );
+    await sendMsg(senderId, reply);
+    console.log(`✅ Réponse | in:${response.usage.input_tokens} out:${response.usage.output_tokens} tokens`);
+  } catch (err) {
+    console.error("❌", err.message);
+    await sendMsg(senderId, "Désolé, difficulté technique. Contactez la mairie au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊");
   }
 }
 
 // ─── Helpers Messenger ─────────────────────────────────────────────────────────
-async function sendMessengerMessage(recipientId, text) {
-  for (const chunk of splitMessage(text, 1900)) {
-    await axios.post(
-      `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-      { recipient: { id: recipientId }, message: { text: chunk }, messaging_type: "RESPONSE" }
-    );
+async function sendMsg(to, text) {
+  for (const chunk of (text.length <= 1900 ? [text] : text.match(/.{1,1900}/g) || [])) {
+    await axios.post(`https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+      { recipient: { id: to }, message: { text: chunk }, messaging_type: "RESPONSE" }
+    ).catch(e => console.error("Messenger:", e.message));
   }
 }
-
-async function sendTypingOn(recipientId) {
-  await axios.post(
-    `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-    { recipient: { id: recipientId }, sender_action: "typing_on" }
-  ).catch(() => {});
+async function typingOn(to) {
+  await axios.post(`https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+    { recipient: { id: to }, sender_action: "typing_on" }).catch(() => {});
 }
 
-function splitMessage(text, maxLength) {
-  if (text.length <= maxLength) return [text];
-  const chunks = [];
-  let start = 0;
-  while (start < text.length) {
-    let end = Math.min(start + maxLength, text.length);
-    if (end < text.length) {
-      const nl = text.lastIndexOf("\n", end);
-      const sp = text.lastIndexOf(" ",  end);
-      end = nl > start + 100 ? nl : sp > start + 100 ? sp : end;
-    }
-    chunks.push(text.slice(start, end).trim());
-    start = end;
+// ─── Proxy MEL pour la PWA ────────────────────────────────────────────────────
+// Permet à la PWA GitHub Pages d'appeler Claude sans exposer la clé API
+
+// Gestion CORS (requêtes depuis GitHub Pages ou tout domaine)
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin",  "*");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+  next();
+});
+app.options("/mel", (req, res) => res.sendStatus(200));
+
+app.post("/mel", async (req, res) => {
+  const { messages } = req.body || {};
+  if (!messages || !Array.isArray(messages)) {
+    return res.status(400).json({ error: "messages[] requis" });
   }
-  return chunks;
-}
+  try {
+    const context = messages.length > 0
+      ? await buildContext(messages[messages.length - 1]?.content || "")
+      : "";
+
+    const response = await anthropic.messages.create({
+      model:      "claude-haiku-4-5-20251001",
+      max_tokens: 300,
+      system:     `${SYSTEM_PROMPT}\n\n─── CONTEXTE ───\n${context}\n────────────────`,
+      messages:   messages.slice(-6),
+    });
+
+    const reply = cleanMarkdown(response.content[0].text);
+    console.log(`📱 PWA MEL | in:${response.usage.input_tokens} out:${response.usage.output_tokens} tokens`);
+    res.json({ reply });
+  } catch (e) {
+    console.error("❌ MEL proxy:", e.message);
+    res.status(500).json({ reply: "Désolée, difficulté technique. Contactez la mairie au 02 38 45 61 76 😊" });
+  }
+});
 
 // ─── Routes utilitaires ────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({
-  status:      "MEL est en ligne 🌲",
-  lastUpdate:  calendarCache.lastUpdate?.toLocaleString("fr-FR") || "jamais",
-  topics:      Object.keys(contentCache),
-  nextEvents:  calendarCache.events?.split("\n").slice(0, 3).join(" | ") || "aucun",
+  status:  "MEL est en ligne 🌲",
+  version: "4.1 — Messenger + PWA proxy",
+  routes:  ["/webhook (Messenger)", "/mel (PWA proxy)", "/refresh", "/calendar", "/bus"],
 }));
 
 app.get("/refresh", async (req, res) => {
-  await refreshAll();
-  res.json({ success: true, lastUpdate: calendarCache.lastUpdate });
+  await Promise.all([refreshCalendarCache(), refreshRemiCache()]);
+  res.json({ success: true, lastUpdate: new Date() });
 });
 
 app.get("/calendar", (req, res) => res.json({
   lastUpdate: calendarCache.lastUpdate?.toLocaleString("fr-FR"),
-  events:     calendarCache.events,
+  content:    calendarCache.content,
 }));
 
 app.get("/bus", (req, res) => res.json({
-  lastUpdate: busCache.lastUpdate?.toLocaleString("fr-FR"),
-  content:    busCache.content,
+  lastUpdate: remiCache.lastUpdate?.toLocaleString("fr-FR"),
+  content:    remiCache.content,
 }));
 
 // ─── Démarrage ─────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`🚀 MEL démarrée sur le port ${PORT}`);
-  await refreshAll();
+  console.log(`📡 Messenger : /webhook`);
+  console.log(`📱 PWA proxy : /mel`);
+  await refreshCalendarCache();
+  await refreshRemiCache();
 });
