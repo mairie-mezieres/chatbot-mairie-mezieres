@@ -474,18 +474,47 @@ app.post("/stats/track", (req, res) => {
 
 app.get("/stats", (req, res) => {
   const stats = readStats();
-  // Calculer installations (30 derniers jours)
+  // Calculer installations (90 derniers jours)
   const parJour = stats.parJour || {};
   const installations = Object.entries(parJour)
     .sort(([a],[b]) => b.localeCompare(a))
-    .slice(0, 30)
+    .slice(0, 90)
     .map(([date, svcs]) => ({ date, installations: svcs.installation || 0, acces: Object.values(svcs).reduce((s,v)=>s+v,0) }));
   res.json({
     totalAcces:       stats.totalAcces || 0,
     totalInstalls:    stats.services?.installation || 0,
     parService:       stats.services || {},
-    derniers30jours:  installations,
+    derniers90jours:  installations,
   });
+});
+
+// ── Route setup webhook (à appeler une seule fois) ───────────
+app.get("/setup-webhook", async (req, res) => {
+  if (!PAGE_ACCESS_TOKEN) return res.status(500).json({ error: "PAGE_ACCESS_TOKEN manquant" });
+  try {
+    const pageInfo = await axios.get(
+      `https://graph.facebook.com/v19.0/me?access_token=${PAGE_ACCESS_TOKEN}`
+    );
+    const pageId   = pageInfo.data.id;
+    const pageName = pageInfo.data.name;
+    const subResult = await axios.post(
+      `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`,
+      { subscribed_fields: "feed,messages" },
+      { params: { access_token: PAGE_ACCESS_TOKEN } }
+    );
+    const checkResult = await axios.get(
+      `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`,
+      { params: { access_token: PAGE_ACCESS_TOKEN } }
+    );
+    res.json({
+      success:   true,
+      page:      { id: pageId, name: pageName },
+      result:    subResult.data,
+      abonnements: checkResult.data
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message, details: e.response?.data });
+  }
 });
 
 app.get("/", (req, res) => res.json({
