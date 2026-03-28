@@ -41,9 +41,11 @@ const SUBS_FILE = path.join(DATA_DIR, "subscriptions.json");
 const NEWS_FILE = path.join(DATA_DIR, "actus.json");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const IDEAS_FILE = path.join(DATA_DIR, "idees.json");
-if (!fs.existsSync(SUBS_FILE))  fs.writeFileSync(SUBS_FILE,  "[]");
-if (!fs.existsSync(NEWS_FILE))  fs.writeFileSync(NEWS_FILE,  "[]");
-if (!fs.existsSync(IDEAS_FILE)) fs.writeFileSync(IDEAS_FILE, "[]");
+const STATS_FILE = path.join(DATA_DIR, "stats.json");
+if (!fs.existsSync(SUBS_FILE))   fs.writeFileSync(SUBS_FILE,  "[]");
+if (!fs.existsSync(NEWS_FILE))   fs.writeFileSync(NEWS_FILE,  "[]");
+if (!fs.existsSync(IDEAS_FILE))  fs.writeFileSync(IDEAS_FILE, "[]");
+if (!fs.existsSync(STATS_FILE))  fs.writeFileSync(STATS_FILE, "{}");
 
 function readSubs()  { try { return JSON.parse(fs.readFileSync(SUBS_FILE, "utf8")); } catch { return []; } }
 function writeSubs(d){ fs.writeFileSync(SUBS_FILE, JSON.stringify(d, null, 2)); }
@@ -51,6 +53,8 @@ function readNews()  { try { return JSON.parse(fs.readFileSync(NEWS_FILE,  "utf8
 function writeNews(d){ fs.writeFileSync(NEWS_FILE,  JSON.stringify(d, null, 2)); }
 function readIdeas() { try { return JSON.parse(fs.readFileSync(IDEAS_FILE, "utf8")); } catch { return []; } }
 function writeIdeas(d){ fs.writeFileSync(IDEAS_FILE, JSON.stringify(d, null, 2)); }
+function readStats()  { try { return JSON.parse(fs.readFileSync(STATS_FILE, "utf8")); } catch { return {}; } }
+function writeStats(d){ fs.writeFileSync(STATS_FILE, JSON.stringify(d, null, 2)); }
 
 // ─── CORS ─────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -449,9 +453,44 @@ app.post("/push/unsubscribe", (req, res) => {
 });
 
 // ── Routes utilitaires ────────────────────────────────────────
+// ── Stats usage ──────────────────────────────────────────────
+app.post("/stats/track", (req, res) => {
+  const { service } = req.body || {};
+  if (!service) return res.status(400).json({ error: "service requis" });
+  const stats = readStats();
+  const today = new Date().toISOString().slice(0, 10);
+  // Compteur global par service
+  if (!stats.services) stats.services = {};
+  stats.services[service] = (stats.services[service] || 0) + 1;
+  // Compteur par jour
+  if (!stats.parJour) stats.parJour = {};
+  if (!stats.parJour[today]) stats.parJour[today] = {};
+  stats.parJour[today][service] = (stats.parJour[today][service] || 0) + 1;
+  // Total accès
+  stats.totalAcces = (stats.totalAcces || 0) + 1;
+  writeStats(stats);
+  res.json({ success: true });
+});
+
+app.get("/stats", (req, res) => {
+  const stats = readStats();
+  // Calculer installations (30 derniers jours)
+  const parJour = stats.parJour || {};
+  const installations = Object.entries(parJour)
+    .sort(([a],[b]) => b.localeCompare(a))
+    .slice(0, 30)
+    .map(([date, svcs]) => ({ date, installations: svcs.installation || 0, acces: Object.values(svcs).reduce((s,v)=>s+v,0) }));
+  res.json({
+    totalAcces:       stats.totalAcces || 0,
+    totalInstalls:    stats.services?.installation || 0,
+    parService:       stats.services || {},
+    derniers30jours:  installations,
+  });
+});
+
 app.get("/", (req, res) => res.json({
   status:  "MAT est en ligne 🌲",
-  version: "5.0 — Messenger + PWA + Signalement + Push + Actus",
+  version: "5.1 — Messenger + PWA + Signalement + Push + Actus + Stats",
   abonnes: readSubs().length,
   actus:   readNews().length,
   idees:   readIdeas().length,
