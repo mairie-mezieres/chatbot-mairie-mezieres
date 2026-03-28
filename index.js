@@ -40,13 +40,17 @@ const DATA_DIR  = path.join(__dirname, "data");
 const SUBS_FILE = path.join(DATA_DIR, "subscriptions.json");
 const NEWS_FILE = path.join(DATA_DIR, "actus.json");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(SUBS_FILE)) fs.writeFileSync(SUBS_FILE, "[]");
-if (!fs.existsSync(NEWS_FILE)) fs.writeFileSync(NEWS_FILE, "[]");
+const IDEAS_FILE = path.join(DATA_DIR, "idees.json");
+if (!fs.existsSync(SUBS_FILE))  fs.writeFileSync(SUBS_FILE,  "[]");
+if (!fs.existsSync(NEWS_FILE))  fs.writeFileSync(NEWS_FILE,  "[]");
+if (!fs.existsSync(IDEAS_FILE)) fs.writeFileSync(IDEAS_FILE, "[]");
 
 function readSubs()  { try { return JSON.parse(fs.readFileSync(SUBS_FILE, "utf8")); } catch { return []; } }
 function writeSubs(d){ fs.writeFileSync(SUBS_FILE, JSON.stringify(d, null, 2)); }
-function readNews()  { try { return JSON.parse(fs.readFileSync(NEWS_FILE, "utf8")); } catch { return []; } }
-function writeNews(d){ fs.writeFileSync(NEWS_FILE, JSON.stringify(d, null, 2)); }
+function readNews()  { try { return JSON.parse(fs.readFileSync(NEWS_FILE,  "utf8")); } catch { return []; } }
+function writeNews(d){ fs.writeFileSync(NEWS_FILE,  JSON.stringify(d, null, 2)); }
+function readIdeas() { try { return JSON.parse(fs.readFileSync(IDEAS_FILE, "utf8")); } catch { return []; } }
+function writeIdeas(d){ fs.writeFileSync(IDEAS_FILE, JSON.stringify(d, null, 2)); }
 
 // ─── CORS ─────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -392,6 +396,34 @@ app.get("/signalements", (req, res) => {
   res.json({ signalements: signals, count: signals.length });
 });
 
+// ── Boîte à idées partagées ──────────────────────────────────
+app.get("/idees", (req, res) => {
+  res.json({ idees: readIdeas(), count: readIdeas().length });
+});
+
+app.post("/idee", (req, res) => {
+  const { id, text, cat, date } = req.body || {};
+  if (!text) return res.status(400).json({ error: "text requis" });
+  const ideas = readIdeas();
+  // Éviter les doublons
+  if (ideas.find(i => i.id === id)) return res.json({ success:true, duplicate:true });
+  ideas.unshift({ id: id || Date.now(), text: text.substring(0,500), cat: cat||"💡 Autre", votes:0, date: date || new Date().toLocaleDateString("fr-FR") });
+  if (ideas.length > 200) ideas.splice(200);
+  writeIdeas(ideas);
+  console.log(`💡 Idée stockée: "${text.substring(0,50)}"`);
+  res.json({ success:true });
+});
+
+app.post("/idee/:id/vote", (req, res) => {
+  const id = parseInt(req.params.id);
+  const ideas = readIdeas();
+  const idx = ideas.findIndex(i => i.id === id);
+  if (idx < 0) return res.status(404).json({ error: "Idée non trouvée" });
+  ideas[idx].votes = (ideas[idx].votes || 0) + 1;
+  writeIdeas(ideas);
+  res.json({ success:true, votes: ideas[idx].votes });
+});
+
 // ── Actualités (publications stockées) ───────────────────────
 app.get("/actus", (req, res) => {
   const actus = readNews();
@@ -422,6 +454,7 @@ app.get("/", (req, res) => res.json({
   version: "5.0 — Messenger + PWA + Signalement + Push + Actus",
   abonnes: readSubs().length,
   actus:   readNews().length,
+  idees:   readIdeas().length,
   signalements: readSignals().length,
   routes:  ["/webhook","/mel","/signal","/signalements","/actus","/push/subscribe","/push/unsubscribe","/refresh","/calendar","/bus"],
 }));
@@ -429,6 +462,20 @@ app.get("/", (req, res) => res.json({
 app.get("/refresh", async (req, res) => {
   await Promise.all([refreshCalendarCache(), refreshRemiCache()]);
   res.json({ success:true, lastUpdate:new Date() });
+});
+
+// ── Proxy iCal pour la PWA (résout le CORS Google Calendar) ──
+app.get("/calendar-proxy", async (req, res) => {
+  if (!GOOGLE_CALENDAR_ICAL) return res.status(500).send("GOOGLE_CALENDAR_ICAL non configuré");
+  try {
+    const r = await axios.get(GOOGLE_CALENDAR_ICAL, { timeout: 10000, responseType: "text" });
+    res.set("Content-Type", "text/calendar; charset=utf-8");
+    res.set("Access-Control-Allow-Origin", "*");
+    res.send(r.data);
+  } catch(e) {
+    console.error("❌ calendar-proxy:", e.message);
+    res.status(500).send("Calendrier indisponible");
+  }
 });
 
 app.get("/calendar", (req, res) => res.json({ lastUpdate:calendarCache.lastUpdate?.toLocaleString("fr-FR"), content:calendarCache.content }));
