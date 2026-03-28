@@ -37,18 +37,27 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 async function redisGet(key) {
   if (!REDIS_URL) return null;
   try {
-    const r = await axios.get(`${REDIS_URL}/get/${encodeURIComponent(key)}`,
-      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
+    // Upstash REST API : GET /get/key → { result: "valeur_json" }
+    const r = await axios.get(
+      `${REDIS_URL}/get/${encodeURIComponent(key)}`,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } }
+    );
     const val = r.data.result;
-    return val ? JSON.parse(val) : null;
+    if (val === null || val === undefined) return null;
+    // val est une string JSON — on la parse
+    return JSON.parse(val);
   } catch(e) { console.warn(`Redis GET ${key}:`, e.message); return null; }
 }
 async function redisSet(key, value) {
   if (!REDIS_URL) { console.warn("REDIS_URL non configuré"); return; }
   try {
-    await axios.post(`${REDIS_URL}/set/${encodeURIComponent(key)}`,
-      { value: JSON.stringify(value) },
-      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" } });
+    // Upstash REST API : POST /set/key avec body = string JSON entre guillemets
+    const encoded = encodeURIComponent(key);
+    await axios.post(
+      `${REDIS_URL}/set/${encoded}`,
+      JSON.stringify(value),   // body = la valeur sérialisée directement
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" } }
+    );
   } catch(e) { console.warn(`Redis SET ${key}:`, e.message); }
 }
 
