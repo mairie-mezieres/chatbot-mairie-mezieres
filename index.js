@@ -1,19 +1,15 @@
 // ════════════════════════════════════════════════════════════
-// MAT — Mézières Avec Toi · Serveur Render v5.0
+// MAT — Mézières Avec Toi · Serveur Render v6.0
 // ════════════════════════════════════════════════════════════
 // Fonctions : Messenger MEL · Proxy PWA MEL · Signalement
 //             Actus Facebook · Push notifications · Webhook FB
-// NOTE : Envoi email signalement non branché (canal à définir)
-//        Les signalements sont stockés dans data/signalements.json
-//        et consultables via GET /signalements
+//             Stockage persistant via Upstash Redis
 // ════════════════════════════════════════════════════════════
 
 const express   = require("express");
 const axios     = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const webpush   = require("web-push");
-const fs        = require("fs");
-const path      = require("path");
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -26,6 +22,8 @@ const GOOGLE_CALENDAR_ICAL = process.env.GOOGLE_CALENDAR_ICAL;
 const VAPID_PUBLIC_KEY     = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY    = process.env.VAPID_PRIVATE_KEY;
 const VAPID_EMAIL          = "mailto:mairie@mezieres-lez-clery.fr";
+const REDIS_URL            = process.env.UPSTASH_REDIS_REST_URL;
+const REDIS_TOKEN          = process.env.UPSTASH_REDIS_REST_TOKEN;
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
@@ -35,26 +33,36 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   console.log("✅ Web Push VAPID configuré");
 }
 
-// ─── Stockage JSON (subscriptions + actus) ───────────────────
-const DATA_DIR  = path.join(__dirname, "data");
-const SUBS_FILE = path.join(DATA_DIR, "subscriptions.json");
-const NEWS_FILE = path.join(DATA_DIR, "actus.json");
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-const IDEAS_FILE = path.join(DATA_DIR, "idees.json");
-const STATS_FILE = path.join(DATA_DIR, "stats.json");
-if (!fs.existsSync(SUBS_FILE))   fs.writeFileSync(SUBS_FILE,  "[]");
-if (!fs.existsSync(NEWS_FILE))   fs.writeFileSync(NEWS_FILE,  "[]");
-if (!fs.existsSync(IDEAS_FILE))  fs.writeFileSync(IDEAS_FILE, "[]");
-if (!fs.existsSync(STATS_FILE))  fs.writeFileSync(STATS_FILE, "{}");
+// ─── Stockage persistant Upstash Redis ───────────────────────
+async function redisGet(key) {
+  if (!REDIS_URL) return null;
+  try {
+    const r = await axios.get(`${REDIS_URL}/get/${encodeURIComponent(key)}`,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
+    const val = r.data.result;
+    return val ? JSON.parse(val) : null;
+  } catch(e) { console.warn(`Redis GET ${key}:`, e.message); return null; }
+}
+async function redisSet(key, value) {
+  if (!REDIS_URL) { console.warn("REDIS_URL non configuré"); return; }
+  try {
+    await axios.post(`${REDIS_URL}/set/${encodeURIComponent(key)}`,
+      { value: JSON.stringify(value) },
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" } });
+  } catch(e) { console.warn(`Redis SET ${key}:`, e.message); }
+}
 
-function readSubs()  { try { return JSON.parse(fs.readFileSync(SUBS_FILE, "utf8")); } catch { return []; } }
-function writeSubs(d){ fs.writeFileSync(SUBS_FILE, JSON.stringify(d, null, 2)); }
-function readNews()  { try { return JSON.parse(fs.readFileSync(NEWS_FILE,  "utf8")); } catch { return []; } }
-function writeNews(d){ fs.writeFileSync(NEWS_FILE,  JSON.stringify(d, null, 2)); }
-function readIdeas() { try { return JSON.parse(fs.readFileSync(IDEAS_FILE, "utf8")); } catch { return []; } }
-function writeIdeas(d){ fs.writeFileSync(IDEAS_FILE, JSON.stringify(d, null, 2)); }
-function readStats()  { try { return JSON.parse(fs.readFileSync(STATS_FILE, "utf8")); } catch { return {}; } }
-function writeStats(d){ fs.writeFileSync(STATS_FILE, JSON.stringify(d, null, 2)); }
+async function readSubs()    { return (await redisGet("mat:subs"))    || []; }
+async function writeSubs(d)  { await redisSet("mat:subs", d); }
+async function readNews()    { return (await redisGet("mat:actus"))   || []; }
+async function writeNews(d)  { await redisSet("mat:actus", d); }
+async function readIdeas()   { return (await redisGet("mat:idees"))   || []; }
+async function writeIdeas(d) { await redisSet("mat:idees", d); }
+async function readStats()   { return (await redisGet("mat:stats"))   || {}; }
+async function writeStats(d) { await redisSet("mat:stats", d); }
+async function readSignals() { return (await redisGet("mat:signals")) || []; }
+async function writeSignals(d){ await redisSet("mat:signals", d); }
+
 
 // ─── CORS ─────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -321,14 +329,14 @@ async function handleFacebookPublication(msg, photoUrl) {
   const actu  = { id:Date.now(), title, date:new Date().toLocaleDateString("fr-FR"), photo:photoUrl||null };
 
   // Stocker dans l'historique (max 20)
-  const actus = readNews();
+  const actus = await readNews();
   actus.unshift(actu);
   if (actus.length > 20) actus.splice(20);
-  writeNews(actus);
+  await await writeNews(actus);
   console.log(`💾 Actu stockée: "${title}"`);
 
   // Envoyer les notifications push
-  const subs = readSubs();
+  const subs = await readSubs();
   console.log(`📱 Envoi push à ${subs.length} abonné(s)`);
   const payload = JSON.stringify({ title:"📰 Radio Mézières", body:title.substring(0,80), icon:"./icon-192.png" });
   const dead = [];
@@ -338,7 +346,7 @@ async function handleFacebookPublication(msg, photoUrl) {
   }
   if (dead.length) {
     const alive = subs.filter(s => !dead.includes(s.endpoint));
-    writeSubs(alive);
+    await await writeSubs(alive);
     console.log(`🗑️ ${dead.length} subscription(s) expirée(s) supprimée(s)`);
   }
 }
@@ -360,16 +368,11 @@ app.post("/mel", async (req, res) => {
   } catch(e) { console.error("❌ MEL proxy:", e.message); res.status(500).json({ reply:"Désolée, erreur technique. Contactez la mairie au 02 38 45 61 76 😊" }); }
 });
 
-// ── Signalement citoyen → stockage JSON ──────────────────────
+// ── Signalement citoyen → stockage Redis ─────────────────────
 // NOTE : Envoi email non encore branché (canal à définir).
-// Les signalements sont stockés dans data/signalements.json
-// et consultables par la mairie via GET /signalements
-const SIGNALS_FILE = path.join(DATA_DIR, "signalements.json");
-if (!fs.existsSync(SIGNALS_FILE)) fs.writeFileSync(SIGNALS_FILE, "[]");
-function readSignals(){ try{ return JSON.parse(fs.readFileSync(SIGNALS_FILE,"utf8")); }catch{ return []; } }
-function writeSignals(d){ fs.writeFileSync(SIGNALS_FILE, JSON.stringify(d, null, 2)); }
+// Les signalements sont consultables via GET /signalements
 
-app.post("/signal", (req, res) => {
+app.post("/signal", async (req, res) => {
   const { cat, desc, lat, lon, photoB64 } = req.body || {};
   const mapsLink = (lat && lon) ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=18` : null;
   const signal = {
@@ -381,83 +384,79 @@ app.post("/signal", (req, res) => {
     date:     new Date().toLocaleString("fr-FR"),
     dateISO:  new Date().toISOString(),
   };
-  // Stocker la photo séparément pour ne pas alourdir le JSON principal
-  if (photoB64 && photoB64.startsWith("data:image")) {
-    const photoFile = path.join(DATA_DIR, `signal_${signal.id}.jpg`);
-    try { fs.writeFileSync(photoFile, Buffer.from(photoB64.split(",")[1], "base64")); } catch {}
-  }
-  const signals = readSignals();
+  const signals = await readSignals();
   signals.unshift(signal);
   if (signals.length > 100) signals.splice(100);
-  writeSignals(signals);
+  await await writeSignals(signals);
   console.log(`🚨 Signalement stocké #${signal.id}: ${cat}`);
   res.json({ success:true });
 });
 
 // Consultation des signalements (mairie uniquement)
-app.get("/signalements", (req, res) => {
-  const signals = readSignals();
+app.get("/signalements", async (req, res) => {
+  const signals = await readSignals();
   res.json({ signalements: signals, count: signals.length });
 });
 
 // ── Boîte à idées partagées ──────────────────────────────────
-app.get("/idees", (req, res) => {
-  res.json({ idees: readIdeas(), count: readIdeas().length });
+app.get("/idees", async (req, res) => {
+  const idees = await readIdeas();
+  res.json({ idees, count: idees.length });
 });
 
-app.post("/idee", (req, res) => {
+app.post("/idee", async (req, res) => {
   const { id, text, cat, date } = req.body || {};
   if (!text) return res.status(400).json({ error: "text requis" });
-  const ideas = readIdeas();
+  const ideas = await readIdeas();
   // Éviter les doublons
   if (ideas.find(i => i.id === id)) return res.json({ success:true, duplicate:true });
   ideas.unshift({ id: id || Date.now(), text: text.substring(0,500), cat: cat||"💡 Autre", votes:0, date: date || new Date().toLocaleDateString("fr-FR") });
   if (ideas.length > 200) ideas.splice(200);
-  writeIdeas(ideas);
+  await await writeIdeas(ideas);
   console.log(`💡 Idée stockée: "${text.substring(0,50)}"`);
   res.json({ success:true });
 });
 
-app.post("/idee/:id/vote", (req, res) => {
+app.post("/idee/:id/vote", async (req, res) => {
   const id = parseInt(req.params.id);
-  const ideas = readIdeas();
+  const ideas = await readIdeas();
   const idx = ideas.findIndex(i => i.id === id);
   if (idx < 0) return res.status(404).json({ error: "Idée non trouvée" });
   ideas[idx].votes = (ideas[idx].votes || 0) + 1;
-  writeIdeas(ideas);
+  await await writeIdeas(ideas);
   res.json({ success:true, votes: ideas[idx].votes });
 });
 
 // ── Actualités (publications stockées) ───────────────────────
-app.get("/actus", (req, res) => {
-  const actus = readNews();
+app.get("/actus", async (req, res) => {
+  const actus = await readNews();
   res.json({ actus, count:actus.length });
 });
 
 // ── Abonnement push ───────────────────────────────────────────
-app.post("/push/subscribe", (req, res) => {
+app.post("/push/subscribe", async (req, res) => {
   const sub = req.body;
   if (!sub || !sub.endpoint) return res.status(400).json({ error:"Subscription invalide" });
-  const subs = readSubs();
+  const subs = await readSubs();
   const exists = subs.some(s => s.endpoint === sub.endpoint);
-  if (!exists) { subs.push(sub); writeSubs(subs); console.log(`📱 Nouvel abonné push (total: ${subs.length})`); }
+  if (!exists) { subs.push(sub); await await writeSubs(subs); console.log(`📱 Nouvel abonné push (total: ${subs.length})`); }
   res.json({ success:true, total:subs.length });
 });
 
-app.post("/push/unsubscribe", (req, res) => {
+app.post("/push/unsubscribe", async (req, res) => {
   const { endpoint } = req.body || {};
   if (!endpoint) return res.status(400).json({ error:"Endpoint requis" });
-  const subs  = readSubs().filter(s => s.endpoint !== endpoint);
-  writeSubs(subs);
+  const subs  = (await readSubs()).filter(s => s.endpoint !== endpoint);
+  await await writeSubs(subs);
   res.json({ success:true });
 });
 
 // ── Routes utilitaires ────────────────────────────────────────
 // ── Stats usage ──────────────────────────────────────────────
-app.post("/stats/track", (req, res) => {
+app.post("/stats/track", async (req, res) => {
   const { service } = req.body || {};
   if (!service) return res.status(400).json({ error: "service requis" });
-  const stats = readStats();
+  const stats = await readStats();
   const today = new Date().toISOString().slice(0, 10);
   // Compteur global par service
   if (!stats.services) stats.services = {};
@@ -468,23 +467,23 @@ app.post("/stats/track", (req, res) => {
   stats.parJour[today][service] = (stats.parJour[today][service] || 0) + 1;
   // Total accès
   stats.totalAcces = (stats.totalAcces || 0) + 1;
-  writeStats(stats);
+  await await writeStats(stats);
   res.json({ success: true });
 });
 
-app.get("/stats", (req, res) => {
-  const stats = readStats();
-  // Calculer installations (90 derniers jours)
+app.get("/stats", async (req, res) => {
+  const stats = await readStats();
+  // Calculer installations (30 derniers jours)
   const parJour = stats.parJour || {};
   const installations = Object.entries(parJour)
     .sort(([a],[b]) => b.localeCompare(a))
-    .slice(0, 90)
+    .slice(0, 30)
     .map(([date, svcs]) => ({ date, installations: svcs.installation || 0, acces: Object.values(svcs).reduce((s,v)=>s+v,0) }));
   res.json({
     totalAcces:       stats.totalAcces || 0,
     totalInstalls:    stats.services?.installation || 0,
     parService:       stats.services || {},
-    derniers90jours:  installations,
+    derniers30jours:  installations,
   });
 });
 
@@ -517,15 +516,18 @@ app.get("/setup-webhook", async (req, res) => {
   }
 });
 
-app.get("/", (req, res) => res.json({
+app.get("/", async (req, res) => {
+  const [subs, news, ideas, signals] = await Promise.all([readSubs(), readNews(), readIdeas(), readSignals()]);
+  res.json({
   status:  "MAT est en ligne 🌲",
   version: "5.1 — Messenger + PWA + Signalement + Push + Actus + Stats",
-  abonnes: readSubs().length,
-  actus:   readNews().length,
-  idees:   readIdeas().length,
-  signalements: readSignals().length,
+  abonnes:      subs.length,
+  actus:        news.length,
+  idees:        ideas.length,
+  signalements: signals.length,
   routes:  ["/webhook","/mel","/signal","/signalements","/actus","/push/subscribe","/push/unsubscribe","/refresh","/calendar","/bus"],
-}));
+  });
+});
 
 app.get("/refresh", async (req, res) => {
   await Promise.all([refreshCalendarCache(), refreshRemiCache()]);
