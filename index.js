@@ -482,6 +482,8 @@ async function fetchOpenMeteoForecast() {
 }
 
 async function fetchMeteoFranceVigilanceRaw() {
+  console.log("METEO URL:", METEOFRANCE_VIGILANCE_URL);
+console.log("TOKEN présent ?", !!METEOFRANCE_API_TOKEN);
   if (!METEOFRANCE_VIGILANCE_URL) return null;
 
   const headers = {};
