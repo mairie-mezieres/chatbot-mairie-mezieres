@@ -25,6 +25,16 @@ const VAPID_EMAIL          = "mailto:mairie@mezieres-lez-clery.fr";
 const REDIS_URL            = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN          = process.env.UPSTASH_REDIS_REST_TOKEN;
 
+const METEOFRANCE_VIGILANCE_URL = process.env.METEOFRANCE_VIGILANCE_URL;
+const METEOFRANCE_API_TOKEN     = process.env.METEOFRANCE_API_TOKEN;
+const AUTO_POST_WEATHER_ALERTS  = process.env.AUTO_POST_WEATHER_ALERTS === "true";
+const AUTO_POST_MIN_LEVEL       = Number(process.env.AUTO_POST_MIN_LEVEL || 3);
+const FACEBOOK_PAGE_ID          = process.env.FACEBOOK_PAGE_ID;
+const OPEN_METEO_LAT            = Number(process.env.OPEN_METEO_LAT || 47.822);
+const OPEN_METEO_LON            = Number(process.env.OPEN_METEO_LON || 1.808);
+const OPEN_METEO_TZ             = process.env.OPEN_METEO_TZ || "Europe/Paris";
+const WEATHER_CHECK_INTERVAL_MS = Number(process.env.WEATHER_CHECK_INTERVAL_MS || 15 * 60 * 1000);
+
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
 // ─── Web Push VAPID ───────────────────────────────────────────
@@ -71,6 +81,9 @@ async function readStats()   { return (await redisGet("mat:stats"))   || {}; }
 async function writeStats(d) { await redisSet("mat:stats", d); }
 async function readSignals() { return (await redisGet("mat:signals")) || []; }
 async function writeSignals(d){ await redisSet("mat:signals", d); }
+async function readLastWeatherAlert() { return await redisGet("mat:weather:last"); }
+async function writeLastWeatherAlert(d){ await redisSet("mat:weather:last", d); }
+
 
 
 // ─── CORS ─────────────────────────────────────────────────────
@@ -254,6 +267,197 @@ const INTRO_MESSAGE = "🌲 Bonjour ! Je suis MEL, l'assistante virtuelle de la 
 const conversations  = new Map();
 function getHistory(id){ if(!conversations.has(id)) conversations.set(id,[]); return conversations.get(id); }
 function addToHistory(id,role,content){ const h=getHistory(id); h.push({role,content}); if(h.length>6) h.splice(0,h.length-6); }
+
+// ── Météo / Vigilance ─────────────────────────────────────────
+const VIGILANCE_PHENOMENA = {
+  1: "Vent violent",
+  2: "Pluie-inondation",
+  3: "Orages",
+  4: "Crues",
+  5: "Neige-verglas",
+  6: "Canicule",
+  7: "Grand froid",
+  8: "Avalanches",
+  9: "Vagues-submersion"
+};
+const COLOR_NAMES = { 1: "Vert", 2: "Jaune", 3: "Orange", 4: "Rouge" };
+
+function formatFrDateTime(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short", timeZone: OPEN_METEO_TZ });
+}
+
+function parseMeteoFranceVigilancePayload(data) {
+  const periods = data?.product?.periods;
+  if (!Array.isArray(periods) || !periods.length) return null;
+
+  const dayJ = periods.find(p => p?.echeance === "J") || periods[0];
+  const domains = dayJ?.timelaps?.domain_ids;
+  if (!Array.isArray(domains)) return null;
+
+  const loiret = domains.find(d => String(d?.domain_id) === "45");
+  if (!loiret) return null;
+
+  const phenos = Array.isArray(loiret.phenomenon_items) ? loiret.phenomenon_items : [];
+  const active = phenos
+    .map(p => {
+      const items = Array.isArray(p?.timelaps_items) ? p.timelaps_items : [];
+      const maxItem = items.reduce((best, cur) => {
+        const lvl = Number(cur?.color_id || 1);
+        return !best || lvl > Number(best?.color_id || 1) ? cur : best;
+      }, null);
+      const maxColor = Number(p?.phenomenon_max_color_id || maxItem?.color_id || 1);
+      return {
+        phenomenonId: Number(p?.phenomenon_id || 0),
+        phenomenon: VIGILANCE_PHENOMENA[Number(p?.phenomenon_id || 0)] || `Phénomène ${p?.phenomenon_id || "?"}`,
+        level: maxColor,
+        levelName: COLOR_NAMES[maxColor] || `Niveau ${maxColor}`,
+        beginTime: maxItem?.begin_time || dayJ?.begin_validity_time || null,
+        endTime: maxItem?.end_time || dayJ?.end_validity_time || null,
+      };
+    })
+    .filter(p => p.level >= 2)
+    .sort((a, b) => b.level - a.level || a.phenomenonId - b.phenomenonId);
+
+  const maxLevel = Number(loiret?.max_color_id || active[0]?.level || 1);
+
+  return {
+    updatedAt: data?.product?.update_time || data?.meta?.product_datetime || null,
+    validityStart: dayJ?.begin_validity_time || null,
+    validityEnd: dayJ?.end_validity_time || null,
+    departmentCode: "45",
+    departmentName: "Loiret",
+    level: maxLevel,
+    levelName: COLOR_NAMES[maxLevel] || `Niveau ${maxLevel}`,
+    phenomena: active
+  };
+}
+
+async function fetchMeteoFranceVigilance() {
+  if (!METEOFRANCE_VIGILANCE_URL) return { ok:false, error:"METEOFRANCE_VIGILANCE_URL non configurée" };
+  try {
+    const headers = {};
+    if (METEOFRANCE_API_TOKEN) headers.Authorization = `Bearer ${METEOFRANCE_API_TOKEN}`;
+    const r = await axios.get(METEOFRANCE_VIGILANCE_URL, { headers, timeout: 15000 });
+    const parsed = parseMeteoFranceVigilancePayload(r.data);
+    return { ok:true, raw:r.data, parsed };
+  } catch (e) {
+    return { ok:false, error:e.message, details:e.response?.data || null };
+  }
+}
+
+async function fetchOpenMeteoSummary() {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${OPEN_METEO_LAT}&longitude=${OPEN_METEO_LON}&timezone=${encodeURIComponent(OPEN_METEO_TZ)}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,surface_pressure,wind_speed_10m,wind_gusts_10m&hourly=precipitation_probability,precipitation,rain,showers,snowfall,cloud_cover,uv_index&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_hours,precipitation_probability_max,sunrise,sunset,wind_speed_10m_max,wind_gusts_10m_max&forecast_days=3`;
+    const r = await axios.get(url, { timeout: 15000 });
+    const d = r.data || {};
+    const current = d.current || {};
+    const daily = d.daily || {};
+    return {
+      ok: true,
+      data: {
+        current,
+        daily,
+        hourly: d.hourly || {},
+        fetchedAt: new Date().toISOString()
+      }
+    };
+  } catch (e) {
+    return { ok:false, error:e.message };
+  }
+}
+
+async function resolveFacebookPageId() {
+  if (FACEBOOK_PAGE_ID) return FACEBOOK_PAGE_ID;
+  if (!PAGE_ACCESS_TOKEN) return null;
+  try {
+    const r = await axios.get(`https://graph.facebook.com/v19.0/me`, { params: { access_token: PAGE_ACCESS_TOKEN, fields: 'id,name' } });
+    return r.data?.id || null;
+  } catch (e) {
+    console.warn("Facebook page id introuvable:", e.message);
+    return null;
+  }
+}
+
+function buildWeatherAlertSignature(alert) {
+  return JSON.stringify({
+    level: alert.level,
+    phenomena: alert.phenomena.map(p => ({ phenomenonId: p.phenomenonId, level: p.level, beginTime: p.beginTime, endTime: p.endTime })),
+    validityStart: alert.validityStart,
+    validityEnd: alert.validityEnd
+  });
+}
+
+function buildWeatherFacebookMessage(alert) {
+  const top = alert.phenomena.filter(p => p.level >= AUTO_POST_MIN_LEVEL);
+  const headline = top.map(p => p.phenomenon.toLowerCase()).join(" / ") || "phénomène météo";
+  const phenomenonLine = top.map(p => `${p.phenomenon} (${p.levelName.toLowerCase()})`).join(", ");
+  const start = formatFrDateTime(alert.validityStart) || "à préciser";
+  const end = formatFrDateTime(alert.validityEnd) || "à préciser";
+  return `⚠️ Alerte météo – ${headline.charAt(0).toUpperCase() + headline.slice(1)} ⚠️
+
+Météo-France place le Loiret en vigilance ${alert.levelName.toLowerCase()}.
+Phénomènes concernés : ${phenomenonLine || "à préciser"}.
+
+Début estimé : ${start}
+Fin estimée : ${end}
+
+Restez prudents et tenez-vous informés de l'évolution de la situation.
+
+#app-mezieres`;
+}
+
+async function postWeatherAlertToFacebook(alert) {
+  const pageId = await resolveFacebookPageId();
+  if (!pageId) throw new Error("FACEBOOK_PAGE_ID introuvable");
+  const message = buildWeatherFacebookMessage(alert);
+  await axios.post(`https://graph.facebook.com/v19.0/${pageId}/feed`, null, {
+    params: { access_token: PAGE_ACCESS_TOKEN, message }
+  });
+  return { pageId, message };
+}
+
+async function checkWeatherAlerts(force = false) {
+  const vig = await fetchMeteoFranceVigilance();
+  if (!vig.ok) return { status:"error", source:"meteofrance", error: vig.error, details: vig.details || null };
+  if (!vig.parsed) return { status:"unparsed", source:"meteofrance" };
+
+  const alert = vig.parsed;
+  const publishablePhenomena = alert.phenomena.filter(p => p.level >= AUTO_POST_MIN_LEVEL);
+  if (alert.level < AUTO_POST_MIN_LEVEL || publishablePhenomena.length === 0) {
+    return { status:"below-threshold", alert };
+  }
+
+  const signature = buildWeatherAlertSignature(alert);
+  const last = await readLastWeatherAlert();
+  if (!force && last?.signature === signature) {
+    return { status:"duplicate", alert, lastPublishedAt:last.publishedAt || null };
+  }
+
+  if (!AUTO_POST_WEATHER_ALERTS && !force) {
+    return { status:"ready-but-disabled", alert };
+  }
+
+  const posted = await postWeatherAlertToFacebook(alert);
+  const saved = { signature, alert, publishedAt: new Date().toISOString(), pageId: posted.pageId };
+  await writeLastWeatherAlert(saved);
+  return { status:"published", alert, pageId: posted.pageId, message: posted.message };
+}
+
+async function autoCheckWeatherAlerts() {
+  try {
+    const result = await checkWeatherAlerts(false);
+    if (["published", "duplicate", "below-threshold"].includes(result.status)) {
+      console.log(`🌦️ Vérification vigilance: ${result.status}`);
+    } else if (result.status !== "ready-but-disabled") {
+      console.log("🌦️ Vérification vigilance:", result.status);
+    }
+  } catch (e) {
+    console.error("❌ Vérification vigilance:", e.message);
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // ROUTES
@@ -442,6 +646,29 @@ app.get("/actus", async (req, res) => {
   res.json({ actus, count:actus.length });
 });
 
+// ── Météo commune + vigilance Météo-France ───────────────────
+app.get("/meteo/commune", async (req, res) => {
+  const [forecast, vigilance] = await Promise.all([fetchOpenMeteoSummary(), fetchMeteoFranceVigilance()]);
+  res.json({
+    commune: "Mézières-lez-Cléry",
+    coords: { lat: OPEN_METEO_LAT, lon: OPEN_METEO_LON, timezone: OPEN_METEO_TZ },
+    forecast: forecast.ok ? forecast.data : { error: forecast.error },
+    vigilance: vigilance.ok ? vigilance.parsed : null,
+    vigilance_error: vigilance.ok ? null : vigilance.error
+  });
+});
+
+app.get("/meteo/vigilance", async (req, res) => {
+  const vig = await fetchMeteoFranceVigilance();
+  res.status(vig.ok ? 200 : 500).json(vig);
+});
+
+app.get("/meteo/alertes/check", async (req, res) => {
+  const force = req.query.force === "true";
+  const result = await checkWeatherAlerts(force);
+  res.status(result.status === "error" ? 500 : 200).json(result);
+});
+
 // ── Abonnement push ───────────────────────────────────────────
 app.post("/push/subscribe", async (req, res) => {
   const sub = req.body;
@@ -529,12 +756,12 @@ app.get("/", async (req, res) => {
   const [subs, news, ideas, signals] = await Promise.all([readSubs(), readNews(), readIdeas(), readSignals()]);
   res.json({
   status:  "MAT est en ligne 🌲",
-  version: "5.1 — Messenger + PWA + Signalement + Push + Actus + Stats",
+  version: "5.2 — Messenger + PWA + Signalement + Push + Actus + Stats + Météo",
   abonnes:      subs.length,
   actus:        news.length,
   idees:        ideas.length,
   signalements: signals.length,
-  routes:  ["/webhook","/mel","/signal","/signalements","/actus","/push/subscribe","/push/unsubscribe","/refresh","/calendar","/bus"],
+  routes:  ["/webhook","/mel","/signal","/signalements","/actus","/push/subscribe","/push/unsubscribe","/refresh","/calendar","/bus","/meteo/commune","/meteo/vigilance","/meteo/alertes/check"],
   });
 });
 
@@ -570,6 +797,11 @@ app.listen(PORT, async () => {
   console.log(`📋 Consulter  : /signalements`);
   console.log(`🔔 Push       : /push/subscribe`);
   console.log(`📰 Actus      : /actus`);
+  console.log(`🌦️ Météo      : /meteo/commune`);
+  console.log(`⚠️ Vigilance  : /meteo/vigilance`);
+  console.log(`📣 Vérif auto : /meteo/alertes/check`);
   await refreshCalendarCache();
   await refreshRemiCache();
+  await autoCheckWeatherAlerts();
+  setInterval(autoCheckWeatherAlerts, WEATHER_CHECK_INTERVAL_MS);
 });
