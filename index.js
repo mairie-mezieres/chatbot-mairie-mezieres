@@ -25,7 +25,16 @@ const VAPID_EMAIL          = "mailto:mairie@mezieres-lez-clery.fr";
 const REDIS_URL            = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN          = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-const METEOFRANCE_VIGILANCE_URL = process.env.METEOFRANCE_VIGILANCE_URL;
+const METEOFRANCE_VIGILANCE_URL =
+  process.env.METEOFRANCE_VIGILANCE_URL ||
+  process.env.METEOFRANCE_VIGILANCE ||
+  "";
+
+console.log("DEBUG METEOFRANCE_VIGILANCE_URL =", METEOFRANCE_VIGILANCE_URL ? "[OK]" : "[VIDE]");
+console.log("DEBUG ENV keys météo =", {
+  METEOFRANCE_VIGILANCE_URL: !!process.env.METEOFRANCE_VIGILANCE_URL,
+  METEOFRANCE_VIGILANCE: !!process.env.METEOFRANCE_VIGILANCE
+});
 const METEOFRANCE_API_TOKEN     = process.env.METEOFRANCE_API_TOKEN;
 const AUTO_POST_WEATHER_ALERTS  = process.env.AUTO_POST_WEATHER_ALERTS === "true";
 const AUTO_POST_MIN_LEVEL       = Number(process.env.AUTO_POST_MIN_LEVEL || 3);
