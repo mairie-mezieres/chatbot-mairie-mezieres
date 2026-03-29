@@ -350,7 +350,7 @@ async function fetchMeteoFranceVigilance() {
 
 async function fetchOpenMeteoSummary() {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${OPEN_METEO_LAT}&longitude=${OPEN_METEO_LON}&timezone=${encodeURIComponent(OPEN_METEO_TZ)}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,surface_pressure,wind_speed_10m,wind_gusts_10m&hourly=precipitation_probability,precipitation,rain,showers,snowfall,cloud_cover,uv_index&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_hours,precipitation_probability_max,sunrise,sunset,wind_speed_10m_max,wind_gusts_10m_max&forecast_days=3`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=47.82&longitude=1.807&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,pressure_msl,precipitation,wind_gusts_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,sunrise,sunset,uv_index_max&timezone=Europe%2FParis`;
     const r = await axios.get(url, { timeout: 15000 });
     const d = r.data || {};
     const current = d.current || {};
