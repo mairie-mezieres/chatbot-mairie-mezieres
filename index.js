@@ -459,6 +459,181 @@ async function autoCheckWeatherAlerts() {
   }
 }
 
+const VIGILANCE_COLORS = {
+  1: "vert",
+  2: "jaune",
+  3: "orange",
+  4: "rouge",
+};
+
+const VIGILANCE_PHENOMENA = {
+  1: "vent violent",
+  2: "pluie-inondation",
+  3: "orages",
+  4: "crues",
+  5: "neige-verglas",
+  6: "canicule",
+  7: "grand froid",
+  8: "avalanches",
+  9: "vagues-submersion",
+};
+
+async function fetchOpenMeteoForecast() {
+  const url =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
+    `&longitude=${encodeURIComponent(OPEN_METEO_LON)}` +
+    `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,pressure_msl,precipitation,wind_gusts_10m` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,uv_index_max,sunrise,sunset` +
+    `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}` +
+    `&forecast_days=3`;
+
+  const r = await axios.get(url, { timeout: 10000 });
+  return r.data;
+}
+
+async function fetchMeteoFranceVigilanceRaw() {
+  if (!METEOFRANCE_VIGILANCE_URL) return null;
+
+  const headers = {};
+  if (METEOFRANCE_API_TOKEN) {
+    headers.Authorization = `Bearer ${METEOFRANCE_API_TOKEN}`;
+  }
+
+  const r = await axios.get(METEOFRANCE_VIGILANCE_URL, {
+    headers,
+    timeout: 15000,
+  });
+
+  return r.data;
+}
+
+function extractDepartmentVigilance(raw, deptCode = "45") {
+  if (!raw || !raw.product || !Array.isArray(raw.product.periods)) return null;
+
+  const periods = raw.product.periods;
+  const now = Date.now();
+
+  let bestPeriod = periods.find(p => {
+    const begin = new Date(p.begin_validity_time).getTime();
+    const end = new Date(p.end_validity_time).getTime();
+    return !Number.isNaN(begin) && !Number.isNaN(end) && now >= begin && now <= end;
+  });
+
+  if (!bestPeriod) bestPeriod = periods[0];
+  if (!bestPeriod) return null;
+
+  const deptDomain = (bestPeriod.timelaps?.domain_ids || []).find(d => d.domain_id === deptCode);
+  if (!deptDomain) return null;
+
+  const items = Array.isArray(deptDomain.phenomenon_items) ? deptDomain.phenomenon_items : [];
+  if (!items.length) return null;
+
+  const sorted = [...items].sort((a, b) => (b.color_id || 0) - (a.color_id || 0));
+  const main = sorted[0];
+  if (!main || !main.color_id) return null;
+
+  const color = Number(main.color_id || 1);
+  const phenomenonId = Number(main.phenomenon_id || 0);
+
+  let start = null;
+  let end = null;
+  if (Array.isArray(main.timelaps_items) && main.timelaps_items.length) {
+    const active = main.timelaps_items
+      .filter(t => Number(t.color_id || 1) >= color)
+      .sort((a, b) => new Date(a.begin_time) - new Date(b.begin_time));
+
+    if (active.length) {
+      start = active[0].begin_time || null;
+      end = active[active.length - 1].end_time || null;
+    }
+  }
+
+  const textBlocks = Array.isArray(raw.product.text_bloc_items) ? raw.product.text_bloc_items : [];
+  const matchingTexts = textBlocks
+    .filter(t => String(t.domain_id) === deptCode)
+    .map(t => t.text)
+    .filter(Boolean);
+
+  return {
+    department_code: deptCode,
+    level: color,
+    color_label: VIGILANCE_COLORS[color] || "vert",
+    phenomenon_id: phenomenonId,
+    phenomenon_label: VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo",
+    start,
+    end,
+    title: `${VIGILANCE_COLORS[color] || "vert"} — ${VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo"}`,
+    main_text: matchingTexts[0] || "",
+    raw_period_name: bestPeriod.echeance || null,
+  };
+}
+
+function formatAlertDateFr(iso) {
+  if (!iso) return "à préciser";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "à préciser";
+  return d.toLocaleString("fr-FR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+async function resolveFacebookPageId() {
+  if (FACEBOOK_PAGE_ID) return FACEBOOK_PAGE_ID;
+  if (!PAGE_ACCESS_TOKEN) return null;
+
+  try {
+    const pageInfo = await axios.get(
+      `https://graph.facebook.com/v19.0/me?access_token=${PAGE_ACCESS_TOKEN}`
+    );
+    return pageInfo.data.id || null;
+  } catch (e) {
+    console.warn("Résolution page Facebook impossible:", e.message);
+    return null;
+  }
+}
+
+async function publishWeatherAlertToFacebook(vigilance) {
+  const pageId = await resolveFacebookPageId();
+  if (!pageId || !PAGE_ACCESS_TOKEN) {
+    throw new Error("Page Facebook ou token manquant");
+  }
+
+  const message =
+`⚠️ Alerte météo – ${vigilance.phenomenon_label} ⚠️
+
+Météo-France signale une vigilance ${vigilance.color_label} pour le Loiret.
+
+Début : ${formatAlertDateFr(vigilance.start)}
+Fin : ${formatAlertDateFr(vigilance.end)}
+
+Soyez prudents et suivez les consignes de sécurité.
+
+#app-mezieres`;
+
+  await axios.post(
+    `https://graph.facebook.com/v19.0/${pageId}/feed`,
+    { message },
+    { params: { access_token: PAGE_ACCESS_TOKEN } }
+  );
+
+  return message;
+}
+
+function isSameWeatherAlert(a, b) {
+  if (!a || !b) return false;
+  return (
+    Number(a.level) === Number(b.level) &&
+    String(a.phenomenon_id) === String(b.phenomenon_id) &&
+    String(a.start || "") === String(b.start || "") &&
+    String(a.end || "") === String(b.end || "")
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════
 // ROUTES
 // ═══════════════════════════════════════════════════════════════
@@ -647,26 +822,70 @@ app.get("/actus", async (req, res) => {
 });
 
 // ── Météo commune + vigilance Météo-France ───────────────────
-app.get("/meteo/commune", async (req, res) => {
-  const [forecast, vigilance] = await Promise.all([fetchOpenMeteoSummary(), fetchMeteoFranceVigilance()]);
-  res.json({
-    commune: "Mézières-lez-Cléry",
-    coords: { lat: OPEN_METEO_LAT, lon: OPEN_METEO_LON, timezone: OPEN_METEO_TZ },
-    forecast: forecast.ok ? forecast.data : { error: forecast.error },
-    vigilance: vigilance.ok ? vigilance.parsed : null,
-    vigilance_error: vigilance.ok ? null : vigilance.error
-  });
+app.get("/meteo/vigilance", async (req, res) => {
+  try {
+    const raw = await fetchMeteoFranceVigilanceRaw();
+    const vigilance = extractDepartmentVigilance(raw, "45");
+    res.json({ vigilance, raw });
+  } catch (e) {
+    console.error("❌ /meteo/vigilance:", e.message);
+    res.status(500).json({ error: "Vigilance indisponible" });
+  }
 });
 
-app.get("/meteo/vigilance", async (req, res) => {
-  const vig = await fetchMeteoFranceVigilance();
-  res.status(vig.ok ? 200 : 500).json(vig);
+app.get("/meteo/commune", async (req, res) => {
+  try {
+    const [forecast, rawVigilance] = await Promise.all([
+      fetchOpenMeteoForecast(),
+      fetchMeteoFranceVigilanceRaw().catch(() => null),
+    ]);
+
+    const vigilance = extractDepartmentVigilance(rawVigilance, "45");
+    res.json({ forecast, vigilance });
+  } catch (e) {
+    console.error("❌ /meteo/commune:", e.message);
+    res.status(500).json({ error: "Météo indisponible" });
+  }
 });
 
 app.get("/meteo/alertes/check", async (req, res) => {
-  const force = req.query.force === "true";
-  const result = await checkWeatherAlerts(force);
-  res.status(result.status === "error" ? 500 : 200).json(result);
+  try {
+    const force = req.query.force === "true";
+    const raw = await fetchMeteoFranceVigilanceRaw();
+    const vigilance = extractDepartmentVigilance(raw, "45");
+
+    if (!vigilance) {
+      return res.json({ status: "no-alert" });
+    }
+
+    if (Number(vigilance.level) < AUTO_POST_MIN_LEVEL) {
+      return res.json({ status: "below-threshold", vigilance });
+    }
+
+    const last = await readWeatherLastAlert();
+    if (!force && isSameWeatherAlert(last, vigilance)) {
+      return res.json({ status: "duplicate", vigilance });
+    }
+
+    let published = false;
+    let message = null;
+
+    if (AUTO_POST_WEATHER_ALERTS) {
+      message = await publishWeatherAlertToFacebook(vigilance);
+      published = true;
+    }
+
+    await writeWeatherLastAlert(vigilance);
+
+    res.json({
+      status: published ? "published" : "stored",
+      vigilance,
+      message,
+    });
+  } catch (e) {
+    console.error("❌ /meteo/alertes/check:", e.message);
+    res.status(500).json({ error: "Contrôle alerte impossible" });
+  }
 });
 
 // ── Abonnement push ───────────────────────────────────────────
@@ -803,5 +1022,11 @@ app.listen(PORT, async () => {
   await refreshCalendarCache();
   await refreshRemiCache();
   await autoCheckWeatherAlerts();
-  setInterval(autoCheckWeatherAlerts, WEATHER_CHECK_INTERVAL_MS);
+    setInterval(async () => {
+    try {
+      await axios.get(`http://127.0.0.1:${PORT}/meteo/alertes/check`);
+    } catch (e) {
+      console.warn("Weather check auto:", e.message);
+    }
+  }, WEATHER_CHECK_INTERVAL_MS);
 });
