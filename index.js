@@ -815,10 +815,15 @@ app.get("/meteo/vigilance", async (req, res) => {
   try {
     const raw = await fetchMeteoFranceVigilanceRaw();
     const vigilance = extractDepartmentVigilance(raw, "45");
-    res.json({ vigilance, raw });
+    res.json({ ok: true, vigilance, raw });
   } catch (e) {
-    console.error("❌ /meteo/vigilance:", e.message);
-    res.status(500).json({ error: "Vigilance indisponible" });
+    console.error("❌ /meteo/vigilance:", e.response?.status, e.response?.data || e.message);
+    res.status(500).json({
+      ok: false,
+      error: "Vigilance indisponible",
+      status: e.response?.status || null,
+      details: e.response?.data || e.message
+    });
   }
 });
 
