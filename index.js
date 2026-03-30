@@ -844,13 +844,6 @@ app.get("/meteo/alertes/check", async (req, res) => {
     });
   }
 });
-
-    res.status(e.response?.status || 500).json({
-      error: "Contrôle alerte impossible",
-      details: e.response?.data || e.message
-    });
-  }
-});
 // ── Abonnement push ───────────────────────────────────────────
 app.post("/push/subscribe", async (req, res) => {
   const sub = req.body;
