@@ -5,6 +5,7 @@
 //             Actus Facebook · Push notifications · Webhook FB
 //             Stockage persistant via Upstash Redis
 //             Météo Open-Meteo · Vigilance Météo-France
+//             Anti-doublon publications Facebook
 // ════════════════════════════════════════════════════════════
 
 const express   = require("express");
@@ -53,8 +54,8 @@ async function redisGet(key) {
       { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } }
     );
     const val = r.data.result;
-    if (val === null || val === undefined) return null;
     return JSON.parse(val);
+    if (val === null || val === undefined) return null;
   } catch(e) {
     console.warn(`Redis GET ${key}:`, e.message);
     return null;
@@ -90,6 +91,8 @@ async function readSignals()            { return (await redisGet("mat:signals"))
 async function writeSignals(d)          { await redisSet("mat:signals", d); }
 async function readLastWeatherAlert()   { return await redisGet("mat:weather:last"); }
 async function writeLastWeatherAlert(d) { await redisSet("mat:weather:last", d); }
+async function readSeenPosts()          { return (await redisGet("mat:seen_posts")) || {}; }
+async function writeSeenPosts(d)        { await redisSet("mat:seen_posts", d); }
 
 // ─── CORS ─────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -564,11 +567,18 @@ app.post("/webhook", async (req, res) => {
 
       for (const change of entry.changes || []) {
         if (change.field === "feed" && change.value?.message) {
-          const msg   = change.value.message;
+          const msg = change.value.message;
           const photo = change.value.photo || null;
+
           if (msg.includes("#app-mezieres")) {
-            console.log("📰 Publication #app-mezieres détectée");
-            await handleFacebookPublication(msg, photo);
+            const postKey =
+              change.value.post_id ||
+              change.value.comment_id ||
+              change.value.sender_id ||
+              (msg.replace(/\s+/g, " ").trim() + "|" + (photo || ""));
+
+            console.log("📰 Publication #app-mezieres détectée", postKey);
+            await handleFacebookPublication(msg, photo, postKey);
           }
         }
       }
@@ -620,9 +630,32 @@ async function typingOn(to) {
   ).catch(() => {});
 }
 
-// ── Publication Facebook → stockage + push ────────────────────
-async function handleFacebookPublication(msg, photoUrl) {
+// ── Publication Facebook → stockage + push + anti-doublon ───
+async function handleFacebookPublication(msg, photoUrl, postKey) {
+  const seen = await readSeenPosts();
+
+  if (postKey && seen[postKey]) {
+    console.log(`⏭️ Publication déjà traitée: ${postKey}`);
+    return { duplicate: true };
+  }
+
   const title = msg.replace(/#app-mezieres/gi,"").replace(/\s+/g," ").trim().substring(0,120);
+  const actus = await readNews();
+
+  const alreadyInNews = actus.some(a =>
+    (a.title || "").trim() === title &&
+    (a.photo || null) === (photoUrl || null)
+  );
+
+  if (alreadyInNews) {
+    console.log(`⏭️ Actualité déjà présente: "${title}"`);
+    if (postKey) {
+      seen[postKey] = Date.now();
+      await writeSeenPosts(seen);
+    }
+    return { duplicate: true };
+  }
+
   const actu  = {
     id: Date.now(),
     title,
@@ -630,11 +663,18 @@ async function handleFacebookPublication(msg, photoUrl) {
     photo: photoUrl || null
   };
 
-  const actus = await readNews();
   actus.unshift(actu);
   if (actus.length > 20) actus.splice(20);
   await writeNews(actus);
   console.log(`💾 Actu stockée: "${title}"`);
+
+  if (postKey) {
+    seen[postKey] = Date.now();
+    const entries = Object.entries(seen)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 500);
+    await writeSeenPosts(Object.fromEntries(entries));
+  }
 
   const subs = await readSubs();
   console.log(`📱 Envoi push à ${subs.length} abonné(s)`);
@@ -658,6 +698,8 @@ async function handleFacebookPublication(msg, photoUrl) {
     await writeSubs(alive);
     console.log(`🗑️ ${dead.length} subscription(s) expirée(s) supprimée(s)`);
   }
+
+  return { duplicate: false };
 }
 
 // ── Proxy MEL pour la PWA ─────────────────────────────────────
@@ -956,7 +998,7 @@ app.get("/", async (req, res) => {
 
   res.json({
     status:  "MAT est en ligne 🌲",
-    version: "6.1 — Messenger + PWA + Signalement + Push + Actus + Stats + Météo",
+    version: "6.1.1 — anti-doublon actus + météo + messenger + push",
     abonnes: subs.length,
     actus: news.length,
     idees: ideas.length,
@@ -1001,14 +1043,14 @@ app.get("/bus", (req, res) => res.json({
 // ── Démarrage ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
-  console.log(`🚀 MAT Serveur v6.1 démarré sur le port ${PORT}`);
+  console.log(`🚀 MAT Serveur v6.1.1 démarré sur le port ${PORT}`);
   console.log(`📡 Messenger  : /webhook`);
   console.log(`📱 PWA MEL    : /mel`);
   console.log(`🚨 Signalement: /signal`);
   console.log(`📋 Consulter  : /signalements`);
   console.log(`🔔 Push       : /push/subscribe`);
-  console.log(`📰 Actus      : /actus`);
   console.log(`🌦️ Météo      : /meteo/commune`);
+  console.log(`📰 Actus      : /actus`);
   console.log(`⚠️ Vigilance  : /meteo/vigilance`);
   console.log(`📣 Vérif auto : /meteo/alertes/check`);
 
