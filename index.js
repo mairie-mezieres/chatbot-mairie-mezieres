@@ -823,11 +823,17 @@ app.get("/meteo/alertes/check", async (req, res) => {
       vigilance,
       message,
     });
-  } catch (e) {
-    console.error("❌ /meteo/alertes/check:", e.message);
-    res.status(500).json({ error: "Contrôle alerte impossible" });
-  }
-});
+} catch (e) {
+  console.error('ALERTE METEO ERROR =', {
+    status: e.response?.status,
+    data: e.response?.data,
+    message: e.message
+  });
+  res.status(e.response?.status || 500).json({
+    error: 'Contrôle alerte impossible',
+    details: e.response?.data || e.message
+  });
+}
 
 // ── Abonnement push ───────────────────────────────────────────
 app.post("/push/subscribe", async (req, res) => {
