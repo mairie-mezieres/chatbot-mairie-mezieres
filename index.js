@@ -844,6 +844,7 @@ app.get("/meteo/alertes/check", async (req, res) => {
     });
   }
 });
+
 // ── Abonnement push ───────────────────────────────────────────
 app.post("/push/subscribe", async (req, res) => {
   const sub = req.body;
@@ -947,6 +948,7 @@ app.get("/setup-webhook", async (req, res) => {
 app.get("/ping", (req, res) => {
   res.type("text/plain").send("ok");
 });
+
 app.get("/", async (req, res) => {
   const [subs, news, ideas, signals] = await Promise.all([
     readSubs(), readNews(), readIdeas(), readSignals()
