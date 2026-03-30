@@ -830,6 +830,21 @@ app.get("/meteo/alertes/check", async (req, res) => {
       message: e.message
     });
 
+    if (e.response?.status === 401) {
+      return res.json({
+        status: "auth-error",
+        source: "meteo-france",
+        details: "Token vigilance invalide"
+      });
+    }
+
+    res.status(e.response?.status || 500).json({
+      error: "Contrôle alerte impossible",
+      details: e.response?.data || e.message
+    });
+  }
+});
+
     res.status(e.response?.status || 500).json({
       error: "Contrôle alerte impossible",
       details: e.response?.data || e.message
