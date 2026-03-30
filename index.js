@@ -394,7 +394,7 @@ async function fetchMeteoFranceVigilanceRaw() {
 
   const headers = {};
   if (METEOFRANCE_API_TOKEN) {
-    headers.Authorization = `Bearer ${METEOFRANCE_API_TOKEN}`;
+    headers.apikey = METEOFRANCE_API_TOKEN;
   }
 
   const r = await axios.get(METEOFRANCE_VIGILANCE_URL, {
