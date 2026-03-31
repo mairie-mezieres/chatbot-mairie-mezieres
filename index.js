@@ -309,6 +309,133 @@ async function buildContext(userText) {
   return parts.join("\n\n─────────────────────────────\n\n");
 }
 
+// ── Météo / Vigilance ─────────────────────────────────────────
+const VIGILANCE_COLORS = {
+  1: "vert",
+  2: "jaune",
+  3: "orange",
+  4: "rouge",
+};
+
+const VIGILANCE_PHENOMENA = {
+  1: "vent violent",
+  2: "pluie-inondation",
+  3: "orages",
+  4: "crues",
+  5: "neige-verglas",
+  6: "canicule",
+  7: "grand froid",
+  8: "avalanches",
+  9: "vagues-submersion",
+};
+
+async function fetchOpenMeteoForecast() {
+  const url =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
+    `&longitude=${encodeURIComponent(OPEN_METEO_LON)}` +
+    `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,pressure_msl,precipitation,wind_gusts_10m` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,uv_index_max,sunrise,sunset` +
+    `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}` +
+    `&forecast_days=3`;
+
+  const r = await axios.get(url, { timeout: 10000 });
+  return r.data;
+}
+
+async function fetchMeteoFranceVigilanceRaw() {
+  if (!METEOFRANCE_VIGILANCE_URL) {
+    throw new Error("METEOFRANCE_VIGILANCE_URL non configurée");
+  }
+
+  const headers = {};
+  if (METEOFRANCE_API_TOKEN) {
+    headers.apikey = METEOFRANCE_API_TOKEN;
+  }
+
+  const r = await axios.get(METEOFRANCE_VIGILANCE_URL, {
+    headers,
+    timeout: 15000,
+  });
+
+  return r.data;
+}
+
+function extractDepartmentVigilance(raw, deptCode = "45") {
+  if (!raw || !raw.product || !Array.isArray(raw.product.periods)) return null;
+
+  const periods = raw.product.periods;
+  const now = Date.now();
+
+  let bestPeriod = periods.find(p => {
+    const begin = new Date(p.begin_validity_time).getTime();
+    const end = new Date(p.end_validity_time).getTime();
+    return !Number.isNaN(begin) && !Number.isNaN(end) && now >= begin && now <= end;
+  });
+
+  if (!bestPeriod) bestPeriod = periods[0];
+  if (!bestPeriod) return null;
+
+  const deptDomain = (bestPeriod.timelaps?.domain_ids || []).find(d => String(d.domain_id) === String(deptCode));
+  if (!deptDomain) return null;
+
+  const items = Array.isArray(deptDomain.phenomenon_items) ? deptDomain.phenomenon_items : [];
+  if (!items.length) return null;
+
+  const sorted = [...items].sort((a, b) => (Number(b.color_id || b.phenomenon_max_color_id || 0)) - (Number(a.color_id || a.phenomenon_max_color_id || 0)));
+  const main = sorted[0];
+  if (!main) return null;
+
+  const color = Number(main.phenomenon_max_color_id || main.color_id || 1);
+  const phenomenonId = Number(main.phenomenon_id || 0);
+
+  let start = null;
+  let end = null;
+
+  if (Array.isArray(main.timelaps_items) && main.timelaps_items.length) {
+    const active = main.timelaps_items
+      .filter(t => Number(t.color_id || 1) >= color)
+      .sort((a, b) => new Date(a.begin_time) - new Date(b.begin_time));
+
+    if (active.length) {
+      start = active[0].begin_time || null;
+      end = active[active.length - 1].end_time || null;
+    }
+  }
+
+  const textBlocks = Array.isArray(raw.product.text_bloc_items) ? raw.product.text_bloc_items : [];
+  const matchingTexts = textBlocks
+    .filter(t => String(t.domain_id) === String(deptCode))
+    .map(t => t.text)
+    .filter(Boolean);
+
+  return {
+    department_code: String(deptCode),
+    level: color,
+    color_label: VIGILANCE_COLORS[color] || "vert",
+    phenomenon_id: phenomenonId,
+    phenomenon_label: VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo",
+    start,
+    end,
+    title: `${VIGILANCE_COLORS[color] || "vert"} — ${VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo"}`,
+    main_text: matchingTexts[0] || "",
+    raw_period_name: bestPeriod.echeance || null,
+  };
+}
+
+function formatAlertDateFr(iso) {
+  if (!iso) return "à préciser";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "à préciser";
+  return d.toLocaleString("fr-FR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 // ─── Optimisation MEL low-cost ────────────────────────────────
 const DIRECT_RULES = [
   {
