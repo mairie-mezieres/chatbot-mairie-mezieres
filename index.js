@@ -156,6 +156,8 @@ const KEYWORDS = {
   cctvl:          ["cctvl","intercommunalité","communauté de communes","terres du val"],
   agenda:         ["manifestation","fête","événement","agenda","concert","animation","sortie","calendrier"],
   fibre:          ["fibre","internet","adsl","raccordement fibre","eligibilite","éligibilité","numérique","numerique"],
+  horaires_mairie:["horaire mairie","horaires mairie","ouverture mairie","ouverte mairie","fermeture mairie","quand la mairie est ouverte","quand ouvre la mairie","quand ferme la mairie"],
+  contact_mairie: ["contacter la mairie","contact mairie","telephone mairie","téléphone mairie","mail mairie","email mairie","mairie ouverte","rendez-vous mairie"],
 };
 
 function detectTopics(text) {
@@ -165,6 +167,87 @@ function detectTopics(text) {
     if (words.some(w => lower.includes(w))) topics.add(topic);
   }
   return [...topics];
+}
+
+
+function ensureIaCategoryStatsShape(stats) {
+  if (!stats.iaCategories) stats.iaCategories = {};
+  if (!stats.iaCategories.total) stats.iaCategories.total = {};
+  if (!stats.iaCategories.parJour) stats.iaCategories.parJour = {};
+  if (!stats.iaCategories.parMois) stats.iaCategories.parMois = {};
+  if (!stats.iaCategories.sources) stats.iaCategories.sources = {};
+  return stats.iaCategories;
+}
+
+function bumpStat(obj, key, inc = 1) {
+  obj[key] = (obj[key] || 0) + inc;
+}
+
+async function trackIaQuestionCategories(userText, source = "pwa") {
+  const stats = await readStats();
+  const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
+  const categories = ensureIaCategoryStatsShape(stats);
+
+  const topics = detectTopics(userText || "")
+    .filter(t => t !== "mairie_general");
+
+  const finalTopics = topics.length ? topics : ["autre"];
+
+  if (!categories.parJour[today]) categories.parJour[today] = {};
+  if (!categories.parMois[month]) categories.parMois[month] = {};
+  if (!categories.sources[source]) categories.sources[source] = {};
+
+  for (const topic of finalTopics) {
+    bumpStat(categories.total, topic);
+    bumpStat(categories.parJour[today], topic);
+    bumpStat(categories.parMois[month], topic);
+    bumpStat(categories.sources[source], topic);
+  }
+
+  const keepDays = Object.keys(categories.parJour).sort().slice(-366);
+  categories.parJour = Object.fromEntries(keepDays.map(k => [k, categories.parJour[k]]));
+
+  const keepMonths = Object.keys(categories.parMois).sort().slice(-24);
+  categories.parMois = Object.fromEntries(keepMonths.map(k => [k, categories.parMois[k]]));
+
+  await writeStats(stats);
+}
+
+function computeIaCategoryTrends(parJour = {}) {
+  const days = Object.keys(parJour).sort();
+  const last7 = days.slice(-7);
+  const prev7 = days.slice(-14, -7);
+
+  function sumDays(selectedDays) {
+    const out = {};
+    for (const day of selectedDays) {
+      const cats = parJour[day] || {};
+      for (const [cat, n] of Object.entries(cats)) {
+        out[cat] = (out[cat] || 0) + Number(n || 0);
+      }
+    }
+    return out;
+  }
+
+  const current = sumDays(last7);
+  const previous = sumDays(prev7);
+
+  return [...new Set([...Object.keys(current), ...Object.keys(previous)])]
+    .map(cat => {
+      const nowVal = current[cat] || 0;
+      const prevVal = previous[cat] || 0;
+      const diff = nowVal - prevVal;
+      const pct = prevVal > 0 ? ((diff / prevVal) * 100) : (nowVal > 0 ? 100 : 0);
+      return {
+        category: cat,
+        current: nowVal,
+        previous: prevVal,
+        diff,
+        pct: Number(pct.toFixed(1))
+      };
+    })
+    .sort((a, b) => (b.diff - a.diff) || (b.current - a.current) || a.category.localeCompare(b.category));
 }
 
 // ─── Caches ───────────────────────────────────────────────────
@@ -1027,6 +1110,13 @@ app.get("/admin/dashboard", adminAuth, async (req, res) => {
         totalInstalls: appStats.services?.installation || 0,
         parService:    appStats.services || {},
         parJour:       appStats.parJour  || {}
+      },
+      iaCategories: {
+        total:   appStats.iaCategories?.total   || {},
+        parJour: appStats.iaCategories?.parJour || {},
+        parMois: appStats.iaCategories?.parMois || {},
+        sources: appStats.iaCategories?.sources || {},
+        trends:  computeIaCategoryTrends(appStats.iaCategories?.parJour || {})
       }
     });
   } catch(e) {
@@ -1203,6 +1293,7 @@ app.post("/mel", async (req, res) => {
       content: typeof m.content === "string" ? m.content : String(m.content || "")
     }));
     const lastUser = history.filter(m => m.role === "user").slice(-1)[0]?.content || "";
+    await trackIaQuestionCategories(lastUser, "pwa");
     const result = await generateMelReply(lastUser, history);
     console.log(`📱 PWA MEL via ${result.provider}`);
     res.json({ reply: result.reply, provider: result.provider });
