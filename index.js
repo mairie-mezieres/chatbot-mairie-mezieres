@@ -899,6 +899,47 @@ ${context}`;
 }
 
 // ── Météo / Vigilance helpers ─────────────────────────────────
+// ── trackMelStats : fusionne usage + iaCategories en UN seul writeStats ──────
+// Evite la race condition entre trackIaQuestionCategories et trackStat mel
+// qui lisaient/ecrivaient la meme cle Redis en parallele depuis le frontend.
+async function trackMelStats(userText) {
+  const stats = await readStats();
+  const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
+
+  // 1. Stats usage (ex-trackStat mel)
+  if (!stats.services) stats.services = {};
+  stats.services["mel"] = (stats.services["mel"] || 0) + 1;
+  if (!stats.parJour) stats.parJour = {};
+  if (!stats.parJour[today]) stats.parJour[today] = {};
+  stats.parJour[today]["mel"] = (stats.parJour[today]["mel"] || 0) + 1;
+  stats.totalAcces = (stats.totalAcces || 0) + 1;
+
+  // 2. Categories IA (ex-trackIaQuestionCategories)
+  const categories = ensureIaCategoryStatsShape(stats);
+  const topics = detectTopics(userText || "").filter(t => t !== "mairie_general");
+  const finalTopics = topics.length ? topics : ["autre"];
+
+  if (!categories.parJour[today]) categories.parJour[today] = {};
+  if (!categories.parMois[month]) categories.parMois[month] = {};
+  if (!categories.sources["pwa"]) categories.sources["pwa"] = {};
+
+  for (const topic of finalTopics) {
+    bumpStat(categories.total, topic);
+    bumpStat(categories.parJour[today], topic);
+    bumpStat(categories.parMois[month], topic);
+    bumpStat(categories.sources["pwa"], topic);
+  }
+
+  const keepDays = Object.keys(categories.parJour).sort().slice(-366);
+  categories.parJour = Object.fromEntries(keepDays.map(k => [k, categories.parJour[k]]));
+  const keepMonths = Object.keys(categories.parMois).sort().slice(-24);
+  categories.parMois = Object.fromEntries(keepMonths.map(k => [k, categories.parMois[k]]));
+
+  // Un seul writeStats — plus de race condition
+  await writeStats(stats);
+}
+
 async function resolveFacebookPageId() {
   if (FACEBOOK_PAGE_ID) return FACEBOOK_PAGE_ID;
   if (!PAGE_ACCESS_TOKEN) return null;
@@ -1360,7 +1401,7 @@ app.post("/mel", async (req, res) => {
       content: typeof m.content === "string" ? m.content : String(m.content || "")
     }));
     const lastUser = history.filter(m => m.role === "user").slice(-1)[0]?.content || "";
-    await trackIaQuestionCategories(lastUser, "pwa");
+    await trackMelStats(lastUser); // fusionne stats usage + iaCategories (fix race condition)
     const result = await generateMelReply(lastUser, history);
     console.log(`📱 PWA MEL via ${result.provider}`);
     res.json({ reply: result.reply, provider: result.provider });
