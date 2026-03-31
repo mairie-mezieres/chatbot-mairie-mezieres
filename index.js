@@ -1,11 +1,7 @@
 // ════════════════════════════════════════════════════════════
-// MAT — Mézières Avec Toi · Serveur Render v6.1
-// ════════════════════════════════════════════════════════════
-// Fonctions : Messenger MEL · Proxy PWA MEL · Signalement
-//             Actus Facebook · Push notifications · Webhook FB
-//             Stockage persistant via Upstash Redis
-//             Météo Open-Meteo · Vigilance Météo-France
-//             Anti-doublon publications Facebook
+// MAT — Mézières Avec Toi · Serveur Render v6.3
+// Mistral principal + cache + réponses directes + fallback Claude
+// Facebook feed only (plus de MEL sur Messenger)
 // ════════════════════════════════════════════════════════════
 
 const express   = require("express");
@@ -27,6 +23,10 @@ const VAPID_EMAIL          = "mailto:mairie@mezieres-lez-clery.fr";
 const REDIS_URL            = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN          = process.env.UPSTASH_REDIS_REST_TOKEN;
 
+const MISTRAL_API_KEY      = process.env.MISTRAL_API_KEY || "";
+const MISTRAL_MODEL        = process.env.MISTRAL_MODEL || "mistral-small-latest";
+const MISTRAL_URL          = process.env.MISTRAL_URL || "https://api.mistral.ai/v1/chat/completions";
+
 const METEOFRANCE_VIGILANCE_URL = process.env.METEOFRANCE_VIGILANCE_URL || process.env.METEOFRANCE_VIGILANCE || "";
 const METEOFRANCE_API_TOKEN     = process.env.METEOFRANCE_API_TOKEN;
 const AUTO_POST_WEATHER_ALERTS  = process.env.AUTO_POST_WEATHER_ALERTS === "true";
@@ -37,7 +37,7 @@ const OPEN_METEO_LON            = Number(process.env.OPEN_METEO_LON || 1.808);
 const OPEN_METEO_TZ             = process.env.OPEN_METEO_TZ || "Europe/Paris";
 const WEATHER_CHECK_INTERVAL_MS = Number(process.env.WEATHER_CHECK_INTERVAL_MS || 15 * 60 * 1000);
 
-const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
 
 // ─── Web Push VAPID ───────────────────────────────────────────
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
@@ -63,10 +63,7 @@ async function redisGet(key) {
 }
 
 async function redisSet(key, value) {
-  if (!REDIS_URL) {
-    console.warn("REDIS_URL non configuré");
-    return;
-  }
+  if (!REDIS_URL) return;
   try {
     const encoded = encodeURIComponent(key);
     await axios.post(
@@ -93,6 +90,8 @@ async function readLastWeatherAlert()   { return await redisGet("mat:weather:las
 async function writeLastWeatherAlert(d) { await redisSet("mat:weather:last", d); }
 async function readSeenPosts()          { return (await redisGet("mat:seen_posts")) || {}; }
 async function writeSeenPosts(d)        { await redisSet("mat:seen_posts", d); }
+async function readMelCache()           { return (await redisGet("mat:mel:cache")) || {}; }
+async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
 
 // ─── CORS ─────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -124,21 +123,23 @@ const SOURCES = {
   assainissement: ["https://mezieres-lez-clery.fr/2020/06/12/assainissement/"],
   location:       ["https://mezieres-lez-clery.fr/2018/10/24/location-de-materiel/"],
   cctvl:          ["https://www.ccterresduvaldeloire.fr/presentation/","https://www.ccterresduvaldeloire.fr/competences/"],
+  fibre:          ["https://www.valdeloire-fibre.fr/","https://www.valdeloire-fibre.fr/eligibilite/"],
 };
 
 const KEYWORDS = {
   transport:      ["bus","car","rémi","remi","ligne 8","transport","horaire","bréau","breau","arrêt","navette","orléans"],
   dechets:        ["déchet","dechet","poubelle","tri","recyclage","collecte","ordure","verre","papier","déchetterie","bac","compost"],
-  urbanisme:      ["permis","construire","plu","urbanisme","zone","terrain","déclaration","préalable","construction","bâtir","parcelle"],
-  scolaire:       ["école","ecole","cantine","restaurant scolaire","périscolaire","enfant","crèche","loisirs","garderie","marmousets"],
+  urbanisme:      ["permis","construire","plu","urbanisme","zone","terrain","déclaration","préalable","construction","bâtir","parcelle","abri","cloture","clôture"],
+  scolaire:       ["école","ecole","cantine","restaurant scolaire","périscolaire","enfant","crèche","loisirs","garderie","marmousets","centre de loisirs","service à l'enfance","service à l’enfance"],
   associations:   ["association","asso","subvention","club","bénévole"],
   dicrim:         ["risque","danger","inondation","nucléaire","dicrim","catastrophe","alerte","sirène"],
   randonnees:     ["randonnée","rando","balade","promenade","chemin","circuit","vélo","forêt","nature"],
   assainissement: ["assainissement","spanc","fosse","eaux usées","raccordement"],
   location:       ["louer","location","matériel","salle","table","chaise","barnum"],
-  demarches:      ["carte identité","passeport","naissance","mariage","décès","état civil","acte","certificat"],
+  demarches:      ["carte identité","passeport","naissance","mariage","décès","état civil","acte","certificat","demarche","démarche"],
   cctvl:          ["cctvl","intercommunalité","communauté de communes","terres du val"],
   agenda:         ["manifestation","fête","événement","agenda","concert","animation","sortie","calendrier"],
+  fibre:          ["fibre","internet","adsl","raccordement fibre","eligibilite","éligibilité","numérique","numerique"],
 };
 
 function detectTopics(text) {
@@ -190,7 +191,7 @@ async function fetchUrl(url) {
 
 async function refreshRemiCache() {
   const { binary } = await fetchUrl("https://drive.google.com/uc?export=download&id=1Fn9SWsL7jdipI3G0xq61NjWuluSPSZie");
-  if (!binary) {
+  if (!binary || !anthropic) {
     remiCache.content = "[Horaires Rémi : PDF non accessible]";
     return;
   }
@@ -266,7 +267,7 @@ async function refreshCalendarCache() {
 }
 
 async function getTopicContent(topic) {
-  const now = Date.now();
+  const now=Date.now();
   if (topicCache[topic]?.lastUpdate && now-topicCache[topic].lastUpdate.getTime() < CACHE_MS) {
     return topicCache[topic].content;
   }
@@ -308,181 +309,182 @@ async function buildContext(userText) {
   return parts.join("\n\n─────────────────────────────\n\n");
 }
 
-const SYSTEM_PROMPT = `Tu es MEL (Mézières En Ligne), l'assistante virtuelle de la mairie de Mézières-lez-Cléry (45370, Loiret). Présente-toi sous le prénom MEL.
+// ─── Optimisation MEL low-cost ────────────────────────────────
+const DIRECT_RULES = [
+  {
+    name: "urbanisme_dp",
+    test: (q) => /déclaration préalable|declaration prealable|permis|plu|clôture|cloture|abri|piscine|extension|urbanisme/.test(q),
+    answer:
+      "🏗️ Pour les questions d’urbanisme à Mézières-lez-Cléry, il faut généralement vérifier le PLU et selon le projet déposer soit une déclaration préalable soit un permis. Donnez-moi le type exact de projet (clôture, abri, extension, piscine, changement de fenêtre…) et je vous dirai l’orientation la plus probable avant dépôt en mairie."
+  },
+  {
+    name: "enfance",
+    test: (q) => /cantine|école|ecole|périscolaire|periscolaire|centre de loisirs|crèche|creche|garderie|marmousets|enfance/.test(q),
+    answer:
+      "🧒 Je peux vous aider sur les services à l’enfance : école, restauration scolaire, centre de loisirs, crèche familiale et périscolaire. Dites-moi précisément le service recherché et je vous répondrai avec les infos utiles de la commune."
+  },
+  {
+    name: "demarches",
+    test: (q) => /carte identité|carte d'identité|passeport|naissance|mariage|décès|deces|acte|état civil|etat civil|certificat|démarche|demarche/.test(q),
+    answer:
+      "📄 Je peux vous guider sur les démarches : état civil, actes, carte d’identité, passeport ou certificats. Indiquez la démarche exacte et je vous répondrai directement."
+  },
+  {
+    name: "fibre",
+    test: (q) => /fibre|internet|adsl|eligibilite|éligibilité|raccordement|numerique|numérique/.test(q),
+    answer:
+      "🌐 Pour la fibre et le numérique, je peux vous orienter sur l’éligibilité, le raccordement et les interlocuteurs utiles. Donnez-moi votre besoin précis et je vous répondrai."
+  }
+];
 
-INFORMATIONS PERMANENTES :
-📍 36 rue du bourg – 45370 MÉZIÈRES-LEZ-CLÉRY
-📞 02 38 45 61 76 | ✉️ mairie@mezieres-lez-clery.fr | 🌐 mezieres-lez-clery.fr
-🕐 Lundi 14h-17h30 / Mercredi sur RDV / Vendredi 8h30-11h30
-CCTVL : 02 38 45 11 11 | ccterresduvaldeloire.fr
-
-⚠️ BUS LIGNE 8 : La commune a DEUX arrêts : "Mairie" et "Le Bréau". Toujours préciser lequel.
-
-INSTRUCTIONS :
-- Français, convivial, concis (3-5 phrases max). Emojis pour structurer.
-- Jamais de Markdown : pas de **, pas de *, pas de #.
-- Si tu ne sais pas : "Toutes mes excuses 🙏 Romuald ou Fabrice vous répondront incessamment. Contactez-nous au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊"
-- Ne jamais inventer.`;
-
-function cleanMarkdown(text) {
-  return (text || "")
-    .replace(/\*\*(.+?)\*\*/g,"$1")
-    .replace(/\*(.+?)\*/g,"$1")
-    .replace(/#{1,6}\s/g,"")
+function normalizeQuestion(s) {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-const introductions = new Map();
-function shouldIntroduce(senderId) {
-  const today = new Date().toISOString().slice(0,10);
-  if (introductions.get(senderId) !== today) {
-    introductions.set(senderId, today);
-    return true;
+function hashKey(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
   }
-  return false;
+  return String(h >>> 0);
 }
 
-const INTRO_MESSAGE = "🌲 Bonjour ! Je suis MEL, l'assistante virtuelle de la mairie de Mézières-lez-Cléry. Comment puis-je vous aider ? 😊";
-const conversations = new Map();
-
-function getHistory(id) {
-  if (!conversations.has(id)) conversations.set(id, []);
-  return conversations.get(id);
-}
-
-function addToHistory(id, role, content) {
-  const h = getHistory(id);
-  h.push({ role, content });
-  if (h.length > 6) h.splice(0, h.length-6);
-}
-
-// ── Météo / Vigilance ─────────────────────────────────────────
-const VIGILANCE_COLORS = {
-  1: "vert",
-  2: "jaune",
-  3: "orange",
-  4: "rouge",
-};
-
-const VIGILANCE_PHENOMENA = {
-  1: "vent violent",
-  2: "pluie-inondation",
-  3: "orages",
-  4: "crues",
-  5: "neige-verglas",
-  6: "canicule",
-  7: "grand froid",
-  8: "avalanches",
-  9: "vagues-submersion",
-};
-
-async function fetchOpenMeteoForecast() {
-  const url =
-    `https://api.open-meteo.com/v1/forecast` +
-    `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
-    `&longitude=${encodeURIComponent(OPEN_METEO_LON)}` +
-    `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,pressure_msl,precipitation,wind_gusts_10m` +
-    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,uv_index_max,sunrise,sunset` +
-    `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}` +
-    `&forecast_days=3`;
-
-  const r = await axios.get(url, { timeout: 10000 });
-  return r.data;
-}
-
-async function fetchMeteoFranceVigilanceRaw() {
-  if (!METEOFRANCE_VIGILANCE_URL) {
-    throw new Error("METEOFRANCE_VIGILANCE_URL non configurée");
+function getCacheTtlMs(normalized) {
+  if (/permis|urbanisme|plu|fibre|cantine|ecole|cr[eè]che|centre de loisirs|etat civil|passeport|carte identite/.test(normalized)) {
+    return 7 * 24 * 60 * 60 * 1000;
   }
+  return 24 * 60 * 60 * 1000;
+}
 
-  const headers = {};
-  if (METEOFRANCE_API_TOKEN) {
-    headers.apikey = METEOFRANCE_API_TOKEN;
+function findDirectAnswer(normalized) {
+  for (const rule of DIRECT_RULES) {
+    if (rule.test(normalized)) return rule.answer;
   }
+  return null;
+}
 
-  const r = await axios.get(METEOFRANCE_VIGILANCE_URL, {
-    headers,
-    timeout: 15000,
+async function readMelCachedAnswer(normalized) {
+  const all = await readMelCache();
+  const key = hashKey(normalized);
+  const item = all[key];
+  if (!item) return null;
+  if (Date.now() - item.ts > item.ttlMs) return null;
+  return item;
+}
+
+async function writeMelCachedAnswer(normalized, answer, provider) {
+  const all = await readMelCache();
+  const key = hashKey(normalized);
+  all[key] = {
+    answer,
+    provider,
+    ts: Date.now(),
+    ttlMs: getCacheTtlMs(normalized)
+  };
+  const trimmed = Object.entries(all)
+    .sort((a,b) => (b[1].ts || 0) - (a[1].ts || 0))
+    .slice(0, 300);
+  await writeMelCache(Object.fromEntries(trimmed));
+}
+
+async function callMistral(messages, systemPrompt) {
+  if (!MISTRAL_API_KEY) throw new Error("MISTRAL_API_KEY manquante");
+
+  const mistralMessages = [
+    { role: "system", content: systemPrompt },
+    ...messages.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content : String(m.content || "") }))
+  ];
+
+  const r = await axios.post(
+    MISTRAL_URL,
+    {
+      model: MISTRAL_MODEL,
+      temperature: 0.2,
+      max_tokens: 350,
+      messages: mistralMessages
+    },
+    {
+      timeout: 20000,
+      headers: {
+        "Authorization": `Bearer ${MISTRAL_API_KEY}`,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+
+  const msg = r.data?.choices?.[0]?.message?.content;
+  if (!msg) throw new Error("Réponse Mistral vide");
+  return typeof msg === "string" ? msg : JSON.stringify(msg);
+}
+
+async function callClaude(messages, systemPrompt) {
+  if (!anthropic) throw new Error("ANTHROPIC_API_KEY manquante");
+
+  const response = await anthropic.messages.create({
+    model:"claude-haiku-4-5-20251001",
+    max_tokens:350,
+    system: systemPrompt,
+    messages: messages
   });
 
-  return r.data;
+  const txt = response.content?.[0]?.text;
+  if (!txt) throw new Error("Réponse Claude vide");
+  return txt;
 }
 
-function extractDepartmentVigilance(raw, deptCode = "45") {
-  if (!raw || !raw.product || !Array.isArray(raw.product.periods)) return null;
+async function generateMelReply(userText, history) {
+  const normalized = normalizeQuestion(userText);
 
-  const periods = raw.product.periods;
-  const now = Date.now();
+  const direct = findDirectAnswer(normalized);
+  if (direct) {
+    return { reply: direct, provider: "direct" };
+  }
 
-  let bestPeriod = periods.find(p => {
-    const begin = new Date(p.begin_validity_time).getTime();
-    const end = new Date(p.end_validity_time).getTime();
-    return !Number.isNaN(begin) && !Number.isNaN(end) && now >= begin && now <= end;
-  });
+  const cached = await readMelCachedAnswer(normalized);
+  if (cached) {
+    return { reply: cached.answer, provider: `cache:${cached.provider}` };
+  }
 
-  if (!bestPeriod) bestPeriod = periods[0];
-  if (!bestPeriod) return null;
+  const context = await buildContext(userText);
+  const systemPrompt =
+`${SYSTEM_PROMPT}
 
-  const deptDomain = (bestPeriod.timelaps?.domain_ids || []).find(d => String(d.domain_id) === String(deptCode));
-  if (!deptDomain) return null;
+TU ES UTILISÉE UNIQUEMENT DANS LA PWA MAT.
+NE PARLE JAMAIS DE MESSENGER.
+Réponds en 3 à 5 phrases maximum.
+Sois très concrète, communale, utile, précise.
+Quand une information dépend du type exact de projet ou de démarche, demande UNE précision courte.
+Si l'information n'est pas certaine, dis-le clairement.
+Contexte:
+${context}`;
 
-  const items = Array.isArray(deptDomain.phenomenon_items) ? deptDomain.phenomenon_items : [];
-  if (!items.length) return null;
-
-  const sorted = [...items].sort((a, b) => (Number(b.color_id || b.phenomenon_max_color_id || 0)) - (Number(a.color_id || a.phenomenon_max_color_id || 0)));
-  const main = sorted[0];
-  if (!main) return null;
-
-  const color = Number(main.phenomenon_max_color_id || main.color_id || 1);
-  const phenomenonId = Number(main.phenomenon_id || 0);
-
-  let start = null;
-  let end = null;
-
-  if (Array.isArray(main.timelaps_items) && main.timelaps_items.length) {
-    const active = main.timelaps_items
-      .filter(t => Number(t.color_id || 1) >= color)
-      .sort((a, b) => new Date(a.begin_time) - new Date(b.begin_time));
-
-    if (active.length) {
-      start = active[0].begin_time || null;
-      end = active[active.length - 1].end_time || null;
+  try {
+    const mistralReply = cleanMarkdown(await callMistral(history, systemPrompt));
+    await writeMelCachedAnswer(normalized, mistralReply, "mistral");
+    return { reply: mistralReply, provider: "mistral" };
+  } catch (mistralErr) {
+    console.warn("⚠️ Mistral indisponible:", mistralErr.message);
+    try {
+      const claudeReply = cleanMarkdown(await callClaude(history, systemPrompt));
+      await writeMelCachedAnswer(normalized, claudeReply, "claude");
+      return { reply: claudeReply, provider: "claude" };
+    } catch (claudeErr) {
+      console.warn("⚠️ Claude indisponible:", claudeErr.message);
+      return {
+        reply: "Toutes mes excuses 🙏 Romuald ou Fabrice vous répondront incessamment. Contactez-nous au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊",
+        provider: "fallback"
+      };
     }
   }
-
-  const textBlocks = Array.isArray(raw.product.text_bloc_items) ? raw.product.text_bloc_items : [];
-  const matchingTexts = textBlocks
-    .filter(t => String(t.domain_id) === String(deptCode))
-    .map(t => t.text)
-    .filter(Boolean);
-
-  return {
-    department_code: String(deptCode),
-    level: color,
-    color_label: VIGILANCE_COLORS[color] || "vert",
-    phenomenon_id: phenomenonId,
-    phenomenon_label: VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo",
-    start,
-    end,
-    title: `${VIGILANCE_COLORS[color] || "vert"} — ${VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo"}`,
-    main_text: matchingTexts[0] || "",
-    raw_period_name: bestPeriod.echeance || null,
-  };
 }
 
-function formatAlertDateFr(iso) {
-  if (!iso) return "à préciser";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "à préciser";
-  return d.toLocaleString("fr-FR", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
+// ── Météo / Vigilance helpers ─────────────────────────────────
 async function resolveFacebookPageId() {
   if (FACEBOOK_PAGE_ID) return FACEBOOK_PAGE_ID;
   if (!PAGE_ACCESS_TOKEN) return null;
@@ -539,7 +541,7 @@ function isSameWeatherAlert(a, b) {
 // ROUTES
 // ═══════════════════════════════════════════════════════════════
 
-// ── Webhook Facebook ──────────────────────────────────────────
+// ── Webhook Facebook (feed only) ──────────────────────────────
 app.get("/webhook", (req, res) => {
   if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === VERIFY_TOKEN) {
     console.log("✅ Webhook vérifié");
@@ -555,21 +557,10 @@ app.post("/webhook", async (req, res) => {
 
   if (body.object === "page") {
     for (const entry of body.entry || []) {
-      for (const event of entry.messaging || []) {
-        const sid = event.sender.id;
-        if (event.message?.text) {
-          await handleMessage(sid, event.message.text);
-        }
-        if (event.postback?.payload === "GET_STARTED") {
-          await sendMsg(sid, "🌲 Bonjour ! Je suis MEL, l'assistante virtuelle de la mairie de Mézières-lez-Cléry.\n\nJe peux vous renseigner sur les horaires, les démarches, le bus ligne 8, le PLU, l'agenda et bien plus !\n\nComment puis-je vous aider ? 😊");
-        }
-      }
-
       for (const change of entry.changes || []) {
         if (change.field === "feed" && change.value?.message) {
           const msg = change.value.message;
           const photo = change.value.photo || null;
-
           if (msg.includes("#app-mezieres")) {
             const postKey =
               change.value.post_id ||
@@ -585,50 +576,6 @@ app.post("/webhook", async (req, res) => {
     }
   }
 });
-
-// ── Traitement message Messenger ──────────────────────────────
-async function handleMessage(senderId, userText) {
-  try {
-    await typingOn(senderId);
-    if (shouldIntroduce(senderId)) await sendMsg(senderId, INTRO_MESSAGE);
-
-    const context = await buildContext(userText);
-    addToHistory(senderId, "user", userText);
-
-    const response = await anthropic.messages.create({
-      model:"claude-haiku-4-5-20251001",
-      max_tokens:300,
-      system:`${SYSTEM_PROMPT}\n\n─── CONTEXTE ───\n${context}\n────────────────`,
-      messages:getHistory(senderId),
-    });
-
-    const reply = cleanMarkdown(response.content[0].text);
-    addToHistory(senderId, "assistant", reply);
-    await sendMsg(senderId, reply);
-    console.log(`✅ Messenger | in:${response.usage.input_tokens} out:${response.usage.output_tokens}`);
-  } catch(err) {
-    console.error("❌", err.message);
-    await sendMsg(senderId, "Désolé, difficulté technique. Contactez la mairie au 02 38 45 61 76 😊");
-  }
-}
-
-// ── Helpers Messenger ─────────────────────────────────────────
-async function sendMsg(to, text) {
-  const chunks = text.length <= 1900 ? [text] : (text.match(/.{1,1900}/g) || []);
-  for (const chunk of chunks) {
-    await axios.post(
-      `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-      { recipient:{id:to}, message:{text:chunk}, messaging_type:"RESPONSE" }
-    ).catch(e => console.error("Messenger:", e.message));
-  }
-}
-
-async function typingOn(to) {
-  await axios.post(
-    `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-    { recipient:{id:to}, sender_action:"typing_on" }
-  ).catch(() => {});
-}
 
 // ── Publication Facebook → stockage + push + anti-doublon ───
 async function handleFacebookPublication(msg, photoUrl, postKey) {
@@ -656,7 +603,7 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
     return { duplicate: true };
   }
 
-  const actu  = {
+  const actu = {
     id: Date.now(),
     title,
     date: new Date().toLocaleDateString("fr-FR"),
@@ -710,20 +657,17 @@ app.post("/mel", async (req, res) => {
   }
 
   try {
-    const context = await buildContext(messages[messages.length-1]?.content || "");
-    const response = await anthropic.messages.create({
-      model:"claude-haiku-4-5-20251001",
-      max_tokens:300,
-      system:`${SYSTEM_PROMPT}\n\n─── CONTEXTE ───\n${context}\n────────────────`,
-      messages:messages.slice(-6),
-    });
-
-    const reply = cleanMarkdown(response.content[0].text);
-    console.log(`📱 PWA MEL | in:${response.usage.input_tokens} out:${response.usage.output_tokens}`);
-    res.json({ reply });
+    const history = messages.slice(-6).map(m => ({
+      role: m.role,
+      content: typeof m.content === "string" ? m.content : String(m.content || "")
+    }));
+    const lastUser = history.filter(m => m.role === "user").slice(-1)[0]?.content || "";
+    const result = await generateMelReply(lastUser, history);
+    console.log(`📱 PWA MEL via ${result.provider}`);
+    res.json({ reply: result.reply, provider: result.provider });
   } catch(e) {
     console.error("❌ MEL proxy:", e.message);
-    res.status(500).json({ reply:"Désolée, erreur technique. Contactez la mairie au 02 38 45 61 76 😊" });
+    res.status(500).json({ reply:"Désolée, erreur technique. Contactez la mairie au 02 38 45 61 76 😊", provider:"error" });
   }
 });
 
@@ -967,7 +911,7 @@ app.get("/setup-webhook", async (req, res) => {
 
     const subResult = await axios.post(
       `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`,
-      { subscribed_fields: "feed,messages" },
+      { subscribed_fields: "feed" },
       { params: { access_token: PAGE_ACCESS_TOKEN } }
     );
 
@@ -998,7 +942,7 @@ app.get("/", async (req, res) => {
 
   res.json({
     status:  "MAT est en ligne 🌲",
-    version: "6.1.1 — anti-doublon actus + météo + messenger + push",
+    version: "6.3 — Mistral principal + Claude secours + low-cost MEL",
     abonnes: subs.length,
     actus: news.length,
     idees: ideas.length,
@@ -1043,16 +987,13 @@ app.get("/bus", (req, res) => res.json({
 // ── Démarrage ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
-  console.log(`🚀 MAT Serveur v6.1.1 démarré sur le port ${PORT}`);
-  console.log(`📡 Messenger  : /webhook`);
+  console.log(`🚀 MAT Serveur v6.3 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
+  console.log(`📰 Facebook   : feed only`);
   console.log(`🚨 Signalement: /signal`);
-  console.log(`📋 Consulter  : /signalements`);
   console.log(`🔔 Push       : /push/subscribe`);
-  console.log(`📰 Actus      : /actus`);
   console.log(`🌦️ Météo      : /meteo/commune`);
   console.log(`⚠️ Vigilance  : /meteo/vigilance`);
-  console.log(`📣 Vérif auto : /meteo/alertes/check`);
 
   await refreshCalendarCache();
   await refreshRemiCache();
