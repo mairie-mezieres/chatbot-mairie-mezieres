@@ -1216,8 +1216,9 @@ app.post("/mel", async (req, res) => {
 app.post("/signal", async (req, res) => {
   const { cat, desc, lat, lon, photoB64, type } = req.body || {};
   const mapsLink = (lat && lon) ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=18` : null;
+  const isBug     = (type === "bug"     || (cat || "").startsWith("[BUG]"));
   const isContact = (type === "contact" || (cat || "").startsWith("[Demande]"));
-  const isSignal  = !isContact;
+  const isSignal  = !isBug && !isContact;
 
   const signal = {
     id: Date.now(),
@@ -1238,9 +1239,14 @@ app.post("/signal", async (req, res) => {
 
   // Envoi Trello
   try {
-    const cardName = isContact
-      ? `[Demande] ${(desc || "").split("\n")[0].substring(0, 80)}`
-      : `[Signalement] ${cat || "Non précisé"}`;
+    let cardName;
+    if (isBug) {
+      cardName = `[BUG] ${(cat || "").replace("[BUG]","").trim() || "Non précisé"}`;
+    } else if (isContact) {
+      cardName = `[Demande] ${(desc || "").split("\n")[0].substring(0, 80)}`;
+    } else {
+      cardName = `[Signalement] ${cat || "Non précisé"}`;
+    }
 
     const mapsLine = mapsLink ? `\n\n📍 [Voir sur la carte](${mapsLink})` : "";
     const dateLine = `\n\n📅 ${new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" })}`;
