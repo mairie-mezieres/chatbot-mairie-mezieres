@@ -794,7 +794,7 @@ app.post("/mel", async (req, res) => {
     res.json({ reply: result.reply, provider: result.provider });
   } catch(e) {
     console.error("❌ MEL proxy:", e.message);
-    res.status(500).json({ reply:"Désolée, erreur technique. Contactez la mairie au 02 38 45 61 76 😊", provider:"error" });
+    res.json({ reply:"Toutes mes excuses 🙏 Romuald ou Fabrice vous répondront incessamment. Contactez-nous au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊", provider:"fallback" });
   }
 });
 
