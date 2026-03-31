@@ -27,6 +27,10 @@ const MISTRAL_API_KEY      = process.env.MISTRAL_API_KEY || "";
 const MISTRAL_MODEL        = process.env.MISTRAL_MODEL || "mistral-small-latest";
 const MISTRAL_URL          = process.env.MISTRAL_URL || "https://api.mistral.ai/v1/chat/completions";
 
+const TRELLO_KEY     = process.env.TRELLO_KEY || "";
+const TRELLO_TOKEN   = process.env.TRELLO_TOKEN || "";
+const TRELLO_LIST_ID = process.env.TRELLO_LIST_ID || "";
+
 const METEOFRANCE_VIGILANCE_URL = process.env.METEOFRANCE_VIGILANCE_URL || process.env.METEOFRANCE_VIGILANCE || "";
 const METEOFRANCE_API_TOKEN     = process.env.METEOFRANCE_API_TOKEN;
 const AUTO_POST_WEATHER_ALERTS  = process.env.AUTO_POST_WEATHER_ALERTS === "true";
@@ -779,6 +783,72 @@ function isSameWeatherAlert(a, b) {
   );
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// TRELLO — Création de cartes avec pièce jointe image
+// ═══════════════════════════════════════════════════════════════
+async function createTrelloCard(name, desc, photoB64) {
+  if (!TRELLO_KEY || !TRELLO_TOKEN || !TRELLO_LIST_ID) {
+    console.warn("⚠️ Trello non configuré — variables manquantes");
+    return null;
+  }
+
+  // 1. Créer la carte
+  const cardRes = await axios.post(
+    "https://api.trello.com/1/cards",
+    null,
+    {
+      params: {
+        key:     TRELLO_KEY,
+        token:   TRELLO_TOKEN,
+        idList:  TRELLO_LIST_ID,
+        name:    name.substring(0, 512),
+        desc:    desc.substring(0, 16384),
+        pos:     "top",
+      },
+      timeout: 15000,
+    }
+  );
+
+  const card = cardRes.data;
+  console.log(`✅ Trello carte créée: ${card.id} — ${card.shortUrl}`);
+
+  // 2. Attacher la photo si présente (base64 → Buffer)
+  if (photoB64 && photoB64.startsWith("data:image")) {
+    try {
+      const matches = photoB64.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
+      if (matches) {
+        const mimeType = matches[1];
+        const ext = mimeType.split("/")[1].replace("jpeg", "jpg") || "jpg";
+        const buffer = Buffer.from(matches[2], "base64");
+
+        const FormData = require("form-data");
+        const form = new FormData();
+        form.append("file", buffer, { filename: `photo.${ext}`, contentType: mimeType });
+        form.append("name", `photo.${ext}`);
+        form.append("mimeType", mimeType);
+
+        await axios.post(
+          `https://api.trello.com/1/cards/${card.id}/attachments`,
+          form,
+          {
+            params: { key: TRELLO_KEY, token: TRELLO_TOKEN },
+            headers: form.getHeaders(),
+            timeout: 30000,
+            maxBodyLength: 10 * 1024 * 1024,
+          }
+        );
+        console.log(`📎 Photo attachée à la carte Trello ${card.id}`);
+      }
+    } catch (attachErr) {
+      console.warn("⚠️ Échec attachement photo Trello:", attachErr.message);
+      // La carte est créée, la photo est optionnelle — on ne fail pas
+    }
+  }
+
+  return card;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // ROUTES
 // ═══════════════════════════════════════════════════════════════
@@ -913,10 +983,12 @@ app.post("/mel", async (req, res) => {
   }
 });
 
-// ── Signalement citoyen → stockage Redis ─────────────────────
+// ── Signalement citoyen → Redis + Trello ─────────────────────
 app.post("/signal", async (req, res) => {
-  const { cat, desc, lat, lon, photoB64 } = req.body || {};
+  const { cat, desc, lat, lon, photoB64, type } = req.body || {};
   const mapsLink = (lat && lon) ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=18` : null;
+  const isContact = (type === "contact" || (cat || "").startsWith("[Demande]"));
+  const isSignal  = !isContact;
 
   const signal = {
     id: Date.now(),
@@ -928,12 +1000,29 @@ app.post("/signal", async (req, res) => {
     dateISO: new Date().toISOString(),
   };
 
+  // Stockage Redis
   const signals = await readSignals();
   signals.unshift(signal);
   if (signals.length > 100) signals.splice(100);
   await writeSignals(signals);
   console.log(`🚨 Signalement stocké #${signal.id}: ${cat}`);
-  res.json({ success:true });
+
+  // Envoi Trello
+  try {
+    const cardName = isContact
+      ? `[Demande] ${(desc || "").split("\n")[0].substring(0, 80)}`
+      : `[Signalement] ${cat || "Non précisé"}`;
+
+    const mapsLine = mapsLink ? `\n\n📍 [Voir sur la carte](${mapsLink})` : "";
+    const dateLine = `\n\n📅 ${new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" })}`;
+    const cardDesc = (desc || "Aucune description.") + mapsLine + dateLine;
+
+    await createTrelloCard(cardName, cardDesc, photoB64 || null);
+  } catch (trelloErr) {
+    console.warn("⚠️ Trello échec (signal stocké Redis quand même):", trelloErr.message);
+  }
+
+  res.json({ success: true });
 });
 
 app.get("/signalements", async (req, res) => {
@@ -1210,6 +1299,48 @@ app.get("/debug-mistral", async (req, res) => {
   }
 });
 
+
+
+// ── Diagnostic Trello (à supprimer après test) ────────────────
+app.get("/debug-trello", async (req, res) => {
+  const result = {
+    config: {
+      has_key:     !!TRELLO_KEY,
+      has_token:   !!TRELLO_TOKEN,
+      has_list_id: !!TRELLO_LIST_ID,
+      list_id:     TRELLO_LIST_ID || "(vide)",
+      key_preview: TRELLO_KEY ? TRELLO_KEY.substring(0, 6) + "..." : "(vide)",
+    }
+  };
+
+  if (!TRELLO_KEY || !TRELLO_TOKEN || !TRELLO_LIST_ID) {
+    return res.json({ ok: false, error: "Variables Trello manquantes", result });
+  }
+
+  // Test 1 : vérifier que la liste existe
+  try {
+    const listRes = await axios.get(
+      `https://api.trello.com/1/lists/${TRELLO_LIST_ID}`,
+      { params: { key: TRELLO_KEY, token: TRELLO_TOKEN }, timeout: 10000 }
+    );
+    result.list = { id: listRes.data.id, name: listRes.data.name };
+  } catch(e) {
+    return res.json({ ok: false, error: "Liste Trello introuvable: " + (e.response?.data || e.message), result });
+  }
+
+  // Test 2 : créer une carte de test
+  try {
+    const card = await createTrelloCard(
+      "[TEST] Carte de diagnostic MAT",
+      "Test MAT " + new Date().toLocaleString("fr-FR"),
+      null
+    );
+    result.card = { id: card.id, url: card.shortUrl };
+    res.json({ ok: true, result });
+  } catch(e) {
+    res.json({ ok: false, error: "Erreur création carte: " + (e.response?.data || e.message), result });
+  }
+});
 
 app.get("/", async (req, res) => {
   const [subs, news, ideas, signals] = await Promise.all([
