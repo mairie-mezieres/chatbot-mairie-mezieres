@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════
-// MAT — Mézières Avec Toi · Serveur Render v6.3
+// MAT — Mézières Avec Toi · Serveur Render v6.4
 // Mistral principal + cache + réponses directes + fallback Claude
 // Facebook feed only (plus de MEL sur Messenger)
 // ════════════════════════════════════════════════════════════
@@ -130,7 +130,7 @@ const KEYWORDS = {
   transport:      ["bus","car","rémi","remi","ligne 8","transport","horaire","bréau","breau","arrêt","navette","orléans"],
   dechets:        ["déchet","dechet","poubelle","tri","recyclage","collecte","ordure","verre","papier","déchetterie","bac","compost"],
   urbanisme:      ["permis","construire","plu","urbanisme","zone","terrain","déclaration","préalable","construction","bâtir","parcelle","abri","cloture","clôture"],
-  scolaire:       ["école","ecole","cantine","restaurant scolaire","périscolaire","enfant","crèche","loisirs","garderie","marmousets","centre de loisirs","service à l'enfance","service à l’enfance"],
+  scolaire:       ["école","ecole","cantine","restaurant scolaire","périscolaire","enfant","crèche","loisirs","garderie","marmousets","centre de loisirs","service à l'enfance","service à l'enfance"],
   associations:   ["association","asso","subvention","club","bénévole"],
   dicrim:         ["risque","danger","inondation","nucléaire","dicrim","catastrophe","alerte","sirène"],
   randonnees:     ["randonnée","rando","balade","promenade","chemin","circuit","vélo","forêt","nature"],
@@ -169,6 +169,19 @@ function cleanHtml(html) {
     .replace(/&[a-z]+;/g," ")
     .trim()
     .substring(0,2500);
+}
+
+// ─── Nettoyage markdown pour affichage mobile ─────────────────
+function cleanMarkdown(text) {
+  if (!text) return text;
+  return text
+    .replace(/\*\*(.*?)\*\*/g, "$1")   // gras
+    .replace(/\*(.*?)\*/g, "$1")       // italique
+    .replace(/#{1,6}\s/g, "")          // titres
+    .replace(/`{1,3}(.*?)`{1,3}/g, "$1") // code
+    .replace(/^\s*[-•]\s/gm, "• ")    // listes
+    .replace(/\n{3,}/g, "\n\n")        // sauts multiples
+    .trim();
 }
 
 async function fetchUrl(url) {
@@ -436,37 +449,100 @@ function formatAlertDateFr(iso) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════
+// MEL — Prompt système
+// ═══════════════════════════════════════════════════════════════
+const SYSTEM_PROMPT = `Tu es MEL, l'assistante virtuelle de la mairie de Mézières-lez-Cléry (45370, Loiret, France).
+Tu aides les habitants sur tous les sujets de la vie communale : urbanisme, démarches administratives, école, déchets, associations, transports, fibre, événements, randonnées.
+
+RÈGLES ABSOLUES :
+- Réponds TOUJOURS en français, de façon claire, bienveillante et concrète.
+- Tu réponds TOUJOURS avec au moins une information utile ou une orientation pratique, même si tu n'as pas tous les détails.
+- Ne dis JAMAIS "je ne sais pas" sans proposer une solution ou un contact utile.
+- Ne renvoie vers la mairie (02 38 45 61 76) QUE si la question nécessite une décision humaine, un rendez-vous ou un cas très particulier.
+- Ne mentionne JAMAIS quel modèle d'IA tu es. Tu es MEL, l'assistante de la mairie de Mézières-lez-Cléry. Point.
+- NE PARLE JAMAIS DE MESSENGER ni de Facebook.
+- Réponses courtes : 3 à 5 phrases. Sois directe et pratique.
+- Si la conversation contient des messages précédents, tiens-en compte pour répondre dans la continuité.
+
+CONNAISSANCES URBANISME (Mézières-lez-Cléry) :
+- Clôture en limite de voie publique (rue) : déclaration préalable obligatoire (art. R421-12 CU). Délai instruction : 1 mois. Dépôt en mairie.
+- Clôture entre voisins (limite séparative) : libre en général, sauf secteur protégé ou hauteur > 2m. Vérifier PLU.
+- Abri de jardin < 5m² : libre. Entre 5 et 20m² : déclaration préalable. > 20m² : permis de construire.
+- Extension < 20m² (hors zone U) ou < 40m² (zone U) : déclaration préalable. Au-delà : permis de construire.
+- Piscine couverte ou bassin > 100m² : permis de construire. Bassin < 100m² non couvert : déclaration préalable.
+- Changement de fenêtres (même modèle) : libre. Changement de couleur ou matériau : déclaration préalable.
+- Ravalement de façade : déclaration préalable si changement d'aspect.
+- Pour tout projet, consulter le PLU en mairie ou sur mezieres-lez-clery.fr.
+
+CONTACTS UTILES :
+- Mairie : 02 38 45 61 76 — mairie@mezieres-lez-clery.fr
+- Horaires : lundi 14h-17h30, mercredi sur RDV, vendredi 8h30-11h30
+- Site : mezieres-lez-clery.fr`;
+
 // ─── Optimisation MEL low-cost ────────────────────────────────
+// Les DIRECT_RULES donnent des réponses COMPLÈTES (pas des demandes de précision)
+// afin de ne pas casser le fil de conversation.
 const DIRECT_RULES = [
   {
-    name: "urbanisme_cloture",
-    test: (q) => /cl[oô]ture|portail|mur|grillage/.test(q),
-    answer:
-      "🏗️ Pour une clôture, un portail, un mur ou un grillage, il faut souvent vérifier les règles du PLU et selon le projet une déclaration préalable peut être nécessaire. Dites-moi la nature exacte du projet et si vous êtes en limite de rue ou de voisinage, et je vous oriente plus précisément."
+    name: "cloture_rue",
+    test: (q) => /(cloture|clôture|portail|mur|grillage|palissade|clos)/.test(q) && /(rue|voie|public|bord|riverain|chaussee|trottoir)/.test(q),
+    answer: "🏗️ Une clôture en limite de voie publique nécessite une déclaration préalable de travaux (art. R421-12 du Code de l'urbanisme). Le dossier est à déposer à la mairie (02 38 45 61 76). Délai d'instruction : 1 mois. Pensez à vérifier les règles du PLU local (hauteur max, matériaux autorisés) sur mezieres-lez-clery.fr."
   },
   {
-    name: "urbanisme_travaux",
-    test: (q) => /d[eé]claration pr[eé]alable|permis|plu|urbanisme|abri|piscine|extension|garage|fen[eê]tre|toiture/.test(q),
-    answer:
-      "🏗️ Pour les travaux d’urbanisme à Mézières-lez-Cléry, il faut vérifier le PLU et selon le projet déposer soit une déclaration préalable soit un permis. Précisez le type exact de travaux et je vous dirai l’orientation la plus probable avant dépôt en mairie."
+    name: "cloture_voisin",
+    test: (q) => /(cloture|clôture|portail|mur|grillage|palissade)/.test(q) && /(voisin|propriete|propriété|fond|mitoyen|separative|séparative|limite de propriete)/.test(q),
+    answer: "🏗️ Une clôture en limite séparative (entre propriétés voisines) est en principe libre, sans déclaration, si elle respecte les hauteurs du PLU de Mézières-lez-Cléry. Aucune formalité n'est requise en général, sauf si vous êtes en secteur protégé ou si la hauteur dépasse 2 mètres. Confirmez avec la mairie (02 38 45 61 76) selon votre parcelle."
   },
   {
-    name: "enfance",
-    test: (q) => /cantine|[ée]cole|p[eé]riscolaire|centre de loisirs|cr[eè]che|garderie|marmousets|enfance/.test(q),
-    answer:
-      "🧒 Je peux vous aider sur les services à l’enfance : école, restauration scolaire, périscolaire, centre de loisirs ou crèche familiale. Dites-moi le service exact recherché et je vous répondrai de façon ciblée."
+    name: "abri_jardin",
+    test: (q) => /(abri|cabane|chalet|appenti|appentis|remise)/.test(q) && /(jardin|bois|metal|surface|m2|metre|mètre)/.test(q),
+    answer: "🏗️ Pour un abri de jardin : moins de 5 m² = libre (aucune formalité) ; entre 5 et 20 m² = déclaration préalable ; plus de 20 m² = permis de construire. Si votre abri dépasse 1,80 m de hauteur et est accolé à la maison, les règles peuvent différer. Vérifiez avec la mairie (02 38 45 61 76)."
   },
   {
-    name: "demarches",
-    test: (q) => /carte identit[eé]|carte d'identit[eé]|passeport|naissance|mariage|d[eé]c[eè]s|acte|[ée]tat civil|certificat|d[eé]marche/.test(q),
-    answer:
-      "📄 Je peux vous guider sur les démarches : état civil, actes, carte d’identité, passeport ou certificats. Indiquez la démarche exacte et je vous répondrai directement."
+    name: "piscine",
+    test: (q) => /piscine|bassin|jacuzzi|spa/.test(q),
+    answer: "🏗️ Pour une piscine : bassin non couvert de moins de 100 m² = déclaration préalable ; bassin couvert ou plus de 100 m² = permis de construire. Pensez aussi à la déclaration en mairie pour la taxe d'aménagement. Contactez le 02 38 45 61 76 pour vérifier les règles du PLU sur votre parcelle."
+  },
+  {
+    name: "extension",
+    test: (q) => /(extension|agrandissement|véranda|veranda|terrasse couverte|garage)/.test(q),
+    answer: "🏗️ Pour une extension : moins de 20 m² en dehors des zones U (ou 40 m² en zone U) = déclaration préalable. Au-delà, ou si le total de la maison dépasse 150 m² après travaux = permis de construire avec architecte obligatoire. La mairie (02 38 45 61 76) peut vous dire dans quelle zone se situe votre parcelle."
+  },
+  {
+    name: "demarches_cni",
+    test: (q) => /(carte.identit|cni|piece.identit)/.test(q),
+    answer: "📄 La carte d'identité ne se fait plus à Mézières-lez-Cléry mais dans une mairie équipée d'une station biométrique (Saint-Hilaire-Saint-Mesmin, Cléry-Saint-André ou Orléans par exemple). Prenez rendez-vous en ligne sur mairie-clery-saint-andre.fr ou directement à Orléans. Pièces à fournir : justificatif de domicile, photo d'identité, ancienne CNI si renouvellement."
+  },
+  {
+    name: "demarches_passeport",
+    test: (q) => /passeport/.test(q),
+    answer: "📄 Le passeport se fait dans une mairie équipée d'une station biométrique (pas à Mézières-lez-Cléry). Les plus proches : Cléry-Saint-André, Saint-Hilaire-Saint-Mesmin, ou Orléans. Prenez rendez-vous en ligne sur le site de la mairie concernée. Comptez 3 à 4 semaines de délai en période normale."
+  },
+  {
+    name: "demarches_etatcivil",
+    test: (q) => /(acte.naissance|acte.mariage|acte.deces|état civil|etat civil|extrait|certificat)/.test(q),
+    answer: "📄 Les actes d'état civil (naissance, mariage, décès) peuvent être demandés directement en mairie de Mézières-lez-Cléry (02 38 45 61 76) ou en ligne sur service-public.fr. Pour un acte d'une commune extérieure, contactez directement la mairie concernée ou passez par service-public.fr."
+  },
+  {
+    name: "cantine",
+    test: (q) => /(cantine|restaurant scolaire|repas school|repas enfant)/.test(q),
+    answer: "🧒 Le restaurant scolaire de Mézières-lez-Cléry accueille les élèves de l'école de la Forêt. Les inscriptions et informations pratiques (tarifs, menus, fréquence) sont à demander à la mairie au 02 38 45 61 76 ou par mail à mairie@mezieres-lez-clery.fr."
+  },
+  {
+    name: "centre_loisirs",
+    test: (q) => /(centre.loisirs|alsh|accueil.loisirs|periscolaire|périscolaire|garderie|marmousets|creche|crèche)/.test(q),
+    answer: "🧒 La commune dispose d'un centre de loisirs, d'un service périscolaire (garderie matin/soir) et d'une crèche familiale Les Marmousets. Pour les inscriptions et tarifs, contactez la mairie (02 38 45 61 76) ou consultez mezieres-lez-clery.fr, rubrique Services à l'enfance."
   },
   {
     name: "fibre",
-    test: (q) => /fibre|internet|adsl|eligibilite|[ée]ligibilit[eé]|raccordement|num[eé]rique/.test(q),
-    answer:
-      "🌐 Pour la fibre et le numérique, je peux vous orienter sur l’éligibilité, le raccordement et les interlocuteurs utiles. Dites-moi si vous cherchez l’éligibilité, le raccordement ou un contact."
+    test: (q) => /fibre|eligibilit|raccordement.fibre|val.loire.fibre/.test(q),
+    answer: "🌐 Le déploiement de la fibre optique à Mézières-lez-Cléry est géré par Val de Loire Fibre. Vérifiez votre éligibilité sur valdeloire-fibre.fr ou contactez votre fournisseur internet. Pour toute question sur l'avancement du déploiement dans votre rue, la mairie (02 38 45 61 76) peut vous orienter."
+  },
+  {
+    name: "dechets_collecte",
+    test: (q) => /(collecte|bac|poubelle|ordure|tri|recyclage|jaune|noir|verre|papier|dechetterie|déchetterie)/.test(q),
+    answer: "🗑️ À Mézières-lez-Cléry : le bac gris (ordures ménagères) est collecté chaque lundi matin — sortez-le le dimanche soir. Le bac jaune (recyclables) est collecté un lundi sur deux (semaines paires). La déchetterie de Cléry-Saint-André est ouverte du lundi au samedi (sauf jours fériés) : 10h-12h et 14h-17h en hiver, 9h-12h et 14h-18h en été."
   }
 ];
 
@@ -495,7 +571,12 @@ function getCacheTtlMs(normalized) {
   return 24 * 60 * 60 * 1000;
 }
 
-function findDirectAnswer(normalized) {
+function findDirectAnswer(normalized, history) {
+  // Ne pas appliquer les DIRECT_RULES si c'est un message de suivi court (contexte déjà établi)
+  // Un message de suivi est court (< 30 chars) ET il y a déjà un échange dans l'historique
+  if (history && history.length > 2 && normalized.length < 30) {
+    return null; // laisser l'IA gérer le contexte
+  }
   for (const rule of DIRECT_RULES) {
     if (rule.test(normalized)) return rule.answer;
   }
@@ -574,45 +655,47 @@ async function callClaude(messages, systemPrompt) {
 async function generateMelReply(userText, history) {
   const normalized = normalizeQuestion(userText);
 
-  const direct = findDirectAnswer(normalized);
+  // DIRECT_RULES uniquement pour la première question ou question longue
+  // (pas pour les messages de suivi courts — ça coupait le contexte conversationnel)
+  const direct = findDirectAnswer(normalized, history);
   if (direct) {
     return { reply: direct, provider: "direct" };
   }
 
-  const cached = await readMelCachedAnswer(normalized);
-  if (cached) {
-    return { reply: cached.answer, provider: `cache:${cached.provider}` };
+  // Cache Redis (uniquement pour questions isolées, pas les suivis courts)
+  const isFollowUp = history && history.length > 2 && normalized.length < 30;
+  if (!isFollowUp) {
+    const cached = await readMelCachedAnswer(normalized);
+    if (cached) {
+      return { reply: cached.answer, provider: `cache:${cached.provider}` };
+    }
   }
 
   const context = await buildContext(userText);
-  const systemPrompt =
-`${SYSTEM_PROMPT}
+  const systemPrompt = `${SYSTEM_PROMPT}
 
 TU ES UTILISÉE UNIQUEMENT DANS LA PWA MAT.
 NE PARLE JAMAIS DE MESSENGER.
 Réponds en 3 à 5 phrases maximum.
-Réponds uniquement à l’échelle de Mézières-lez-Cléry et de ses services utiles.
-Sois très concrète, communale, utile et précise.
-Évite les réponses générales France si elles ne sont pas confirmées par le contexte communal.
-Quand une information dépend du type exact de projet ou de démarche, demande UNE seule précision courte.
-Si l'information n'est pas certaine, dis-le clairement puis renvoie vers la mairie.
-Contexte:
+Sois très concrète, communale, utile, précise.
+Si l'information n'est pas certaine, dis-le clairement et oriente vers la mairie.
+Contexte documentaire disponible :
 ${context}`;
 
   try {
     const mistralReply = cleanMarkdown(await callMistral(history, systemPrompt));
-    await writeMelCachedAnswer(normalized, mistralReply, "mistral");
+    if (!isFollowUp) await writeMelCachedAnswer(normalized, mistralReply, "mistral");
     return { reply: mistralReply, provider: "mistral" };
   } catch (mistralErr) {
     console.warn("⚠️ Mistral indisponible:", mistralErr.message);
     try {
       const claudeReply = cleanMarkdown(await callClaude(history, systemPrompt));
-      await writeMelCachedAnswer(normalized, claudeReply, "claude");
+      if (!isFollowUp) await writeMelCachedAnswer(normalized, claudeReply, "claude");
       return { reply: claudeReply, provider: "claude" };
     } catch (claudeErr) {
       console.warn("⚠️ Claude indisponible:", claudeErr.message);
       return {
-        reply: "Toutes mes excuses 🙏 Romuald ou Fabrice vous répondront incessamment. Contactez-nous au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊",
+        reply: "Je rencontre une difficulté technique momentanée. Pour votre question, n'hésitez pas à contacter la mairie au 02 38 45 61 76 ou par mail à mairie@mezieres-lez-clery.fr 😊",
         provider: "fallback"
       };
     }
@@ -792,7 +875,7 @@ app.post("/mel", async (req, res) => {
   }
 
   try {
-    const history = messages.slice(-6).map(m => ({
+    const history = messages.slice(-8).map(m => ({
       role: m.role,
       content: typeof m.content === "string" ? m.content : String(m.content || "")
     }));
@@ -802,7 +885,7 @@ app.post("/mel", async (req, res) => {
     res.json({ reply: result.reply, provider: result.provider });
   } catch(e) {
     console.error("❌ MEL proxy:", e.message);
-    res.json({ reply:"Toutes mes excuses 🙏 Romuald ou Fabrice vous répondront incessamment. Contactez-nous au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊", provider:"fallback" });
+    res.json({ reply:"Je rencontre une difficulté technique. Contactez la mairie au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊", provider:"fallback" });
   }
 });
 
@@ -988,7 +1071,7 @@ app.post("/push/unsubscribe", async (req, res) => {
 
   const subs = (await readSubs()).filter(s => s.endpoint !== endpoint);
   await writeSubs(subs);
-  res.json({ success:true });
+  res.json({ success: true });
 });
 
 // ── Stats usage ──────────────────────────────────────────────
@@ -1077,7 +1160,7 @@ app.get("/", async (req, res) => {
 
   res.json({
     status:  "MAT est en ligne 🌲",
-    version: "6.3 — Mistral principal + Claude secours + low-cost MEL",
+    version: "6.4 — Mistral principal + Claude secours + MEL améliorée",
     abonnes: subs.length,
     actus: news.length,
     idees: ideas.length,
@@ -1122,7 +1205,7 @@ app.get("/bus", (req, res) => res.json({
 // ── Démarrage ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
-  console.log(`🚀 MAT Serveur v6.3 démarré sur le port ${PORT}`);
+  console.log(`🚀 MAT Serveur v6.4 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
   console.log(`📰 Facebook   : feed only`);
   console.log(`🚨 Signalement: /signal`);
