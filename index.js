@@ -138,7 +138,13 @@ const SOURCES = {
   randonnees:     ["https://mezieres-lez-clery.fr/2018/10/21/randonnees-pedestres/","https://mezieres-lez-clery.fr/2018/10/20/tourisme/"],
   assainissement: ["https://mezieres-lez-clery.fr/2020/06/12/assainissement/"],
   location:       ["https://mezieres-lez-clery.fr/2018/10/24/location-de-materiel/"],
-  cctvl:          ["https://www.ccterresduvaldeloire.fr/presentation/","https://www.ccterresduvaldeloire.fr/competences/"],
+  cctvl:          [
+    "https://www.ccterresduvaldeloire.fr/services-communautaires/",
+    "https://www.ccterresduvaldeloire.fr/reseau-des-dechetteries/",
+    "https://www.ccterresduvaldeloire.fr/sante/",
+    "https://www.ccterresduvaldeloire.fr/transports-scolaires/",
+    "https://www.ccterresduvaldeloire.fr/operation-programmee-pour-lamelioration-de-lhabitat-opah/",
+  ],
   fibre:          ["https://www.valdeloire-fibre.fr/","https://www.valdeloire-fibre.fr/eligibilite/"],
 };
 
@@ -150,10 +156,11 @@ const KEYWORDS = {
   associations:   ["association","asso","subvention","club","bénévole"],
   dicrim:         ["risque","danger","inondation","nucléaire","dicrim","catastrophe","alerte","sirène"],
   randonnees:     ["randonnée","rando","balade","promenade","chemin","circuit","vélo","forêt","nature"],
-  assainissement: ["assainissement","spanc","fosse","eaux usées","raccordement"],
+  assainissement: ["assainissement","spanc","fosse","eaux usées","raccordement","anc","fosse septique","eaux grises","eaux vannes","spanc","rejet"],
   location:       ["louer","location","matériel","salle","table","chaise","barnum"],
   demarches:      ["carte identité","passeport","naissance","mariage","décès","état civil","acte","certificat","demarche","démarche"],
-  cctvl:          ["cctvl","intercommunalité","communauté de communes","terres du val"],
+  cctvl:          ["cctvl","intercommunalité","communauté de communes","terres du val","opah","rénovation","renovation","soliha","maison de santé","médecin","docteur","déchetterie inscription","plaque immatriculation"],
+  habitat:        ["opah","rénovation","renovation","travaux logement","aide logement","amélioration habitat","soliha","énergie","isolation","chauffage"],
   agenda:         ["manifestation","fête","événement","agenda","concert","animation","sortie","calendrier"],
   fibre:          ["fibre","internet","adsl","raccordement fibre","eligibilite","éligibilité","numérique","numerique"],
   horaires_mairie:["horaire mairie","horaires mairie","ouverture mairie","ouverte mairie","fermeture mairie","quand la mairie est ouverte","quand ouvre la mairie","quand ferme la mairie"],
@@ -577,7 +584,47 @@ CONNAISSANCES URBANISME (Mézières-lez-Cléry) :
 CONTACTS UTILES :
 - Mairie : 02 38 45 61 76 — mairie@mezieres-lez-clery.fr
 - Horaires : lundi 14h-17h30, mercredi sur RDV, vendredi 8h30-11h30
-- Site : mezieres-lez-clery.fr`;
+- Site : mezieres-lez-clery.fr
+
+COMMUNAUTÉ DE COMMUNES DES TERRES DU VAL DE LOIRE (CCTVL) :
+Mézières-lez-Cléry fait partie de la CCTVL (27 communes). Siège : 2 rue des Germines, 45190 Beaugency. Tél. 02 38 44 59 35. Site : ccterresduvaldeloire.fr
+
+DÉCHETTERIES (gérées par la CCTVL) :
+- Sites : Beauce la Romaine, Cléry-Saint-André (la plus proche de Mézières), Épieds-en-Beauce, Meung-sur-Loire, Saint-Ay, Villorceau (fermée temporairement pour travaux).
+- Inscription OBLIGATOIRE pour Cléry-Saint-André, Meung-sur-Loire et Saint-Ay (lecture automatique de plaque). Inscription sur portail-usagers.ccterresduvaldeloire.fr — munissez-vous d'un justificatif de domicile et de la carte grise. Enregistrer les plaques SANS tiret (ex : AA123BB).
+- Une inscription vaut pour tous les sites CCTVL.
+- Déchetterie de Cléry-Saint-André : lun-sam sauf jours fériés. Hiver (oct-mars) 10h-12h et 14h-17h. Été (avr-sep) 9h-12h et 14h-18h.
+- FAQ : ccterresduvaldeloire.fr/medias/2023/10/FAQ-gestion-dacces-DT.pdf
+- Tél. renseignements déchets : 02 38 44 59 35.
+
+ASSAINISSEMENT (CCTVL) :
+- Assainissement collectif (réseau public) : contact CCTVL 02 38 44 59 35 — assainissement@ccterresduvaldeloire.fr.
+- SPANC (assainissement non collectif) : pour les habitations non raccordées au réseau. La CCTVL contrôle les fosses septiques et installations individuelles (conception, réalisation, contrôles périodiques). Obligatoire. Même contact.
+- Portail facturation : portail-usagers.ccterresduvaldeloire.fr
+
+SANTÉ (CCTVL) :
+- 3 Maisons de Santé Pluridisciplinaires :
+  • Cléry-Saint-André — Val d'Ardoux (1 allée Dr Roland Delastre) : 6 médecins, 5 kiné, 4 infirmiers, 2 dentistes, podologue, orthophoniste, nutritionniste, ostéopathe, psychologue. Doctolib disponible. C'est la maison de santé la plus proche de Mézières-lez-Cléry.
+  • Meung-sur-Loire (1 rue des Tanneries) : 6 médecins, 5 infirmières, 2 kiné, orthophoniste, podologue.
+  • Tavers — Les Cîteaux (11 avenue des Cîteaux) : 6 médecins, 3 infirmières, 3 kiné, 2 dentistes, pédicure, diététicienne.
+- La CCTVL cherche activement à attirer de nouveaux médecins sur le territoire.
+
+TRANSPORTS — Réseau Rémi (lignes régulières depuis Mézières) :
+- Ligne 8 : St-Laurent-Nouan → Cléry-Saint-André → Mézières-lez-Cléry (arrêts Mairie et Le Bréau) → Orléans. C'est la ligne principale desservant Mézières.
+- Ligne 9A : Cravant – Beaugency – Meung-sur-Loire – Chaingy – Orléans.
+- Horaires Ligne 8 : remi-centrevaldeloire.fr (PDF 2025). Différents selon période scolaire et vacances.
+- Transports scolaires : circuits organisés par la CCTVL. Rens. 02 38 44 59 35.
+- Vélo à assistance électrique (VAE) : location possible via la CCTVL.
+- Application Géovélo disponible pour les itinéraires vélo.
+
+HABITAT / RÉNOVATION (CCTVL) :
+- OPAH (Opération Programmée d'Amélioration de l'Habitat) : depuis décembre 2023. Aide aux ménages modestes pour rénovation énergétique et lutte contre l'insalubrité.
+- Contact SOLIHA (opérateur missionnné) : 02 38 77 87 21 — contact.loiret@soliha.fr. Service gratuit et sans engagement : étude de projet, conseils techniques, évaluation des aides, assistance administrative.
+- Aides mobilisables : MaPrimeRénov, ANAH, aides CCTVL. Détails : ccterresduvaldeloire.fr/medias/2025/10/OPAH_Annexes-aides_2025.pdf
+
+URBANISME / PLUi-H (CCTVL) :
+- La CCTVL est compétente pour le PLUi-H (Plan Local d'Urbanisme intercommunal).
+- GNAU (Guichet Numérique des Autorisations d'Urbanisme) : dépôt en ligne des permis de construire, déclarations préalables. Accessible sur le site CCTVL.`;
 
 // ─── Optimisation MEL low-cost ────────────────────────────────
 // Les DIRECT_RULES donnent des réponses COMPLÈTES (pas des demandes de précision)
@@ -642,6 +689,26 @@ const DIRECT_RULES = [
     name: "dechets_collecte",
     test: (q) => /(collecte|bac|poubelle|ordure|tri|recyclage|jaune|noir|verre|papier|dechetterie|déchetterie)/.test(q),
     answer: "🗑️ À Mézières-lez-Cléry : le bac gris (ordures ménagères) est collecté chaque lundi matin — sortez-le le dimanche soir. Le bac jaune (recyclables) est collecté un lundi sur deux (semaines paires). La déchetterie de Cléry-Saint-André est ouverte du lundi au samedi (sauf jours fériés) : 10h-12h et 14h-17h en hiver, 9h-12h et 14h-18h en été."
+  },
+  {
+    name: "dechetterie_inscription",
+    test: (q) => /(inscription|inscrire|s'inscrire|s inscrire|plaque|immatriculation|accès|acces).*(dechetterie|déchetterie)|dechetterie.*(inscription|inscrire|plaque|accès|acces)/.test(q),
+    answer: "🏭 Pour accéder aux déchetteries de Cléry-Saint-André, Meung-sur-Loire et Saint-Ay, une inscription préalable est obligatoire (lecture automatique de plaque). Inscrivez-vous sur portail-usagers.ccterresduvaldeloire.fr avec un justificatif de domicile et votre carte grise. Enregistrez votre plaque SANS tiret (ex: AA123BB). Une seule inscription vaut pour tous les sites CCTVL. Tél: 02 38 44 59 35."
+  },
+  {
+    name: "maison_sante",
+    test: (q) => /(medecin|médecin|docteur|généraliste|generaliste|maison.sante|maison de santé|kiné|kinesitherapeute|infirmier|dentiste|orthophoniste|soigner|consultation)/.test(q),
+    answer: "🏥 La maison de santé la plus proche de Mézières-lez-Cléry est celle du Val d'Ardoux à Cléry-Saint-André (1 allée Dr Roland Delastre) : 6 médecins généralistes, 5 kinés, 4 infirmiers, 2 dentistes, podologue, orthophoniste, ostéopathe et psychologue. Prise de RDV sur Doctolib. Pour toute question : CCTVL au 02 38 44 59 35."
+  },
+  {
+    name: "opah_renovation",
+    test: (q) => /(opah|renovation|rénovation|travaux.logement|aide.logement|soliha|amélioration.habitat|maprimerenov|isolation|chauffage.aide|énergie.travaux)/.test(q),
+    answer: "🏠 La CCTVL propose une OPAH (Opération Programmée d'Amélioration de l'Habitat) pour aider les ménages modestes à rénover leur logement (rénovation énergétique, lutte contre l'insalubrité). Contactez SOLIHA, l'opérateur désigné : 02 38 77 87 21 — contact.loiret@soliha.fr. Service gratuit et sans engagement. Des aides comme MaPrimeRénov et l'ANAH sont mobilisables."
+  },
+  {
+    name: "spanc_assainissement",
+    test: (q) => /(spanc|fosse.septique|assainissement.non.collectif|anc|eaux.usees|eaux usées|fosse|vidange|epandage|épandage)/.test(q),
+    answer: "🚰 L'assainissement non collectif (fosses septiques, etc.) est contrôlé par le SPANC de la CCTVL. Toute habitation non raccordée au réseau public doit faire contrôler son installation. Contact : CCTVL au 02 38 44 59 35 — assainissement@ccterresduvaldeloire.fr. Le portail facturation est sur portail-usagers.ccterresduvaldeloire.fr."
   }
 ];
 
