@@ -439,28 +439,34 @@ function formatAlertDateFr(iso) {
 // ─── Optimisation MEL low-cost ────────────────────────────────
 const DIRECT_RULES = [
   {
-    name: "urbanisme_dp",
-    test: (q) => /déclaration préalable|declaration prealable|permis|plu|clôture|cloture|abri|piscine|extension|urbanisme/.test(q),
+    name: "urbanisme_cloture",
+    test: (q) => /cl[oô]ture|portail|mur|grillage/.test(q),
     answer:
-      "🏗️ Pour les questions d’urbanisme à Mézières-lez-Cléry, il faut généralement vérifier le PLU et selon le projet déposer soit une déclaration préalable soit un permis. Donnez-moi le type exact de projet (clôture, abri, extension, piscine, changement de fenêtre…) et je vous dirai l’orientation la plus probable avant dépôt en mairie."
+      "🏗️ Pour une clôture, un portail, un mur ou un grillage, il faut souvent vérifier les règles du PLU et selon le projet une déclaration préalable peut être nécessaire. Dites-moi la nature exacte du projet et si vous êtes en limite de rue ou de voisinage, et je vous oriente plus précisément."
+  },
+  {
+    name: "urbanisme_travaux",
+    test: (q) => /d[eé]claration pr[eé]alable|permis|plu|urbanisme|abri|piscine|extension|garage|fen[eê]tre|toiture/.test(q),
+    answer:
+      "🏗️ Pour les travaux d’urbanisme à Mézières-lez-Cléry, il faut vérifier le PLU et selon le projet déposer soit une déclaration préalable soit un permis. Précisez le type exact de travaux et je vous dirai l’orientation la plus probable avant dépôt en mairie."
   },
   {
     name: "enfance",
-    test: (q) => /cantine|école|ecole|périscolaire|periscolaire|centre de loisirs|crèche|creche|garderie|marmousets|enfance/.test(q),
+    test: (q) => /cantine|[ée]cole|p[eé]riscolaire|centre de loisirs|cr[eè]che|garderie|marmousets|enfance/.test(q),
     answer:
-      "🧒 Je peux vous aider sur les services à l’enfance : école, restauration scolaire, centre de loisirs, crèche familiale et périscolaire. Dites-moi précisément le service recherché et je vous répondrai avec les infos utiles de la commune."
+      "🧒 Je peux vous aider sur les services à l’enfance : école, restauration scolaire, périscolaire, centre de loisirs ou crèche familiale. Dites-moi le service exact recherché et je vous répondrai de façon ciblée."
   },
   {
     name: "demarches",
-    test: (q) => /carte identité|carte d'identité|passeport|naissance|mariage|décès|deces|acte|état civil|etat civil|certificat|démarche|demarche/.test(q),
+    test: (q) => /carte identit[eé]|carte d'identit[eé]|passeport|naissance|mariage|d[eé]c[eè]s|acte|[ée]tat civil|certificat|d[eé]marche/.test(q),
     answer:
       "📄 Je peux vous guider sur les démarches : état civil, actes, carte d’identité, passeport ou certificats. Indiquez la démarche exacte et je vous répondrai directement."
   },
   {
     name: "fibre",
-    test: (q) => /fibre|internet|adsl|eligibilite|éligibilité|raccordement|numerique|numérique/.test(q),
+    test: (q) => /fibre|internet|adsl|eligibilite|[ée]ligibilit[eé]|raccordement|num[eé]rique/.test(q),
     answer:
-      "🌐 Pour la fibre et le numérique, je peux vous orienter sur l’éligibilité, le raccordement et les interlocuteurs utiles. Donnez-moi votre besoin précis et je vous répondrai."
+      "🌐 Pour la fibre et le numérique, je peux vous orienter sur l’éligibilité, le raccordement et les interlocuteurs utiles. Dites-moi si vous cherchez l’éligibilité, le raccordement ou un contact."
   }
 ];
 
@@ -585,9 +591,11 @@ async function generateMelReply(userText, history) {
 TU ES UTILISÉE UNIQUEMENT DANS LA PWA MAT.
 NE PARLE JAMAIS DE MESSENGER.
 Réponds en 3 à 5 phrases maximum.
-Sois très concrète, communale, utile, précise.
-Quand une information dépend du type exact de projet ou de démarche, demande UNE précision courte.
-Si l'information n'est pas certaine, dis-le clairement.
+Réponds uniquement à l’échelle de Mézières-lez-Cléry et de ses services utiles.
+Sois très concrète, communale, utile et précise.
+Évite les réponses générales France si elles ne sont pas confirmées par le contexte communal.
+Quand une information dépend du type exact de projet ou de démarche, demande UNE seule précision courte.
+Si l'information n'est pas certaine, dis-le clairement puis renvoie vers la mairie.
 Contexte:
 ${context}`;
 
