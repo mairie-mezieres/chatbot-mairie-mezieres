@@ -660,6 +660,7 @@ async function callMistral(messages, systemPrompt) {
   return typeof msg === "string" ? msg : JSON.stringify(msg);
 }
 
+
 async function callClaude(messages, systemPrompt) {
   if (!anthropic) throw new Error("ANTHROPIC_API_KEY manquante");
 
@@ -1175,6 +1176,40 @@ app.get("/setup-webhook", async (req, res) => {
 app.get("/ping", (req, res) => {
   res.type("text/plain").send("ok");
 });
+
+// ── Diagnostic Mistral (à supprimer après test) ───────────────
+app.get("/debug-mistral", async (req, res) => {
+  if (!MISTRAL_API_KEY) return res.json({ error: "MISTRAL_API_KEY absente" });
+  try {
+    const payload = {
+      model: MISTRAL_MODEL,
+      temperature: 0.2,
+      max_tokens: 50,
+      messages: [
+        { role: "system", content: "Tu es MEL, assistante de la mairie." },
+        { role: "user",   content: "Bonjour" }
+      ]
+    };
+    const r = await axios.post(MISTRAL_URL, payload, {
+      timeout: 20000,
+      headers: {
+        "Authorization": `Bearer ${MISTRAL_API_KEY}`,
+        "Content-Type": "application/json"
+      }
+    });
+    res.json({ ok: true, model: MISTRAL_MODEL, url: MISTRAL_URL, response: r.data });
+  } catch(e) {
+    res.json({
+      ok: false,
+      model: MISTRAL_MODEL,
+      url: MISTRAL_URL,
+      status: e.response?.status,
+      errorData: e.response?.data,
+      message: e.message
+    });
+  }
+});
+
 
 app.get("/", async (req, res) => {
   const [subs, news, ideas, signals] = await Promise.all([
