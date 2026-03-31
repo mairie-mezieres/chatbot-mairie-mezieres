@@ -610,9 +610,32 @@ async function writeMelCachedAnswer(normalized, answer, provider) {
 async function callMistral(messages, systemPrompt) {
   if (!MISTRAL_API_KEY) throw new Error("MISTRAL_API_KEY manquante");
 
+  // Mistral exige uniquement les rôles "user" et "assistant", non vides
+  const cleaned = messages
+    .map(m => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: typeof m.content === "string" ? m.content.trim() : String(m.content || "").trim()
+    }))
+    .filter(m => m.content !== "");
+
+  // Dédoublonner les rôles consécutifs identiques (garde le dernier)
+  const deduped = [];
+  for (const msg of cleaned) {
+    if (deduped.length && deduped[deduped.length - 1].role === msg.role) {
+      deduped[deduped.length - 1] = msg;
+    } else {
+      deduped.push(msg);
+    }
+  }
+
+  // Mistral exige que le dernier message soit "user"
+  if (!deduped.length || deduped[deduped.length - 1].role !== "user") {
+    throw new Error("Historique invalide pour Mistral : doit terminer par un message user");
+  }
+
   const mistralMessages = [
     { role: "system", content: systemPrompt },
-    ...messages.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content : String(m.content || "") }))
+    ...deduped
   ];
 
   const r = await axios.post(
