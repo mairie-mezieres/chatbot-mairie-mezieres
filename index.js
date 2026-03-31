@@ -31,6 +31,16 @@ const TRELLO_KEY     = process.env.TRELLO_KEY || "";
 const TRELLO_TOKEN   = process.env.TRELLO_TOKEN || "";
 const TRELLO_LIST_ID = process.env.TRELLO_LIST_ID || "";
 
+const ADMIN_PASSWORD        = process.env.ADMIN_PASSWORD || "mat-admin-2024";
+const MISTRAL_BILLING_URL   = "https://api.mistral.ai/v1/usage";
+// Tarifs Mistral Small (€/1M tokens) — à ajuster si changement
+const MISTRAL_PRICE_IN      = 0.10;  // €/1M input tokens
+const MISTRAL_PRICE_OUT     = 0.30;  // €/1M output tokens
+// Tarifs Claude Haiku 4.5 ($/1M tokens) → converti en €
+const CLAUDE_PRICE_IN       = 0.80;  // $/1M input tokens
+const CLAUDE_PRICE_OUT      = 4.00;  // $/1M output tokens
+const EUR_PER_USD            = 0.92; // taux approximatif
+
 const METEOFRANCE_VIGILANCE_URL = process.env.METEOFRANCE_VIGILANCE_URL || process.env.METEOFRANCE_VIGILANCE || "";
 const METEOFRANCE_API_TOKEN     = process.env.METEOFRANCE_API_TOKEN;
 const AUTO_POST_WEATHER_ALERTS  = process.env.AUTO_POST_WEATHER_ALERTS === "true";
@@ -96,6 +106,8 @@ async function readSeenPosts()          { return (await redisGet("mat:seen_posts
 async function writeSeenPosts(d)        { await redisSet("mat:seen_posts", d); }
 async function readMelCache()           { return (await redisGet("mat:mel:cache")) || {}; }
 async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
+async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
+async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
 
 // ─── CORS ─────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -661,6 +673,9 @@ async function callMistral(messages, systemPrompt) {
 
   const msg = r.data?.choices?.[0]?.message?.content;
   if (!msg) throw new Error("Réponse Mistral vide");
+  // Tracker les tokens
+  const usage = r.data?.usage || {};
+  trackIaTokens("mistral", usage.prompt_tokens || 0, usage.completion_tokens || 0).catch(()=>{});
   return typeof msg === "string" ? msg : JSON.stringify(msg);
 }
 
@@ -677,6 +692,9 @@ async function callClaude(messages, systemPrompt) {
 
   const txt = response.content?.[0]?.text;
   if (!txt) throw new Error("Réponse Claude vide");
+  // Tracker les tokens
+  const usage = response.usage || {};
+  trackIaTokens("claude", usage.input_tokens || 0, usage.output_tokens || 0).catch(()=>{});
   return txt;
 }
 
@@ -849,9 +867,220 @@ async function createTrelloCard(name, desc, photoB64) {
   return card;
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// TRACKING IA — tokens + coûts
+// ═══════════════════════════════════════════════════════════════
+async function trackIaTokens(provider, inputTokens, outputTokens) {
+  const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
+  const stats = await readIaStats();
+
+  if (!stats.daily)   stats.daily   = {};
+  if (!stats.monthly) stats.monthly = {};
+
+  // Daily
+  if (!stats.daily[today])             stats.daily[today] = {};
+  if (!stats.daily[today][provider])   stats.daily[today][provider] = { in: 0, out: 0, calls: 0 };
+  stats.daily[today][provider].in    += inputTokens;
+  stats.daily[today][provider].out   += outputTokens;
+  stats.daily[today][provider].calls += 1;
+
+  // Monthly
+  if (!stats.monthly[month])            stats.monthly[month] = {};
+  if (!stats.monthly[month][provider])  stats.monthly[month][provider] = { in: 0, out: 0, calls: 0 };
+  stats.monthly[month][provider].in    += inputTokens;
+  stats.monthly[month][provider].out   += outputTokens;
+  stats.monthly[month][provider].calls += 1;
+
+  // Garder 366 jours et 13 mois max
+  const days = Object.keys(stats.daily).sort().slice(-366);
+  const months = Object.keys(stats.monthly).sort().slice(-13);
+  stats.daily   = Object.fromEntries(days.map(k => [k, stats.daily[k]]));
+  stats.monthly = Object.fromEntries(months.map(k => [k, stats.monthly[k]]));
+
+  await writeIaStats(stats);
+}
+
+function calcIaCost(provider, inTokens, outTokens) {
+  if (provider === "mistral") {
+    return (inTokens / 1_000_000 * MISTRAL_PRICE_IN) + (outTokens / 1_000_000 * MISTRAL_PRICE_OUT);
+  }
+  if (provider === "claude") {
+    const usd = (inTokens / 1_000_000 * CLAUDE_PRICE_IN) + (outTokens / 1_000_000 * CLAUDE_PRICE_OUT);
+    return usd * EUR_PER_USD;
+  }
+  return 0;
+}
+
+// ── Middleware auth admin ─────────────────────────────────────
+function adminAuth(req, res, next) {
+  const token = req.headers["x-admin-token"] || req.query.token;
+  if (!token || token !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: "Non autorisé" });
+  }
+  next();
+}
+
 // ═══════════════════════════════════════════════════════════════
 // ROUTES
 // ═══════════════════════════════════════════════════════════════
+
+
+// ═══════════════════════════════════════════════════════════════
+// ROUTES ADMIN (authentifiées)
+// ═══════════════════════════════════════════════════════════════
+
+// ── Login admin ───────────────────────────────────────────────
+app.post("/admin/login", (req, res) => {
+  const { password } = req.body || {};
+  if (password === ADMIN_PASSWORD) {
+    res.json({ ok: true, token: ADMIN_PASSWORD });
+  } else {
+    res.status(401).json({ ok: false, error: "Mot de passe incorrect" });
+  }
+});
+
+// ── Stats globales ────────────────────────────────────────────
+app.get("/admin/dashboard", adminAuth, async (req, res) => {
+  try {
+    const [appStats, iaStats, subs, news, ideas, signals] = await Promise.all([
+      readStats(), readIaStats(), readSubs(), readNews(), readIdeas(), readSignals()
+    ]);
+
+    // Taille Redis estimée
+    let redisSize = null;
+    if (REDIS_URL) {
+      try {
+        const r = await axios.get(`${REDIS_URL}/info`, {
+          headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
+        });
+        const info = r.data?.result || "";
+        const match = info.match(/used_memory:(\d+)/);
+        redisSize = match ? parseInt(match[1]) : null;
+      } catch(e) { /* silencieux */ }
+    }
+
+    // Stats IA avec coûts
+    const iaDaily   = iaStats.daily   || {};
+    const iaMonthly = iaStats.monthly || {};
+
+    const enriched = (obj) => {
+      const result = {};
+      for (const [period, providers] of Object.entries(obj)) {
+        result[period] = {};
+        for (const [prov, data] of Object.entries(providers)) {
+          result[period][prov] = {
+            ...data,
+            costEur: parseFloat(calcIaCost(prov, data.in, data.out).toFixed(4))
+          };
+        }
+        // Total période
+        let totalEur = 0;
+        for (const prov of Object.values(result[period])) totalEur += prov.costEur;
+        result[period]._total = { costEur: parseFloat(totalEur.toFixed(4)) };
+      }
+      return result;
+    };
+
+    // Crédits Anthropic via API
+    let claudeCredits = null;
+    if (ANTHROPIC_API_KEY) {
+      try {
+        const r = await axios.get("https://api.anthropic.com/v1/organizations/usage", {
+          headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+          timeout: 8000
+        });
+        claudeCredits = r.data;
+      } catch(e) { claudeCredits = { error: e.message }; }
+    }
+
+    // Crédits Mistral via API
+    let mistralUsage = null;
+    if (MISTRAL_API_KEY) {
+      try {
+        const r = await axios.get("https://api.mistral.ai/v1/usage", {
+          headers: { "Authorization": `Bearer ${MISTRAL_API_KEY}` },
+          timeout: 8000
+        });
+        mistralUsage = r.data;
+      } catch(e) { mistralUsage = { error: e.message }; }
+    }
+
+    res.json({
+      ok: true,
+      redis: {
+        usedBytes: redisSize,
+        usedMB: redisSize ? parseFloat((redisSize / 1024 / 1024).toFixed(2)) : null,
+        limitMB: 256,
+        pct: redisSize ? parseFloat((redisSize / 1024 / 1024 / 256 * 100).toFixed(1)) : null,
+        keys: { subs: subs.length, actus: news.length, ideas: ideas.length, signals: signals.length }
+      },
+      ia: {
+        daily:   enriched(iaDaily),
+        monthly: enriched(iaMonthly),
+        claude:  { credits: claudeCredits, priceIn: CLAUDE_PRICE_IN, priceOut: CLAUDE_PRICE_OUT },
+        mistral: { usage: mistralUsage,    priceIn: MISTRAL_PRICE_IN, priceOut: MISTRAL_PRICE_OUT }
+      },
+      app: {
+        totalAcces:    appStats.totalAcces || 0,
+        totalInstalls: appStats.services?.installation || 0,
+        parService:    appStats.services || {},
+        parJour:       appStats.parJour  || {}
+      }
+    });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── Liste idées (admin) ───────────────────────────────────────
+app.get("/admin/ideas", adminAuth, async (req, res) => {
+  const ideas = await readIdeas();
+  res.json({ ideas, count: ideas.length });
+});
+
+// ── Supprimer une idée ────────────────────────────────────────
+app.delete("/admin/ideas/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const ideas = await readIdeas();
+  const filtered = ideas.filter(i => i.id !== id);
+  if (filtered.length === ideas.length) return res.status(404).json({ error: "Idée non trouvée" });
+  await writeIdeas(filtered);
+  res.json({ ok: true, deleted: id });
+});
+
+// ── Liste notifications/actus (admin) ─────────────────────────
+app.get("/admin/actus", adminAuth, async (req, res) => {
+  const actus = await readNews();
+  res.json({ actus, count: actus.length });
+});
+
+// ── Supprimer une actu ────────────────────────────────────────
+app.delete("/admin/actus/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const actus = await readNews();
+  const filtered = actus.filter(a => a.id !== id);
+  if (filtered.length === actus.length) return res.status(404).json({ error: "Actu non trouvée" });
+  await writeNews(filtered);
+  res.json({ ok: true, deleted: id });
+});
+
+// ── Liste signalements (admin) ────────────────────────────────
+app.get("/admin/signals", adminAuth, async (req, res) => {
+  const signals = await readSignals();
+  res.json({ signals, count: signals.length });
+});
+
+// ── Supprimer un signalement ──────────────────────────────────
+app.delete("/admin/signals/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const signals = await readSignals();
+  const filtered = signals.filter(s => s.id !== id);
+  if (filtered.length === signals.length) return res.status(404).json({ error: "Signalement non trouvé" });
+  await writeSignals(filtered);
+  res.json({ ok: true, deleted: id });
+});
 
 // ── Webhook Facebook (feed only) ──────────────────────────────
 app.get("/webhook", (req, res) => {
