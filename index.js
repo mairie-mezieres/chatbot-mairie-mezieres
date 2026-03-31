@@ -54,8 +54,8 @@ async function redisGet(key) {
       { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } }
     );
     const val = r.data.result;
-    return JSON.parse(val);
     if (val === null || val === undefined) return null;
+    return JSON.parse(val);
   } catch(e) {
     console.warn(`Redis GET ${key}:`, e.message);
     return null;
@@ -1049,8 +1049,8 @@ app.listen(PORT, async () => {
   console.log(`🚨 Signalement: /signal`);
   console.log(`📋 Consulter  : /signalements`);
   console.log(`🔔 Push       : /push/subscribe`);
-  console.log(`🌦️ Météo      : /meteo/commune`);
   console.log(`📰 Actus      : /actus`);
+  console.log(`🌦️ Météo      : /meteo/commune`);
   console.log(`⚠️ Vigilance  : /meteo/vigilance`);
   console.log(`📣 Vérif auto : /meteo/alertes/check`);
 
