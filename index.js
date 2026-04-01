@@ -1370,9 +1370,10 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   const subs = await readSubs();
   console.log(`📱 Envoi push à ${subs.length} abonné(s)`);
   const payload = JSON.stringify({
-    title:"📰 Radio Mézières",
+    title:"MAT — Mézières Avec Toi",
     body:title.substring(0,80),
-    icon:"./icon-192.png"
+    icon:"./icon-192.png",
+    badge:"./icon-192.png"
   });
 
   const dead = [];
