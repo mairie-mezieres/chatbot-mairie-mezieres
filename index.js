@@ -156,7 +156,7 @@ const KEYWORDS = {
   associations:   ["association","asso","subvention","club","bénévole"],
   dicrim:         ["risque","danger","inondation","nucléaire","dicrim","catastrophe","alerte","sirène"],
   randonnees:     ["randonnée","rando","balade","promenade","chemin","circuit","vélo","forêt","nature"],
-  assainissement: ["assainissement","spanc","fosse","eaux usées","raccordement","anc","fosse septique","eaux grises","eaux vannes","spanc","rejet"],
+  assainissement: ["assainissement","spanc","fosse septique","fosse septique","eaux usées","raccordement","eaux grises","eaux vannes","rejet","assainissement non collectif"],
   location:       ["louer","location","matériel","salle","table","chaise","barnum"],
   demarches:      ["carte identité","passeport","naissance","mariage","décès","état civil","acte","certificat","demarche","démarche"],
   cctvl:          ["cctvl","intercommunalité","communauté de communes","terres du val","opah","rénovation","renovation","soliha","maison de santé","médecin","docteur","déchetterie inscription","plaque immatriculation"],
@@ -707,7 +707,7 @@ const DIRECT_RULES = [
   },
   {
     name: "spanc_assainissement",
-    test: (q) => /(spanc|fosse.septique|assainissement.non.collectif|anc|eaux.usees|eaux usées|fosse|vidange|epandage|épandage)/.test(q),
+    test: (q) => /(spanc|fosse.septique|assainissement.non.collectif|eaux.usees|eaux usées|vidange|epandage|épandage)/.test(q),
     answer: "🚰 L'assainissement non collectif (fosses septiques, etc.) est contrôlé par le SPANC de la CCTVL. Toute habitation non raccordée au réseau public doit faire contrôler son installation. Contact : CCTVL au 02 38 44 59 35 — assainissement@ccterresduvaldeloire.fr. Le portail facturation est sur portail-usagers.ccterresduvaldeloire.fr."
   }
 ];
