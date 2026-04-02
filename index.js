@@ -1562,91 +1562,62 @@ app.get("/api/chemins", async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════════════════════
-// ENDPOINT /api/parcours v3
-// À coller dans index.js après l'endpoint /mel
-// ════════════════════════════════════════════════════════════
-
+// ── Génération de parcours IA via Mistral ─────────────────────
 app.post("/api/parcours", async (req, res) => {
-  const { mode, distance, style, depart } = req.body || {};
+  const { mode, distance, style } = req.body || {};
 
   if (!mode || !distance) {
     return res.status(400).json({ error: "mode et distance requis" });
   }
+
   if (!MISTRAL_API_KEY) {
     return res.status(500).json({ error: "MISTRAL_API_KEY manquante" });
   }
 
-  // Point de départ (fourni par le client ou parking par défaut)
-  const departLat = (depart && depart[0]) ? Number(depart[0]) : 47.818096;
-  const departLng = (depart && depart[1]) ? Number(depart[1]) : 1.801526;
-
-  const modeLabels = { pied:"à pied", velo:"à vélo", cheval:"à cheval" };
+  const modeLabels = { pied: "à pied", velo: "à vélo", cheval: "à cheval" };
   const styleLabels = {
-    nature: "chemins de terre et voies vertes communales (track, path, footway) — éviter absolument les routes goudronnées sauf courte traversée nécessaire",
-    routes: "rues et routes revêtues (residential, unclassified) du bourg et des hameaux — idéal pour la marche urbaine ou le vélo sur route",
-    mixte:  "alternance de chemins de terre et de petites routes internes — tracé varié"
+    nature:     "nature & chemins de terre",
+    patrimoine: "patrimoine & bourg historique",
+    vignes:     "vignes & campagne agricole",
+    mixte:      "mixte et varié"
   };
 
-  const systemPrompt = `Tu es un expert local en randonnée pédestre pour la commune de Mézières-lez-Cléry (Loiret, 45370, France).
+  const systemPrompt = `Tu es un expert local en randonnée pour la commune de Mézières-lez-Cléry (Loiret, 45370, Centre-Val de Loire).
+La commune est traversée par 3 types de voies :
+- Routes et rues (revêtement dur, accessible voiture)
+- Voies et chemins de terre communaux (publics, piétons/vélos)
+- Chemins d'exploitation AFR (agricoles privés, tolérance de passage non garantie)
 
-CONTRAINTES GÉOGRAPHIQUES STRICTES :
-- La boucle PART et REVIENT exactement au point de départ fourni : [${departLat}, ${departLng}]
-- Limites strictes de la commune : lat 47.800–47.835, lng 1.785–1.855
-- INTERDIRE ABSOLUMENT les axes inter-communes suivants (routes menant à Mareau-aux-Prés et Cléry-Saint-André) :
-  * Route D18 vers Mareau-aux-Prés (axe nord-est, lon > 1.840)
-  * Route D18/D951 vers Cléry-Saint-André (axe nord, lat > 47.830 sur les zones longueur > 1.800)
-  * Ces interdictions s'appliquent à TOUS les modes sauf éventuellement vélo sur courte distance
-- La boucle ne doit PAS se croiser elle-même (pas de croisement de tracé)
-- Ne pas chercher à passer par des points d'intérêt spécifiques : tracer une belle boucle naturelle
-- Préférer les chemins qui tournent en boucle dans les zones ZN, ZP, ZM, ZL, ZR, ZH de la commune
+Points d'intérêt : Parking des randonneurs (départ officiel, 47.8185/1.8095), Église Saint-Avit (47.8222/1.8078), Château de Mézières (47.8218/1.805), Butte des Élus tumulus gaulois (47.8145/1.802), Vignes AOC Orléans-Cléry (47.816/1.813), Vallée aux Moines site naturel (47.808/1.804).
 
-TYPES DE VOIES disponibles :
-- Chemins de terre communaux (track, path) : réseau dense à l'intérieur de la commune
-- Rues internes (residential, unclassified) : rues du bourg et des hameaux
-- Interdits : primary, secondary, tertiary (routes inter-communes)
+La commune est bornée approximativement : lat 47.790–47.840, lng 1.775–1.860.
+Le bourg central est autour de 47.820/1.805.
 
-DISTANCES ET DURÉES (${modeLabels[mode]||mode}) :
-- 3 km ≈ 45 min à pied / 12 min vélo
-- 5 km ≈ 1h15 à pied / 20 min vélo
-- 8 km ≈ 2h à pied / 30 min vélo
-- 12 km ≈ 3h à pied / 45 min vélo
-- 15 km ≈ 3h45 à pied / 1h vélo
-- 20 km ≈ 5h à pied / 1h20 vélo
-
-PROFIL AMBIANCE demandé : ${styleLabels[style]||style}
-
-Réponds UNIQUEMENT en JSON valide, sans texte avant ni après, sans balises markdown :
+Réponds UNIQUEMENT en JSON valide, sans texte avant ni après, sans balises markdown. Format exact :
 {
-  "titre": "Nom poétique 4-5 mots",
+  "titre": "Nom poétique du parcours (4-5 mots)",
   "duree": "Xh XX",
-  "description": "3-4 phrases décrivant le paysage et l'ambiance du parcours",
-  "conseils": "1-2 conseils pratiques (chaussures, météo, eau…)",
-  "waypoints": [[${departLat},${departLng}],[lat,lng],[lat,lng],...,[${departLat},${departLng}]]
+  "description": "3-4 phrases descriptives et inspirantes",
+  "conseils": "1-2 conseils pratiques courts",
+  "waypoints": [[lat,lng],[lat,lng],...]
 }
 
-Les waypoints doivent :
-- Commencer ET finir par [${departLat},${departLng}]
-- Contenir 10 à 16 points
-- Former une boucle sans croisement
-- Rester dans les limites de la commune
-- Correspondre à la distance cible de ${distance} km ± 15%
-- Suivre autant que possible les vraies voies OSM de la commune`;
+Les waypoints doivent former une boucle réaliste de ~${distance} km au départ du parking (47.8185,1.8095), avec 8 à 14 points. Adapte le tracé au mode ${modeLabels[mode] || mode} et à l'ambiance ${styleLabels[style] || style}. Pour le vélo, privilégie routes et chemins larges. Pour le cheval, évite les routes principales.`;
 
   try {
     const r = await axios.post(
       MISTRAL_URL,
       {
         model: MISTRAL_MODEL,
-        temperature: 0.5,
-        max_tokens: 800,
+        temperature: 0.6,
+        max_tokens: 600,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user",   content: `Génère une boucle ${modeLabels[mode]||mode} de ${distance} km au départ de [${departLat}, ${departLng}], ambiance : ${styleLabels[style]||style}.` }
+          { role: "user", content: `Génère un parcours ${modeLabels[mode] || mode} de ${distance} km, ambiance ${styleLabels[style] || style}.` }
         ]
       },
       {
-        timeout: 28000,
+        timeout: 25000,
         headers: {
           "Authorization": `Bearer ${MISTRAL_API_KEY}`,
           "Content-Type": "application/json"
@@ -1655,30 +1626,26 @@ Les waypoints doivent :
     );
 
     const raw = r.data?.choices?.[0]?.message?.content || "";
+
+    // Nettoyage : retirer éventuelles balises markdown
     const clean = raw.replace(/```json|```/g, "").trim();
 
     let parcours;
     try {
       parcours = JSON.parse(clean);
-    } catch (parseErr) {
-      console.error("❌ JSON Mistral non parsable:", clean.substring(0,200));
-      return res.status(500).json({ error: "Réponse Mistral non parsable", raw: clean.substring(0,300) });
+    } catch(parseErr) {
+      console.error("❌ JSON Mistral invalide:", clean);
+      return res.status(500).json({ error: "Réponse Mistral non parsable", raw: clean });
     }
 
-    // Sécurité : forcer le premier et dernier waypoint sur le départ
-    if (parcours.waypoints && parcours.waypoints.length >= 2) {
-      parcours.waypoints[0] = [departLat, departLng];
-      parcours.waypoints[parcours.waypoints.length-1] = [departLat, departLng];
-    }
-
+    // Tracker les tokens
     const usage = r.data?.usage || {};
-    trackIaTokens("mistral", usage.prompt_tokens||0, usage.completion_tokens||0).catch(()=>{});
+    trackIaTokens("mistral", usage.prompt_tokens || 0, usage.completion_tokens || 0).catch(() => {});
 
-    console.log(`🗺️ Parcours IA: "${parcours.titre}" — ${distance}km ${mode} depuis [${departLat.toFixed(4)},${departLng.toFixed(4)}]`);
     res.json({ ok: true, parcours });
 
-  } catch (e) {
-    console.error("❌ /api/parcours:", e.message);
+  } catch(e) {
+    console.error("❌ /api/parcours Mistral:", e.message);
     res.status(500).json({ ok: false, error: "Génération impossible", details: e.message });
   }
 });
