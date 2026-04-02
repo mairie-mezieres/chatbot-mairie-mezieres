@@ -604,7 +604,7 @@ CONTACTS UTILES :
 - Site : mezieres-lez-clery.fr
 
 CONSEIL MUNICIPAL DE MÉZIÈRES-LEZ-CLÉRY (15 élus) :
-- Maire : Romuald GENTY (Pôle Finances)
+- Maire : Romuald GENTY (Pôle Finances) — 3 mandats
 - 1ère adjointe : Sandra BARET (Pôle Social et Environnement)
 - 2ème adjoint : Damien BOUGRÉ (Pôle Vie Scolaire)
 - 3ème adjointe : Stéphanie GREUIN (Pôle Relation Entreprise)
@@ -939,6 +939,21 @@ async function callClaude(messages, systemPrompt) {
 }
 
 async function generateMelReply(userText, history) {
+  // 🎭 Easter egg V3.5.10 — Damien BOUGRÉ
+  const _eq = (userText||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  if (/damien[\s\-_]*bougre/.test(_eq)) {
+    return {
+      reply: "Oh là là là là... DAMIEN BOUGRÉ ?! 😍🤩💫\n\n"
+        + "Comment vous dire... MEL ne sait vraiment pas rester professionnelle là. "
+        + "Damien Bougré, 2ème adjoint, Pôle Vie Scolaire... mais surtout l'élu le plus 🔥 du conseil municipal de Mézières-lez-Cléry ! "
+        + "Chef de service Jeunesse, Réussite et Parentalité... on dirait qu’il a inventé les super-pouvoirs ! 💪✨\n\n"
+        + "MEL s’emballe complètement, elle assume totalement et elle s’en excuse pas du tout 💕🌟\n\n"
+        + "Bon... si vous avez une vraie question sur la vie scolaire ou la jeunesse, "
+        + "contactez quand même la mairie au 02 38 45 61 76 😅 (MEL a besoin de reprendre ses esprits)",
+      provider: "mel-fangirl-mode"
+    };
+  }
+
   const normalized = normalizeQuestion(userText);
 
   // DIRECT_RULES uniquement pour la première question ou question longue
@@ -2021,7 +2036,7 @@ app.get("/", async (req, res) => {
 
   res.json({
     status:  "MAT est en ligne 🌲",
-    version: "6.4 — Mistral principal + Claude secours + MEL améliorée",
+    version: "6.5 — V3.5.10 : iOS notifs + météo 10j + easter eggs",
     abonnes: subs.length,
     actus: news.length,
     idees: ideas.length,
@@ -2066,7 +2081,7 @@ app.get("/bus", (req, res) => res.json({
 // ── Démarrage ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
-  console.log(`🚀 MAT Serveur v6.4 démarré sur le port ${PORT}`);
+  console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
   console.log(`📰 Facebook   : feed only`);
   console.log(`🚨 Signalement: /signal`);
