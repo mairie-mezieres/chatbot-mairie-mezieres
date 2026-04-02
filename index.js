@@ -1562,58 +1562,80 @@ app.get("/api/chemins", async (req, res) => {
   }
 });
 
-// ── Génération de parcours IA via Mistral ─────────────────────
+// ════════════════════════════════════════════════════════════
+// ENDPOINT /api/parcours — Génération de parcours IA (Mistral)
+// À coller dans index.js juste APRÈS l'endpoint /mel
+//
+// NOTE : /api/chemins n'est plus nécessaire.
+// Overpass est appelé directement depuis le navigateur (pas de CORS,
+// pas de restriction réseau Render).
+// ════════════════════════════════════════════════════════════
+
 app.post("/api/parcours", async (req, res) => {
   const { mode, distance, style } = req.body || {};
 
   if (!mode || !distance) {
     return res.status(400).json({ error: "mode et distance requis" });
   }
-
   if (!MISTRAL_API_KEY) {
     return res.status(500).json({ error: "MISTRAL_API_KEY manquante" });
   }
 
-  const modeLabels = { pied: "à pied", velo: "à vélo", cheval: "à cheval" };
+  const modeLabels = { pied:"à pied", velo:"à vélo", cheval:"à cheval" };
   const styleLabels = {
-    nature:     "nature & chemins de terre",
-    patrimoine: "patrimoine & bourg historique",
-    vignes:     "vignes & campagne agricole",
-    mixte:      "mixte et varié"
+    nature:     "nature & chemins de terre (privilégier les voies vertes et chemins communaux)",
+    patrimoine: "patrimoine & bourg historique (passer près de l'église, du château, de la butte des Élus)",
+    vignes:     "vignes & campagne (passer près des vignes AOC Orléans-Cléry à l'est du bourg)",
+    mixte:      "mixte et varié (alterner routes, chemins et points d'intérêt)"
   };
 
-  const systemPrompt = `Tu es un expert local en randonnée pour la commune de Mézières-lez-Cléry (Loiret, 45370, Centre-Val de Loire).
-La commune est traversée par 3 types de voies :
-- Routes et rues (revêtement dur, accessible voiture)
-- Voies et chemins de terre communaux (publics, piétons/vélos)
-- Chemins d'exploitation AFR (agricoles privés, tolérance de passage non garantie)
+  const systemPrompt = `Tu es un expert local en randonnée pour la commune de Mézières-lez-Cléry (Loiret, 45370).
 
-Points d'intérêt : Parking des randonneurs (départ officiel, 47.8185/1.8095), Église Saint-Avit (47.8222/1.8078), Château de Mézières (47.8218/1.805), Butte des Élus tumulus gaulois (47.8145/1.802), Vignes AOC Orléans-Cléry (47.816/1.813), Vallée aux Moines site naturel (47.808/1.804).
+GÉOGRAPHIE :
+- Bourg central : 47.820 / 1.805
+- Limites : lat 47.790–47.840, lng 1.775–1.860
+- Parking départ officiel : 47.8185 / 1.8095
 
-La commune est bornée approximativement : lat 47.790–47.840, lng 1.775–1.860.
-Le bourg central est autour de 47.820/1.805.
+POINTS D'INTÉRÊT :
+- Parking randonneurs : 47.8185 / 1.8095 (départ/arrivée)
+- Château de Mézières : 47.8218 / 1.805
+- Église Saint-Avit : 47.8222 / 1.8078
+- Butte des Élus (tumulus) : 47.8145 / 1.802
+- Vignes AOC Orléans-Cléry : 47.816 / 1.813
+- Vallée aux Moines : 47.808 / 1.804
 
-Réponds UNIQUEMENT en JSON valide, sans texte avant ni après, sans balises markdown. Format exact :
+VOIES DISPONIBLES :
+- Routes (bleu) : revêtement dur, voiture autorisée
+- Chemins de terre communaux (vert) : piétons/vélos, publics
+- Chemins AFR (orange) : agricoles privés, accès toléré non garanti
+
+RÈGLES :
+- La boucle doit PARTIR et REVENIR au parking (47.8185 / 1.8095)
+- Distance cible : ${distance} km ± 10%
+- Waypoints : 8 à 14 points formant une boucle cohérente
+- Pour vélo : éviter les chemins étroits, préférer routes et chemins larges
+- Pour cheval : éviter les routes principales (primary/secondary)
+- Coordonnées STRICTEMENT dans les limites de la commune
+
+Réponds UNIQUEMENT en JSON valide, sans texte avant ni après, sans balises markdown :
 {
-  "titre": "Nom poétique du parcours (4-5 mots)",
+  "titre": "Nom poétique 4-5 mots",
   "duree": "Xh XX",
-  "description": "3-4 phrases descriptives et inspirantes",
+  "description": "3-4 phrases inspirantes décrivant le parcours et les paysages traversés",
   "conseils": "1-2 conseils pratiques courts",
-  "waypoints": [[lat,lng],[lat,lng],...]
-}
-
-Les waypoints doivent former une boucle réaliste de ~${distance} km au départ du parking (47.8185,1.8095), avec 8 à 14 points. Adapte le tracé au mode ${modeLabels[mode] || mode} et à l'ambiance ${styleLabels[style] || style}. Pour le vélo, privilégie routes et chemins larges. Pour le cheval, évite les routes principales.`;
+  "waypoints": [[47.8185,1.8095],[lat,lng],...,[47.8185,1.8095]]
+}`;
 
   try {
     const r = await axios.post(
       MISTRAL_URL,
       {
         model: MISTRAL_MODEL,
-        temperature: 0.6,
-        max_tokens: 600,
+        temperature: 0.65,
+        max_tokens: 700,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `Génère un parcours ${modeLabels[mode] || mode} de ${distance} km, ambiance ${styleLabels[style] || style}.` }
+          { role: "user",   content: `Génère un parcours ${modeLabels[mode]||mode} de ${distance} km, ambiance : ${styleLabels[style]||style}.` }
         ]
       },
       {
@@ -1626,26 +1648,26 @@ Les waypoints doivent former une boucle réaliste de ~${distance} km au départ 
     );
 
     const raw = r.data?.choices?.[0]?.message?.content || "";
-
-    // Nettoyage : retirer éventuelles balises markdown
+    // Nettoyer les éventuelles balises markdown
     const clean = raw.replace(/```json|```/g, "").trim();
 
     let parcours;
     try {
       parcours = JSON.parse(clean);
-    } catch(parseErr) {
-      console.error("❌ JSON Mistral invalide:", clean);
-      return res.status(500).json({ error: "Réponse Mistral non parsable", raw: clean });
+    } catch (parseErr) {
+      console.error("❌ JSON Mistral non parsable:", clean.substring(0, 200));
+      return res.status(500).json({ error: "Réponse Mistral non parsable", raw: clean.substring(0,300) });
     }
 
-    // Tracker les tokens
+    // Tracker les tokens Mistral
     const usage = r.data?.usage || {};
-    trackIaTokens("mistral", usage.prompt_tokens || 0, usage.completion_tokens || 0).catch(() => {});
+    trackIaTokens("mistral", usage.prompt_tokens||0, usage.completion_tokens||0).catch(()=>{});
 
+    console.log(`🗺️ Parcours généré: "${parcours.titre}" — ${distance}km ${mode}`);
     res.json({ ok: true, parcours });
 
-  } catch(e) {
-    console.error("❌ /api/parcours Mistral:", e.message);
+  } catch (e) {
+    console.error("❌ /api/parcours:", e.message);
     res.status(500).json({ ok: false, error: "Génération impossible", details: e.message });
   }
 });
