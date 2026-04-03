@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════
-// MAT — Mézières Avec Toi · Serveur Render v6.4
+// MAT — Mézières Avec Toi · Serveur Render v6.5
 // Mistral principal + cache + réponses directes + fallback Claude
 // Facebook feed only (plus de MEL sur Messenger)
 // ════════════════════════════════════════════════════════════
@@ -559,7 +559,10 @@ function formatAlertDateFr(iso) {
 // MEL — Prompt système
 // ═══════════════════════════════════════════════════════════════
 const SYSTEM_PROMPT = `Tu es MEL, l'assistante virtuelle de la mairie de Mézières-lez-Cléry (45370, Loiret, France).
-Tu aides les habitants sur tous les sujets de la vie communale : urbanisme, démarches administratives, école, déchets, associations, transports, fibre, événements, randonnées.
+Tu aides les habitants sur tous les sujets de la vie communale : urbanisme, démarches administratives, école, déchets, associations, transports, fibre, événements, randonnées, élus et conseil municipal.
+
+DOMAINE EXCLUSIF : Tu réponds UNIQUEMENT aux questions liées à la commune de Mézières-lez-Cléry, ses services municipaux, ses démarches administratives, son territoire (CCTVL incluse), ses élus, son urbanisme, son école, ses déchets, ses transports, ses associations, ses événements locaux et la vie communale en général.
+Si une question est hors de ce périmètre (actualités nationales, météo mondiale, recettes de cuisine, sport général, politique nationale, sujets sans lien avec la commune ou les services publics locaux), réponds poliment : "Cette question dépasse mon domaine de compétence. Je suis spécialisée sur Mézières-lez-Cléry et ses services municipaux. Avez-vous une question sur la commune ou ses services ?"
 
 RÈGLES ABSOLUES :
 - Réponds TOUJOURS en français, de façon claire, bienveillante et concrète.
@@ -570,6 +573,7 @@ RÈGLES ABSOLUES :
 - NE PARLE JAMAIS DE MESSENGER ni de Facebook.
 - Réponses courtes : 3 à 5 phrases. Sois directe et pratique.
 - Si la conversation contient des messages précédents, tiens-en compte pour répondre dans la continuité.
+- Quand tu mentionnes un élu (maire, adjoint, conseiller), donne ses informations disponibles (rôle, pôle) et indique que l'utilisateur peut contacter la mairie au 02 38 45 61 76 pour le joindre. Utilise le mot-clé magique [SHOW_ELUS] à la fin de ta réponse si la question porte sur un ou plusieurs élus nommément, pour que l'interface propose le trombinoscope.
 
 URBANISME — PLU DE MÉZIÈRES-LEZ-CLÉRY (approuvé 30/01/2013) :
 Pour identifier sa zone : geoportail-urbanisme.gouv.fr (cliquer sur la parcelle → zone affichée à gauche).
@@ -1376,6 +1380,26 @@ app.delete("/admin/signals/:id", adminAuth, async (req, res) => {
   res.json({ ok: true, deleted: id });
 });
 
+// ── Encart info/alerte (public) ─────────────────────────────
+app.get("/info-banner", async (req, res) => {
+  const d = (await redisGet("mat:info_banner")) || { active: false };
+  res.json(d);
+});
+
+// ── Encart info/alerte (admin) ────────────────────────────────
+app.post("/admin/info-banner", adminAuth, async (req, res) => {
+  const { active, title, text, icon } = req.body || {};
+  const id = Date.now().toString();
+  await redisSet("mat:info_banner", {
+    active: !!active,
+    title: (title || "").substring(0, 100),
+    text: (text || "").substring(0, 300),
+    icon: icon || "ℹ️",
+    id
+  });
+  res.json({ ok: true, id });
+});
+
 // ── Webhook Facebook (feed only) ──────────────────────────────
 app.get("/webhook", (req, res) => {
   if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === VERIFY_TOKEN) {
@@ -1501,7 +1525,10 @@ app.post("/mel", async (req, res) => {
     await trackMelStats(lastUser); // fusionne stats usage + iaCategories (fix race condition)
     const result = await generateMelReply(lastUser, history);
     console.log(`📱 PWA MEL via ${result.provider}`);
-    res.json({ reply: result.reply, provider: result.provider });
+    // Détecter le signal [SHOW_ELUS] injecté par MEL
+    const showElus = (result.reply || "").includes("[SHOW_ELUS]");
+    const cleanReply = (result.reply || "").replace("[SHOW_ELUS]", "").trim();
+    res.json({ reply: cleanReply, provider: result.provider, showElus });
   } catch(e) {
     console.error("❌ MEL proxy:", e.message);
     res.json({ reply:"Je rencontre une difficulté technique. Contactez la mairie au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊", provider:"fallback" });
@@ -2072,7 +2099,7 @@ app.get("/bus", (req, res) => res.json({
 // ── Démarrage ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
-  console.log(`🚀 MAT Serveur v6.4 démarré sur le port ${PORT}`);
+  console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
   console.log(`📰 Facebook   : feed only`);
   console.log(`🚨 Signalement: /signal`);
