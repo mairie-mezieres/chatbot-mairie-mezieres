@@ -1324,7 +1324,12 @@ app.get("/admin/dashboard", adminAuth, async (req, res) => {
         totalAcces:    appStats.totalAcces || 0,
         totalInstalls: appStats.services?.installation || 0,
         parService:    appStats.services || {},
-        parJour:       appStats.parJour  || {}
+        parJour:       appStats.parJour  || {},
+        uniqueUsers: {
+          total: appStats.uniqueUsers?.total || 0,
+          today: (appStats.uniqueUsers?.byDay?.[new Date().toISOString().slice(0,10)] || []).length,
+          month: (appStats.uniqueUsers?.byMonth?.[new Date().toISOString().slice(0,7)] || []).length,
+        },
       },
       iaCategories: {
         total:   appStats.iaCategories?.total   || {},
@@ -1406,6 +1411,71 @@ app.post("/admin/info-banner", adminAuth, async (req, res) => {
   });
   res.json({ ok: true, id });
 });
+
+// ── Route : ajouter une actualité ─────────────────────────────────────────────
+app.post("/admin/actus/add", adminAuth, async (req, res) => {
+  const { title, photo } = req.body || {};
+  if (!title) return res.status(400).json({ error: "title requis" });
+  const actus = await readNews();
+  const actu = {
+    id: Date.now(),
+    title: String(title).substring(0, 200),
+    date: new Date().toLocaleDateString("fr-FR"),
+    dateISO: new Date().toISOString().slice(0, 10),
+    photo: photo || null
+  };
+  actus.unshift(actu);
+  if (actus.length > 20) actus.splice(20);
+  await writeNews(actus);
+  res.json({ ok: true, actu });
+});
+
+// ── Route : purge données par date ────────────────────────────────────────────
+app.post("/admin/purge", adminAuth, async (req, res) => {
+  const { type, beforeDate } = req.body || {};
+  if (!type || !beforeDate) return res.status(400).json({ error: "type et beforeDate requis" });
+  let deleted = 0;
+  try {
+    if (type === "actus") {
+      const actus = await readNews();
+      const filtered = actus.filter(a => (a.dateISO || "") >= beforeDate);
+      deleted = actus.length - filtered.length;
+      await writeNews(filtered);
+    } else if (type === "signals") {
+      const signals = await readSignals();
+      const filtered = signals.filter(s => (s.dateISO || "") >= beforeDate);
+      deleted = signals.length - filtered.length;
+      await writeSignals(filtered);
+    } else if (type === "stats_parjour") {
+      const stats = await readStats();
+      const keys = Object.keys(stats.parJour || {}).filter(d => d < beforeDate);
+      keys.forEach(k => delete stats.parJour[k]);
+      deleted = keys.length;
+      await writeStats(stats);
+    } else if (type === "ia_stats_daily") {
+      const ia = await readIaStats();
+      const keys = Object.keys(ia.daily || {}).filter(d => d < beforeDate);
+      keys.forEach(k => delete ia.daily[k]);
+      deleted = keys.length;
+      await writeIaStats(ia);
+    } else if (type === "ia_categories_parjour") {
+      const stats = await readStats();
+      const cats = (stats.iaCategories || {}).parJour || {};
+      const keys = Object.keys(cats).filter(d => d < beforeDate);
+      keys.forEach(k => delete cats[k]);
+      deleted = keys.length;
+      await writeStats(stats);
+    } else {
+      return res.status(400).json({ error: "type inconnu" });
+    }
+    res.json({ ok: true, deleted });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Route : visiteurs uniques ─────────────────────────────────────────────────
+// Exposé via /admin/dashboard dans le champ app.uniqueUsers
 
 // ── Webhook Facebook (feed only) ──────────────────────────────
 app.get("/webhook", (req, res) => {
@@ -1906,6 +1976,7 @@ app.post("/stats/track", async (req, res) => {
 
   const stats = await readStats();
   const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
 
   if (!stats.services) stats.services = {};
   stats.services[service] = (stats.services[service] || 0) + 1;
@@ -1915,8 +1986,26 @@ app.post("/stats/track", async (req, res) => {
   stats.parJour[today][service] = (stats.parJour[today][service] || 0) + 1;
 
   stats.totalAcces = (stats.totalAcces || 0) + 1;
-  await writeStats(stats);
 
+  // Tracking visiteurs uniques via deviceId (header x-device-id ou IP)
+  const deviceId = req.headers["x-device-id"] || req.ip || "unknown";
+  if (deviceId !== "unknown") {
+    try {
+      if (!stats.uniqueUsers) stats.uniqueUsers = { total: 0, byDay: {}, byMonth: {} };
+      const u = stats.uniqueUsers;
+      if (!u.byDay[today]) u.byDay[today] = [];
+      if (!u.byMonth[month]) u.byMonth[month] = [];
+      // Ajouter deviceId s'il est nouveau pour cette période
+      const isNewToday   = !u.byDay[today].includes(deviceId);
+      const isNewMonth   = !u.byMonth[month].includes(deviceId);
+      const isNewTotal   = !(u.allDevices || []).includes(deviceId);
+      if (isNewToday)  { u.byDay[today].push(deviceId); }
+      if (isNewMonth)  { u.byMonth[month].push(deviceId); }
+      if (isNewTotal)  { if (!u.allDevices) u.allDevices = []; u.allDevices.push(deviceId); u.total = u.allDevices.length; }
+    } catch(_) {}
+  }
+
+  await writeStats(stats);
   res.json({ success: true });
 });
 
