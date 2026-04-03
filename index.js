@@ -587,7 +587,7 @@ Pour identifier sa zone : geoportail-urbanisme.gouv.fr (cliquer sur la parcelle 
 Lien direct : geoportail-urbanisme.gouv.fr/map/#tile=1&lon=1.8048&lat=47.8181&zoom=15
 
 ZONES :
-- Ua (bourg ancien/hameaux anciens) : habitat + commerces/artisanat compatibles. Hauteur max 6 m. Emprise max 50 %. Toiture 2 pentes ≥ 35° ardoises/tuiles plates. Recul voie : alignement ou ≥ 2 m. Limite séparative : contigu ou retrait ≥ 3 m.
+- Ua (bourg ancien/hameaux anciens) : habitat + commerces/artisanat compatibles. Hauteur max 6 m (façade). Clôture en bordure voie : max 1,60 m en zone Ua. Emprise max 50 %. Toiture 2 pentes ≥ 35° ardoises/tuiles plates. Recul voie : alignement ou ≥ 2 m. Limite séparative : contigu ou retrait ≥ 3 m.
 - Ub (résidentiel XXe s.) : hauteur max 4 m. Emprise max 30 %. Recul voie ≥ 5 m. 30 % espaces verts obligatoires. Toiture 2 pentes ≥ 35°. Pas de blanc pur ni couleurs vives en façade. Ub1 (Clos Manthelon) : hauteur max 8 m, tuiles terre cuite 40-45°.
 - Ue (équipements publics) : hauteur max 7 m.
 - Ui (industrie) : hauteur max 8 m, emprise max 60 %.
@@ -597,17 +597,29 @@ ZONES :
 - A (agricole) : seuls bâtiments agricoles. Secteur Ah (hameaux) : extensions max 20 % + annexes max 50 m², hauteur max 5 m, recul ≥ 8 m des voies.
 - N (naturelle/forestière) : quasi inconstructible. Nh : extensions max 20 % + annexes max 50 m², hauteur max 5 m. Nj (jardins) : abris max 20 m². Nl : loisirs collectifs. Np : photovoltaïque.
 
-AUTORISATIONS (règles générales) :
-- Délais : DP (déclaration préalable) = 1 mois ; PC (permis de construire) = 2 mois. Validité : 3 ans.
-- Clôture : DP obligatoire quelle que soit la zone (délibération 01/03/2012). Sur voie max 1,50 m ; séparative max 1,80 m. Carrefours : max 1,20 m sur 20 m.
-- Abri de jardin : < 5 m² libre ; 5-20 m² DP ; > 20 m² PC. En bois ou matériaux traditionnels.
-- Extension : < 20 m² = DP ; ≥ 20 m² = PC. Si surface totale > 150 m² : architecte obligatoire.
-- Piscine : < 100 m² non couverte = DP ; ≥ 100 m² ou couverte = PC. Non couverte < 100 m² restant < 3 mois = libre.
-- Véranda/terrasse couverte : < 40 m² = DP ; ≥ 40 m² = PC. Terrasse de plain-pied non surélevée : libre.
-- Fenêtre de toit (Velux) : DP. Ravalement façade : DP si changement d'aspect.
-- Lucarnes : rectangulaires, plus hautes que larges, largeur cumulée ≤ 2/3 façade, pas de lucarnes rampantes.
-- Stationnement : 2 places minimum par logement (garages compris). Artisanat/bureaux : 1 place/25 m² de SP.
-- Dépôt dossier : mairie (02 38 45 61 76) ou GNAU (guichet numérique CCTVL). Cerfa PC = 13406, DP = 13703.
+AUTORISATIONS (règles générales valables à Mézières-lez-Cléry) :
+IMPORTANT : Pour tout projet, commence par identifier ta zone PLU sur Géoportail Urbanisme (geoportail-urbanisme.gouv.fr) car les règles varient selon la zone (Ua, Ub, A, N...). En cas de doute, contacte la mairie : urbanisme@mezieres-lez-clery.fr ou 02 38 45 61 76.
+
+- Délais : DP = 1 mois ; PC = 2 mois. Validité : 3 ans.
+- Clôture/portail/mur : DP obligatoire (délibération 01/03/2012). Les hauteurs maximales varient selon la zone PLU — ne pas donner de valeurs générales sans connaître la zone. Formulaire Cerfa 16702*02.
+- Abri de jardin/cabane/appentis : < 5 m² libre (sauf secteur protégé) ; ≤ 20 m² DP ; > 20 m² PC.
+- Extension/garage accolé : en zone urbaine (U), jusqu'à 40 m² de SP = DP ; au-delà = PC. Si surface totale après travaux > 150 m² = PC avec architecte obligatoire.
+- Véranda/terrasse couverte : jusqu'à 40 m² de SP (si SP totale ≤ 150 m²) = DP ; au-delà = PC. En zone urbaine y compris lotissements.
+- Terrasse non couverte de plain-pied (béton/bois) : sans surélévation = libre (sauf secteur protégé). Surélevée - 40 m² = DP (si SP ≤ 150 m²) ; au-delà = PC.
+- Piscine : ≤ 10 m² non couverte = libre (sauf secteur protégé) ; ≤ 100 m² non couverte = DP ; ≤ 100 m² couverte < 1,80 m = DP ; > 100 m² = PC.
+- Piscine temporaire (< 3 mois) : libre quelle que soit la surface.
+- Fenêtre de toit/Velux : DP. Photovoltaïque sur toit : DP.
+- Façade/ravalement/bardage : DP. Si teinte identique : libre (sauf secteur protégé).
+- Toit/tuiles : remplacement à l'identique = libre (sauf secteur protégé) ; changement = DP.
+- Stationnement : 2 places minimum par logement. Artisanat/bureaux : 1 place/25 m².
+- Dépôt dossier : mairie (02 38 45 61 76) ou GNAU CCTVL (ccterresduvaldeloire.fr). Cerfa PC = 13406 ; DP = 13703 ; Clôture = 16702*02.
+- Lien PLU : https://drive.google.com/file/d/1F7lwiMPX2dAPTptaT186vN0CXEpL92z4/view?usp=drive_link
+
+RÈGLE CRITIQUE URBANISME : Ne JAMAIS inventer ou extrapoler des règles de hauteur, d'emprise ou de distance spécifiques à une zone sans les connaître avec certitude. Si tu n'es pas sûre, dis-le et renvoie vers urbanisme@mezieres-lez-clery.fr.
+
+IMAGE URBANISME : Quand une question porte sur une autorisation d'urbanisme (clôture, extension, garage, piscine, véranda, abri, terrasse, toit, façade, permis), ajoute en fin de réponse le mot-clé [SHOW_URBANISME] pour que l'interface affiche le schéma des autorisations.
+
+PLU : Dès que tu mentionnes le PLU de Mézières, ajoute le lien : https://drive.google.com/file/d/1F7lwiMPX2dAPTptaT186vN0CXEpL92z4/view?usp=drive_link
 
 CONTACTS UTILES :
 - Mairie : 02 38 45 61 76 — mairie@mezieres-lez-clery.fr
@@ -1604,8 +1616,12 @@ app.post("/mel", async (req, res) => {
     console.log(`📱 PWA MEL via ${result.provider}`);
     // Détecter le signal [SHOW_ELUS] injecté par MEL
     const showElus = (result.reply || "").includes("[SHOW_ELUS]");
-    const cleanReply = (result.reply || "").replace("[SHOW_ELUS]", "").trim();
-    res.json({ reply: cleanReply, provider: result.provider, showElus });
+    const showUrbanisme = (result.reply || "").includes("[SHOW_URBANISME]");
+    const cleanReply = (result.reply || "")
+      .replace("[SHOW_ELUS]", "")
+      .replace("[SHOW_URBANISME]", "")
+      .trim();
+    res.json({ reply: cleanReply, provider: result.provider, showElus, showUrbanisme });
   } catch(e) {
     console.error("❌ MEL proxy:", e.message);
     res.json({ reply:"Je rencontre une difficulté technique. Contactez la mairie au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊", provider:"fallback" });
