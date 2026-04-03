@@ -572,6 +572,12 @@ DOMAINE : Tu es spécialisée dans les services publics et la vie locale. Tu ré
 Tu déclares poliment ne pas pouvoir aider UNIQUEMENT pour les sujets sans lien avec les services publics ou la vie locale : culture générale pure, recettes de cuisine, sport, divertissement, actualités nationales sans lien local, questions commerciales ou privées.
 
 RÈGLES ABSOLUES :
+- En urbanisme, n'invente jamais une règle locale si elle n'est pas certaine.
+- Pour toute question d'urbanisme (clôture, portail, mur, extension, garage, annexe, abri, piscine, véranda, terrasse, façade, toiture, panneaux photovoltaïques), précise que les règles dépendent du zonage et du PLU.
+- En urbanisme, si l'utilisateur ne donne pas sa zone ou sa parcelle, invite d'abord à vérifier son zonage sur le Géoportail de l'urbanisme.
+- Quand tu cites le PLU ou les règles d'urbanisme, ajoute toujours : « Vérifiez votre zonage sur le Géoportail de l'urbanisme et le PLU ici : https://drive.google.com/file/d/1F7lwiMPX2dAPTptaT186vN0CXEpL92z4/view?usp=drive_link ».
+- Si la question concerne une autorisation d'urbanisme, ajoute le mot-clé [SHOW_URBANISME_IMAGE] à la fin de ta réponse pour que l'application propose le schéma visuel.
+- Si l'information urbanisme n'est pas certaine, dis-le clairement et oriente vers urbanisme@mezieres-lez-clery.fr ou le 02 38 45 61 76.
 - Réponds TOUJOURS en français, de façon claire, bienveillante et concrète.
 - Tu réponds TOUJOURS avec au moins une information utile ou une orientation pratique, même si tu n'as pas tous les détails.
 - Ne dis JAMAIS "je ne sais pas" sans proposer une solution ou un contact utile.
@@ -608,6 +614,13 @@ AUTORISATIONS (règles générales) :
 - Lucarnes : rectangulaires, plus hautes que larges, largeur cumulée ≤ 2/3 façade, pas de lucarnes rampantes.
 - Stationnement : 2 places minimum par logement (garages compris). Artisanat/bureaux : 1 place/25 m² de SP.
 - Dépôt dossier : mairie (02 38 45 61 76) ou GNAU (guichet numérique CCTVL). Cerfa PC = 13406, DP = 13703.
+
+IMPORTANT — PRIORITÉ URBANISME :
+- Les hauteurs, reculs, matériaux et règles précises peuvent varier selon la zone, la parcelle et la nature exacte du projet.
+- Ne présente pas de règle locale comme universelle quand elle dépend du secteur.
+- Pour les clôtures, extensions, garages, annexes, piscines, vérandas et terrasses, donne une réponse prudente : type d'autorisation probable + invitation à vérifier le zonage et le PLU.
+- Pour une déclaration préalable, le formulaire à citer est le Cerfa n°16702*02.
+- Pour les clôtures, évite de donner une hauteur générale valable partout ; indique que cela dépend du secteur du PLU.
 
 CONTACTS UTILES :
 - Mairie : 02 38 45 61 76 — mairie@mezieres-lez-clery.fr
@@ -672,37 +685,37 @@ const DIRECT_RULES = [
   {
     name: "cloture_rue",
     test: (q) => /(cloture|clôture|portail|mur|grillage|palissade|clos)/.test(q) && /(rue|voie|public|bord|riverain|chaussee|trottoir)/.test(q),
-    answer: "🏗️ Une clôture en limite de voie publique nécessite une déclaration préalable de travaux (art. R421-12 du Code de l'urbanisme). Le dossier est à déposer à la mairie (02 38 45 61 76). Délai d'instruction : 1 mois. Pensez à vérifier les règles du PLU local (hauteur max, matériaux autorisés) sur mezieres-lez-clery.fr."
+    answer: "🏗️ Pour une clôture côté rue, une déclaration préalable est généralement nécessaire à Mézières-lez-Cléry. En revanche, la hauteur et les matériaux autorisés dépendent de votre secteur du PLU : il faut donc vérifier d'abord votre zonage sur le Géoportail de l'urbanisme puis le PLU. Formulaire à utiliser : Cerfa n°16702*02. Vérifiez votre zonage sur le Géoportail de l'urbanisme et le PLU ici : https://drive.google.com/file/d/1F7lwiMPX2dAPTptaT186vN0CXEpL92z4/view?usp=drive_link [SHOW_URBANISME_IMAGE]"
   },
   {
     name: "cloture_voisin",
     test: (q) => /(cloture|clôture|portail|mur|grillage|palissade)/.test(q) && /(voisin|propriete|propriété|fond|mitoyen|separative|séparative|limite de propriete)/.test(q),
-    answer: "🏗️ Une clôture en limite séparative (entre propriétés voisines) est en principe libre, sans déclaration, si elle respecte les hauteurs du PLU de Mézières-lez-Cléry. Aucune formalité n'est requise en général, sauf si vous êtes en secteur protégé ou si la hauteur dépasse 2 mètres. Confirmez avec la mairie (02 38 45 61 76) selon votre parcelle."
+    answer: "🏗️ Pour une clôture en limite séparative, la règle dépend aussi de votre secteur du PLU. À Mézières-lez-Cléry, mieux vaut vérifier votre zonage avant de conclure sur la formalité et sur la hauteur autorisée. Le plus sûr est de consulter le Géoportail de l'urbanisme puis le PLU ; si besoin, contactez urbanisme@mezieres-lez-clery.fr. Vérifiez votre zonage sur le Géoportail de l'urbanisme et le PLU ici : https://drive.google.com/file/d/1F7lwiMPX2dAPTptaT186vN0CXEpL92z4/view?usp=drive_link [SHOW_URBANISME_IMAGE]"
   },
   {
     name: "abri_jardin",
     test: (q) => /(abri|cabane|chalet|appenti|appentis|remise)/.test(q) && /(jardin|bois|metal|surface|m2|metre|mètre)/.test(q),
-    answer: "🏗️ Pour un abri de jardin : moins de 5 m² = libre (aucune formalité) ; entre 5 et 20 m² = déclaration préalable ; plus de 20 m² = permis de construire. Si votre abri dépasse 1,80 m de hauteur et est accolé à la maison, les règles peuvent différer. Vérifiez avec la mairie (02 38 45 61 76)."
+    answer: "🏗️ Pour un abri de jardin, il faut en général distinguer trois cas : moins de 5 m², de 5 à 20 m², puis au-delà de 20 m². Mais avant de déposer un dossier, vérifiez votre zone du PLU car l'implantation et l'aspect extérieur peuvent dépendre du secteur. Vérifiez votre zonage sur le Géoportail de l'urbanisme et le PLU ici : https://drive.google.com/file/d/1F7lwiMPX2dAPTptaT186vN0CXEpL92z4/view?usp=drive_link [SHOW_URBANISME_IMAGE]"
   },
   {
     name: "piscine",
     test: (q) => /piscine|bassin|jacuzzi|spa/.test(q),
-    answer: "🏗️ Pour une piscine : bassin non couvert de moins de 100 m² = déclaration préalable ; bassin couvert ou plus de 100 m² = permis de construire. Pensez aussi à la déclaration en mairie pour la taxe d'aménagement. Contactez le 02 38 45 61 76 pour vérifier les règles du PLU sur votre parcelle."
+    answer: "🏗️ Pour une piscine, l'autorisation dépend notamment de la surface du bassin et d'une éventuelle couverture. Les règles locales d'implantation et d'aspect dépendent ensuite de votre secteur du PLU : vérifiez donc d'abord votre zonage. Vérifiez votre zonage sur le Géoportail de l'urbanisme et le PLU ici : https://drive.google.com/file/d/1F7lwiMPX2dAPTptaT186vN0CXEpL92z4/view?usp=drive_link [SHOW_URBANISME_IMAGE]"
   },
   {
     name: "extension",
     test: (q) => /(extension|agrandissement|véranda|veranda|terrasse couverte|garage)/.test(q),
-    answer: "🏗️ Pour une extension : moins de 20 m² en dehors des zones U (ou 40 m² en zone U) = déclaration préalable. Au-delà, ou si le total de la maison dépasse 150 m² après travaux = permis de construire avec architecte obligatoire. La mairie (02 38 45 61 76) peut vous dire dans quelle zone se situe votre parcelle."
+    answer: "🏗️ Pour une extension, un garage attenant, une véranda ou une terrasse couverte, l'autorisation dépend notamment de la surface créée, du fait que votre parcelle soit ou non en zone urbaine du PLU, et de la surface totale après travaux. Avant d'aller plus loin, vérifiez votre zone sur le Géoportail de l'urbanisme puis le PLU. Vérifiez votre zonage sur le Géoportail de l'urbanisme et le PLU ici : https://drive.google.com/file/d/1F7lwiMPX2dAPTptaT186vN0CXEpL92z4/view?usp=drive_link [SHOW_URBANISME_IMAGE]"
   },
   {
     name: "demarches_cni",
     test: (q) => /(carte.identit|cni|piece.identit)/.test(q),
-    answer: "📄 La carte d'identité ne se fait plus à Mézières-lez-Cléry mais dans une mairie équipée d'une station biométrique (Saint-Hilaire-Saint-Mesmin, Cléry-Saint-André ou Orléans par exemple). Prenez rendez-vous en ligne sur mairie-clery-saint-andre.fr ou directement à Orléans. Pièces à fournir : justificatif de domicile, photo d'identité, ancienne CNI si renouvellement."
+    answer: "📄 Pour une carte d'identité, il est recommandé de faire d'abord une pré-demande en ligne sur l'ANTS, puis de prendre rendez-vous dans n'importe quelle mairie équipée d'une station d'enregistrement. On peut déposer sa demande dans la mairie de son choix sur l'ensemble du territoire français. Dans la liste fournie pour le Loiret figurent notamment Artenay, Beaugency, Châteauneuf-sur-Loire, La Ferté-Saint-Aubin, Fleury-les-Aubrais, Meung-sur-Loire, Olivet, plusieurs mairies d'Orléans, Ormes, Saint-Denis-en-Val, Saint-Jean-de-Braye, Saint-Jean-de-la-Ruelle, Saran ou Sully-sur-Loire. fileciteturn0file0"
   },
   {
     name: "demarches_passeport",
     test: (q) => /passeport/.test(q),
-    answer: "📄 Le passeport se fait dans une mairie équipée d'une station biométrique (pas à Mézières-lez-Cléry). Les plus proches : Cléry-Saint-André, Saint-Hilaire-Saint-Mesmin, ou Orléans. Prenez rendez-vous en ligne sur le site de la mairie concernée. Comptez 3 à 4 semaines de délai en période normale."
+    answer: "📄 Pour un passeport, il est conseillé de faire une pré-demande ANTS puis de prendre rendez-vous dans une mairie équipée d'une station d'enregistrement. La demande peut être déposée dans la mairie de votre choix en France ; dans le Loiret, la liste fournie comprend notamment Beaugency, Meung-sur-Loire, Olivet, plusieurs mairies d'Orléans, Saint-Denis-en-Val, Saint-Jean-de-Braye, Saint-Jean-de-la-Ruelle, Saran ou Sully-sur-Loire. fileciteturn0file0"
   },
   {
     name: "demarches_etatcivil",
@@ -1602,10 +1615,11 @@ app.post("/mel", async (req, res) => {
     await trackMelStats(lastUser); // fusionne stats usage + iaCategories (fix race condition)
     const result = await generateMelReply(lastUser, history);
     console.log(`📱 PWA MEL via ${result.provider}`);
-    // Détecter le signal [SHOW_ELUS] injecté par MEL
-    const showElus = (result.reply || "").includes("[SHOW_ELUS]");
-    const cleanReply = (result.reply || "").replace("[SHOW_ELUS]", "").trim();
-    res.json({ reply: cleanReply, provider: result.provider, showElus });
+    const rawReply = result.reply || "";
+    const showElus = rawReply.includes("[SHOW_ELUS]");
+    const showUrbanismeImage = rawReply.includes("[SHOW_URBANISME_IMAGE]");
+    const cleanReply = rawReply.replace("[SHOW_ELUS]", "").replace("[SHOW_URBANISME_IMAGE]", "").trim();
+    res.json({ reply: cleanReply, provider: result.provider, showElus, showUrbanismeImage });
   } catch(e) {
     console.error("❌ MEL proxy:", e.message);
     res.json({ reply:"Je rencontre une difficulté technique. Contactez la mairie au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊", provider:"fallback" });
@@ -2150,7 +2164,7 @@ app.get("/", async (req, res) => {
 
   res.json({
     status:  "MAT est en ligne 🌲",
-    version: "6.4 — Mistral principal + Claude secours + MEL améliorée",
+    version: "6.6 — urbanisme fiabilisé + onboarding mobile + paramètres",
     abonnes: subs.length,
     actus: news.length,
     idees: ideas.length,
@@ -2195,7 +2209,7 @@ app.get("/bus", (req, res) => res.json({
 // ── Démarrage ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
-  console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
+  console.log(`🚀 MAT Serveur v6.6 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
   console.log(`📰 Facebook   : feed only`);
   console.log(`🚨 Signalement: /signal`);
