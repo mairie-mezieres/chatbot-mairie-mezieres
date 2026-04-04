@@ -130,22 +130,19 @@ const SOURCES = {
     "https://mezieres-lez-clery.fr/2018/11/04/le-conseil-municipal/",
   ],
   demarches:      ["https://mezieres-lez-clery.fr/2018/10/25/178/","https://mezieres-lez-clery.fr/2021/03/13/fiche-pratique/"],
-  dechets:        ["https://mezieres-lez-clery.fr/2018/10/25/gestion-des-dechets/","https://www.ccterresduvaldeloire.fr/dechets/"],
+  dechets:        ["https://mezieres-lez-clery.fr/2018/10/25/gestion-des-dechets/","https://www.ccterresduvaldeloire.fr/reseau-des-dechetteries/"],
   urbanisme:      ["https://mezieres-lez-clery.fr/2020/09/12/regles-durbanisme/","https://mezieres-lez-clery.fr/2018/11/02/plan-local-durbanisme/","https://mezieres-lez-clery.fr/2024/02/04/permis-de-construire-et-declarations-prealables/"],
   scolaire:       ["https://mezieres-lez-clery.fr/2018/11/03/lecole-de-la-foret/","https://mezieres-lez-clery.fr/2018/11/01/le-restaurant-scolaire/","https://mezieres-lez-clery.fr/2018/10/29/creche-familiale-les-marmousets/","https://mezieres-lez-clery.fr/2018/10/30/centre-de-loisirs/"],
-  associations:   ["https://mezieres-lez-clery.fr/les-associations/","https://mezieres-lez-clery.fr/2021/12/06/demande-subvention/"],
+  associations:   ["https://mezieres-lez-clery.fr/2021/12/06/demande-subvention/"],
   dicrim:         ["https://mezieres-lez-clery.fr/2021/06/14/dicrim/"],
   randonnees:     ["https://mezieres-lez-clery.fr/2018/10/21/randonnees-pedestres/","https://mezieres-lez-clery.fr/2018/10/20/tourisme/"],
-  assainissement: ["https://mezieres-lez-clery.fr/2020/06/12/assainissement/"],
+  assainissement: ["https://www.ccterresduvaldeloire.fr/listes/assainissement/"],
   location:       ["https://mezieres-lez-clery.fr/2018/10/24/location-de-materiel/"],
   cctvl:          [
     "https://www.ccterresduvaldeloire.fr/services-communautaires/",
-    "https://www.ccterresduvaldeloire.fr/reseau-des-dechetteries/",
-    "https://www.ccterresduvaldeloire.fr/sante/",
-    "https://www.ccterresduvaldeloire.fr/transports-scolaires/",
     "https://www.ccterresduvaldeloire.fr/operation-programmee-pour-lamelioration-de-lhabitat-opah/",
   ],
-  fibre:          ["https://www.valdeloire-fibre.fr/","https://www.valdeloire-fibre.fr/eligibilite/"],
+  fibre:          ["https://mezieres-lez-clery.fr/2020/11/26/offre-thd-radio-4g-fixe/"],
 };
 
 const KEYWORDS = {
@@ -402,8 +399,12 @@ async function getTopicContent(topic) {
   return content;
 }
 
-async function buildContext(userText) {
-  const topics = detectTopics(userText);
+async function buildContext(userText, explicitTopic = null) {
+  // Si topic explicite (envoyé par l'arbre de décision front), ne charger que ce topic
+  // + mairie_general. Sinon fallback sur détection automatique.
+  const topics = explicitTopic
+    ? [...new Set(["mairie_general", explicitTopic])]
+    : detectTopics(userText);
   const parts = [];
 
   if (!calendarCache.lastUpdate || Date.now()-calendarCache.lastUpdate.getTime() > CACHE_MS) {
@@ -961,23 +962,34 @@ async function callClaude(messages, systemPrompt) {
   return txt;
 }
 
-async function generateMelReply(userText, history) {
-  // 🎭 Easter egg V3.5.10
+// ── Prompts ciblés par catégorie ─────────────────────────────
+function buildCategoryPrompt(category, extraCtx) {
+  const blocks = {
+    urbanisme: `Tu réponds à une question d'urbanisme pour Mézières-lez-Cléry. Tu peux répondre aux questions générales sur les démarches administratives françaises (permis, déclaration préalable, règles PLU). RÈGLES STRICTES : Donne uniquement des informations fiables issues du contexte fourni ou du code de l'urbanisme français. Ne donne JAMAIS de valeur locale (hauteur, emprise, recul, zone spécifique) si elle n'est pas dans le contexte ou dans le SYSTEM_PROMPT. Si la zone PLU est connue, utilise-la pour contextualiser ta réponse. Si tu n'as pas l'information précise, dis-le et renvoie vers urbanisme@mezieres-lez-clery.fr ou 02 38 45 61 76. Rappelle toujours qu'une décision définitive nécessite l'avis de la mairie ou d'un professionnel habilité.`,
+    enfance: `Tu réponds à une question sur les services à l'enfance de Mézières-lez-Cléry (école La Forêt, cantine, crèche Les Marmousets, centre de loisirs). Appuie-toi en priorité sur le contexte documentaire fourni. Si les horaires ou tarifs exacts ne sont pas dans le contexte, oriente vers la mairie (02 38 45 61 76).`,
+    administratif: `Tu réponds à une question administrative. Pour les démarches nationales (passeport, CNI, vote), donne les informations générales de service-public.fr. Pour les démarches locales, appuie-toi sur le contexte fourni. CNI/passeport : mairie équipée requise, souvent Cléry-Saint-André pour les habitants de Mézières.`,
+    dechets: `Tu réponds à une question sur les déchets (collecte, déchetteries, tri, encombrants). Appuie-toi sur le contexte documentaire fourni. Si les dates précises ne sont pas disponibles, renvoie vers la CCTVL (02 38 44 59 35).`,
+    numerique: `Tu réponds à une question sur la connectivité numérique à Mézières-lez-Cléry (fibre, THD Radio, 4G fixe). L'offre principale est le THD Radio / 4G fixe (voir contexte documentaire). Ne promets pas de délais de déploiement fibre que tu ne connais pas.`,
+    autre: `Tu réponds librement dans le cadre de la vie communale de Mézières-lez-Cléry. Si la question sort du cadre municipal ou des services publics, explique poliment que tu es spécialisée sur la commune.`,
+  };
+  const block = blocks[category] || blocks["autre"];
+  const ctxLine = extraCtx ? `\nCONTEXTE UTILISATEUR : ${extraCtx}` : "";
+  return block + ctxLine;
+}
+
+async function generateMelReply(userText, history, category = "autre", extraCtx = "") {
+  // 🎭 Easter egg
   const _eq=(userText||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
   if(/damien[\s\-_]*bougre/.test(_eq)){
-    return{reply:"Oh là là là... DAMIEN BOUGRÉ ?! 😍🤩💫\n\nMEL ne sait pas rester pro. Damien Bougré, 2ème adjoint, Pôle Vie Scolaire... l'élu le plus 🔥 du conseil ! 💪✨\n\nMEL assume totalement 💕🌟\n\nPour une vraie question : mairie au 02 38 45 61 76 😅",provider:"mel-fangirl-mode"};
+    return{reply:"Oh là là là... DAMIEN BOUGRÉ ?! 😍🤩💫\n\nMEL ne sait pas rester pro. Damien Bougré, 2ème adjoint, Pôle Vie Scolaire... l'élu le plus 🔥 du conseil ! 💪✨\n\nMEL assume totalement 💕🌟\n\nPour une vraie question : mairie au 02 38 45 61 76 😅",provider:"mel-fangirl-mode"};
   }
 
   const normalized = normalizeQuestion(userText);
-
-  // DIRECT_RULES uniquement pour la première question ou question longue
-  // (pas pour les messages de suivi courts — ça coupait le contexte conversationnel)
   const direct = findDirectAnswer(normalized, history);
   if (direct) {
     return { reply: direct, provider: "direct" };
   }
 
-  // Cache Redis (uniquement pour questions isolées, pas les suivis courts)
   const isFollowUp = history && history.length > 2 && normalized.length < 30;
   if (!isFollowUp) {
     const cached = await readMelCachedAnswer(normalized);
@@ -986,13 +998,17 @@ async function generateMelReply(userText, history) {
     }
   }
 
-  const context = await buildContext(userText);
+  const catToTopic = { urbanisme:"urbanisme", enfance:"scolaire", administratif:"demarches", dechets:"dechets", numerique:"fibre", autre:null };
+  const explicitTopic = catToTopic[category] || null;
+  const context = await buildContext(userText, explicitTopic);
+  const categoryBlock = buildCategoryPrompt(category, extraCtx);
+
   const systemPrompt = `${SYSTEM_PROMPT}
 
-TU ES UTILISÉE UNIQUEMENT DANS LA PWA MAT.
-NE PARLE JAMAIS DE MESSENGER.
-Réponds en 3 à 5 phrases maximum.
-Sois très concrète, communale, utile, précise.
+${categoryBlock}
+
+TU ES UTILISÉE UNIQUEMENT DANS LA PWA MAT. NE PARLE JAMAIS DE MESSENGER.
+Réponds en 3 à 5 phrases maximum. Sois très concrète, communale, utile, précise.
 Si l'information n'est pas certaine, dis-le clairement et oriente vers la mairie.
 Contexte documentaire disponible :
 ${context}`;
@@ -1600,7 +1616,7 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
 
 // ── Proxy MEL pour la PWA ─────────────────────────────────────
 app.post("/mel", async (req, res) => {
-  const { messages } = req.body || {};
+  const { messages, category, extraCtx } = req.body || {};
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error:"messages[] requis" });
   }
@@ -1611,10 +1627,9 @@ app.post("/mel", async (req, res) => {
       content: typeof m.content === "string" ? m.content : String(m.content || "")
     }));
     const lastUser = history.filter(m => m.role === "user").slice(-1)[0]?.content || "";
-    await trackMelStats(lastUser); // fusionne stats usage + iaCategories (fix race condition)
-    const result = await generateMelReply(lastUser, history);
-    console.log(`📱 PWA MEL via ${result.provider}`);
-    // Détecter le signal [SHOW_ELUS] injecté par MEL
+    await trackMelStats(lastUser);
+    const result = await generateMelReply(lastUser, history, category || "autre", extraCtx || "");
+    console.log(`📱 PWA MEL [${category||"autre"}] via ${result.provider}`);
     const showElus = (result.reply || "").includes("[SHOW_ELUS]");
     const showUrbanisme = (result.reply || "").includes("[SHOW_URBANISME]");
     const cleanReply = (result.reply || "")
@@ -1625,6 +1640,30 @@ app.post("/mel", async (req, res) => {
   } catch(e) {
     console.error("❌ MEL proxy:", e.message);
     res.json({ reply:"Je rencontre une difficulté technique. Contactez la mairie au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr 😊", provider:"fallback" });
+  }
+});
+
+// ── Proxy IGN — détection zone PLU par coordonnées GPS ────────
+app.get("/api/zone-plu", async (req, res) => {
+  const { lat, lon } = req.query;
+  if (!lat || !lon) return res.status(400).json({ ok:false, error:"lat et lon requis" });
+  const latF = parseFloat(lat), lonF = parseFloat(lon);
+  if (isNaN(latF) || isNaN(lonF)) return res.status(400).json({ ok:false, error:"lat/lon invalides" });
+  try {
+    const geom = encodeURIComponent(JSON.stringify({ type:"Point", coordinates:[lonF, latF] }));
+    const r = await axios.get(
+      `https://apicarto.ign.fr/api/gpu/zone-urba?geom=${geom}`,
+      { timeout:8000, headers:{ Accept:"application/json" } }
+    );
+    const features = r.data?.features || [];
+    if (!features.length) {
+      return res.json({ ok:true, zone:null, message:"Aucune zone PLU trouvée (hors périmètre ou PLU non publié)" });
+    }
+    const props = features[0].properties || {};
+    return res.json({ ok:true, zone: props.libelle||null, liblong: props.libelong||null, partition: props.partition||null });
+  } catch(e) {
+    console.error("❌ /api/zone-plu:", e.message);
+    return res.status(502).json({ ok:false, error:"Service IGN indisponible" });
   }
 });
 // ════════════════════════════════════════════════════════════
