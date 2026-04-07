@@ -454,12 +454,14 @@ async function fetchOpenMeteoForecast() {
     `https://api.open-meteo.com/v1/forecast` +
     `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
     `&longitude=${encodeURIComponent(OPEN_METEO_LON)}` +
-    `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,pressure_msl,precipitation,wind_gusts_10m` +
-    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,uv_index_max,sunrise,sunset` +
-    `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}` +
-    `&forecast_days=3`;
+    `&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,pressure_msl,precipitation,wind_gusts_10m` +
+    `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,wind_gusts_10m,surface_pressure` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_sum,uv_index_max,sunrise,sunset,wind_direction_10m_dominant,wind_gusts_10m_max` +
+    `&past_days=1` +
+    `&forecast_days=10` +
+    `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}`;
 
-  const r = await axios.get(url, { timeout: 10000 });
+  const r = await axios.get(url, { timeout: 15000 });
   return r.data;
 }
 
@@ -1440,22 +1442,135 @@ app.post("/admin/info-banner", adminAuth, async (req, res) => {
   res.json({ ok: true, id });
 });
 
-// ── Route : ajouter une actualité ─────────────────────────────────────────────
+// ── Route : publier une actualité (multi-canal) ─────────────
 app.post("/admin/actus/add", adminAuth, async (req, res) => {
-  const { title, photo } = req.body || {};
-  if (!title) return res.status(400).json({ error: "title requis" });
+  const {
+    title,
+    description,
+    imageBase64,           // data URL : "data:image/jpeg;base64,..."
+    imageUrl,              // URL externe (fallback si pas d'upload)
+    eventDate,             // ISO : "2026-05-15T18:30" ou "2026-05-15"
+    eventLocation,
+    publishFacebook = true,
+    sendPush = true,
+    createCalendar = true  // automatiquement false si pas de eventDate
+  } = req.body || {};
+
+  if (!title || !String(title).trim()) {
+    return res.status(400).json({ error: "title requis" });
+  }
+
+  const cleanTitle = String(title).trim().substring(0, 150);
+  const cleanDescription = String(description || "").trim().substring(0, 3000);
+
+  const result = {
+    ok: true,
+    actu: null,
+    facebook: null,
+    push: null,
+    calendar: null,
+    warnings: []
+  };
+
+  // 1. Publier sur Facebook EN PREMIER (pour récupérer l'URL de la photo hébergée)
+  let finalPhotoUrl = imageUrl || null;
+  if (publishFacebook) {
+    try {
+      const fbResult = await publishActuToFacebook(
+        cleanTitle,
+        cleanDescription,
+        imageBase64,
+        eventDate,
+        eventLocation
+      );
+      result.facebook = fbResult;
+      // Si FB a hébergé la photo, récupérer l'URL pour stocker dans l'actu
+      if (fbResult.photo_url) finalPhotoUrl = fbResult.photo_url;
+    } catch (e) {
+      result.warnings.push("Facebook: " + e.message);
+      result.facebook = { ok: false, error: e.message };
+    }
+  }
+
+  // 2. Stocker l'actu dans Redis (pour affichage dans la PWA)
   const actus = await readNews();
   const actu = {
     id: Date.now(),
-    title: String(title).substring(0, 200),
+    title: cleanTitle,
+    description: cleanDescription || null,
     date: new Date().toLocaleDateString("fr-FR"),
     dateISO: new Date().toISOString().slice(0, 10),
-    photo: photo || null
+    photo: finalPhotoUrl,
+    eventDate: eventDate || null,
+    eventLocation: eventLocation || null,
+    source: "admin"
   };
   actus.unshift(actu);
-  if (actus.length > 20) actus.splice(20);
+  if (actus.length > 30) actus.splice(30);
   await writeNews(actus);
-  res.json({ ok: true, actu });
+  result.actu = actu;
+
+  // 3. Envoyer notification push
+  if (sendPush) {
+    try {
+      result.push = await sendActuPush(cleanTitle, cleanDescription, finalPhotoUrl);
+    } catch (e) {
+      result.warnings.push("Push: " + e.message);
+      result.push = { ok: false, error: e.message };
+    }
+  }
+
+  // 4. Créer/remplacer événement Google Agenda
+  if (createCalendar && eventDate) {
+    try {
+      result.calendar = await upsertGoogleCalendarEvent(
+        cleanTitle,
+        cleanDescription,
+        eventDate,
+        eventLocation
+      );
+    } catch (e) {
+      result.warnings.push("Calendar: " + e.message);
+      result.calendar = { ok: false, error: e.message };
+    }
+  }
+
+  res.json(result);
+});
+
+// ── Route : lister événements calendar d'un jour donné (doublon check) ──
+app.get("/admin/calendar/day", adminAuth, async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ error: "date requise (YYYY-MM-DD)" });
+
+  const calendar = getGoogleCalendarClient();
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendar || !calendarId) {
+    return res.json({ ok: false, events: [], error: "Calendar non configuré" });
+  }
+
+  try {
+    const dayStart = new Date(date + "T00:00:00");
+    const dayEnd = new Date(date + "T23:59:59");
+    const list = await calendar.events.list({
+      calendarId,
+      timeMin: dayStart.toISOString(),
+      timeMax: dayEnd.toISOString(),
+      singleEvents: true,
+      orderBy: "startTime"
+    });
+    const events = (list.data.items || []).map(e => ({
+      id: e.id,
+      summary: e.summary,
+      description: e.description,
+      start: e.start?.dateTime || e.start?.date,
+      end: e.end?.dateTime || e.end?.date,
+      location: e.location
+    }));
+    res.json({ ok: true, events });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ── Route : purge données par date ────────────────────────────────────────────
@@ -1612,6 +1727,176 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   }
 
   return { duplicate: false };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PUBLICATION MULTI-CANAL (Admin)
+// ═══════════════════════════════════════════════════════════════
+
+// ── Publier une actu sur Facebook (sans #app-mezieres) ───────
+async function publishActuToFacebook(title, description, imageBase64, eventDate, eventLocation) {
+  const pageId = await resolveFacebookPageId();
+  if (!pageId || !PAGE_ACCESS_TOKEN) {
+    throw new Error("Page Facebook ou token manquant");
+  }
+
+  // Construction du message (sans #app-mezieres pour éviter double notif)
+  let message = title;
+  if (description) message += `\n\n${description}`;
+  if (eventDate) {
+    const d = new Date(eventDate);
+    const dateStr = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    const hasTime = /T\d{2}:\d{2}/.test(eventDate);
+    const timeStr = hasTime ? ` à ${d.getHours().toString().padStart(2,'0')}h${d.getMinutes().toString().padStart(2,'0')}` : "";
+    message += `\n\n📅 ${dateStr}${timeStr}`;
+    if (eventLocation) message += `\n📍 ${eventLocation}`;
+  }
+
+  try {
+    if (imageBase64) {
+      // Publier avec photo : POST /{page-id}/photos
+      const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
+      const FormData = require("form-data");
+      const form = new FormData();
+      form.append("source", imageBuffer, { filename: "photo.jpg", contentType: "image/jpeg" });
+      form.append("message", message);
+      form.append("access_token", PAGE_ACCESS_TOKEN);
+
+      const r = await axios.post(
+        `https://graph.facebook.com/v19.0/${pageId}/photos`,
+        form,
+        { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
+      );
+      return { ok: true, post_id: r.data.post_id || r.data.id, photo_id: r.data.id, photo_url: `https://graph.facebook.com/${r.data.id}/picture` };
+    } else {
+      // Post texte simple : POST /{page-id}/feed
+      const r = await axios.post(
+        `https://graph.facebook.com/v19.0/${pageId}/feed`,
+        { message, access_token: PAGE_ACCESS_TOKEN }
+      );
+      return { ok: true, post_id: r.data.id };
+    }
+  } catch (e) {
+    console.error("❌ publishActuToFacebook:", e.response?.data || e.message);
+    throw new Error(e.response?.data?.error?.message || e.message);
+  }
+}
+
+// ── Envoyer notification push pour une actu ──────────────────
+async function sendActuPush(title, description, photoUrl) {
+  const subs = await readSubs();
+  if (!subs.length) return { sent: 0, failed: 0 };
+
+  const payload = JSON.stringify({
+    title: `MAT — ${title.substring(0, 60)}`,
+    body: (description || title).substring(0, 150),
+    icon: "./icon-192.png",
+    badge: "./icon-192.png",
+    image: photoUrl || undefined,
+    data: { url: "/#notifs" }
+  });
+
+  let sent = 0, failed = 0;
+  const dead = [];
+  for (const sub of subs) {
+    try {
+      await webpush.sendNotification(sub, payload);
+      sent++;
+    } catch (e) {
+      failed++;
+      if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
+    }
+  }
+  if (dead.length) {
+    const alive = subs.filter(s => !dead.includes(s.endpoint));
+    await writeSubs(alive);
+  }
+  return { sent, failed, total: subs.length };
+}
+
+// ── Google Calendar : créer/remplacer événement ──────────────
+let _googleCalendarClient = null;
+function getGoogleCalendarClient() {
+  if (_googleCalendarClient) return _googleCalendarClient;
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_B64
+    ? Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_B64, "base64").toString("utf8")
+    : process.env.GOOGLE_SERVICE_ACCOUNT;
+  if (!raw) return null;
+  try {
+    const { google } = require("googleapis");
+    const credentials = JSON.parse(raw);
+    const auth = new google.auth.JWT(
+      credentials.client_email,
+      null,
+      credentials.private_key,
+      ["https://www.googleapis.com/auth/calendar"]
+    );
+    _googleCalendarClient = google.calendar({ version: "v3", auth });
+    return _googleCalendarClient;
+  } catch (e) {
+    console.warn("Google Calendar init fail:", e.message);
+    return null;
+  }
+}
+
+async function upsertGoogleCalendarEvent(title, description, eventDate, eventLocation) {
+  const calendar = getGoogleCalendarClient();
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendar || !calendarId) {
+    throw new Error("Google Calendar non configuré");
+  }
+
+  // Chercher les événements du jour pour détecter un doublon
+  const eventDt = new Date(eventDate);
+  const dayStart = new Date(eventDt); dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(eventDt); dayEnd.setHours(23, 59, 59, 999);
+
+  const existing = await calendar.events.list({
+    calendarId,
+    timeMin: dayStart.toISOString(),
+    timeMax: dayEnd.toISOString(),
+    singleEvents: true,
+    orderBy: "startTime"
+  });
+
+  // Détection doublon : similarité > 0.6 sur le titre normalisé
+  const stringSimilarity = require("string-similarity");
+  const normalize = s => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9 ]/g, "").trim();
+  const target = normalize(title);
+  let deletedCount = 0;
+
+  for (const ev of existing.data.items || []) {
+    const evTitle = normalize(ev.summary);
+    const similarity = stringSimilarity.compareTwoStrings(target, evTitle);
+    if (similarity > 0.6) {
+      try {
+        await calendar.events.delete({ calendarId, eventId: ev.id });
+        deletedCount++;
+        console.log(`🗑️ Doublon supprimé: "${ev.summary}" (sim=${similarity.toFixed(2)})`);
+      } catch (e) {
+        console.warn(`Échec suppression doublon ${ev.id}:`, e.message);
+      }
+    }
+  }
+
+  // Créer le nouvel événement
+  const hasTime = /T\d{2}:\d{2}/.test(eventDate);
+  const endDt = new Date(eventDt.getTime() + 60 * 60 * 1000); // +1h par défaut
+
+  const eventBody = {
+    summary: title,
+    description: description || "",
+    location: eventLocation || undefined,
+    start: hasTime
+      ? { dateTime: eventDt.toISOString(), timeZone: "Europe/Paris" }
+      : { date: eventDt.toISOString().slice(0, 10) },
+    end: hasTime
+      ? { dateTime: endDt.toISOString(), timeZone: "Europe/Paris" }
+      : { date: eventDt.toISOString().slice(0, 10) }
+  };
+
+  const created = await calendar.events.insert({ calendarId, requestBody: eventBody });
+  return { ok: true, event_id: created.data.id, html_link: created.data.htmlLink, deleted_duplicates: deletedCount };
 }
 
 // ── Proxy MEL pour la PWA ─────────────────────────────────────
@@ -1921,6 +2206,17 @@ let _meteoCache = null;
 let _meteoCacheTime = 0;
 const METEO_CACHE_TTL = 10 * 60 * 1000; // 10 min
 
+async function getCachedMeteoForecast() {
+  const now = Date.now();
+  if (_meteoCache && (now - _meteoCacheTime) < METEO_CACHE_TTL) {
+    return _meteoCache;
+  }
+  const data = await fetchOpenMeteoForecast();
+  _meteoCache = data;
+  _meteoCacheTime = now;
+  return data;
+}
+
 app.get('/meteo/forecast', async (req, res) => {
   try {
     const now = Date.now();
@@ -1962,7 +2258,7 @@ app.get("/meteo/vigilance", async (req, res) => {
 app.get("/meteo/commune", async (req, res) => {
   try {
     const [forecast, rawVigilance] = await Promise.all([
-      fetchOpenMeteoForecast(),
+      getCachedMeteoForecast(),  // <-- utilise le cache
       fetchMeteoFranceVigilanceRaw().catch(() => null),
     ]);
 
