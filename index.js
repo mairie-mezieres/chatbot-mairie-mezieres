@@ -1911,6 +1911,37 @@ app.get("/actus", async (req, res) => {
   res.json({ actus, count: actus.length });
 });
 
+// ════════════════════════════════════════
+// PROXY MÉTÉO — Open-Meteo (contourne CORS)
+// ════════════════════════════════════════
+const METEO_OPEN_URL = 'https://api.open-meteo.com/v1/forecast?latitude=47.822&longitude=1.808&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,pressure_msl,precipitation,wind_gusts_10m&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,wind_gusts_10m,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_sum,uv_index_max,sunrise,sunset,wind_direction_10m_dominant,wind_gusts_10m_max&past_days=1&timezone=Europe%2FParis&forecast_days=10';
+
+// Cache 10 minutes pour éviter de spammer Open-Meteo
+let _meteoCache = null;
+let _meteoCacheTime = 0;
+const METEO_CACHE_TTL = 10 * 60 * 1000; // 10 min
+
+app.get('/meteo/forecast', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (_meteoCache && (now - _meteoCacheTime) < METEO_CACHE_TTL) {
+      res.set('Access-Control-Allow-Origin', '*');
+      return res.json(_meteoCache);
+    }
+    const r = await fetch(METEO_OPEN_URL);
+    if (!r.ok) throw new Error('Open-Meteo HTTP ' + r.status);
+    const data = await r.json();
+    _meteoCache = data;
+    _meteoCacheTime = now;
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json(data);
+  } catch (e) {
+    console.error('[meteo/forecast] error:', e.message);
+    res.set('Access-Control-Allow-Origin', '*');
+    res.status(503).json({ error: 'Météo indisponible', detail: e.message });
+  }
+});
+
 // ── Météo commune + vigilance Météo-France ───────────────────
 app.get("/meteo/vigilance", async (req, res) => {
   try {
