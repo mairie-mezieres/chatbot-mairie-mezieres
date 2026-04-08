@@ -2502,7 +2502,119 @@ app.get("/debug-mistral", async (req, res) => {
   }
 });
 
+// ── Diagnostic Google Calendar ─────────────────────────────
+app.get("/debug-calendar", adminAuth, async (req, res) => {
+  const result = {
+    config: {
+      has_calendar_id: !!process.env.GOOGLE_CALENDAR_ID,
+      calendar_id: process.env.GOOGLE_CALENDAR_ID || "(vide)",
+      has_service_account_b64: !!process.env.GOOGLE_SERVICE_ACCOUNT_B64,
+      has_service_account_raw: !!process.env.GOOGLE_SERVICE_ACCOUNT,
+      b64_length: process.env.GOOGLE_SERVICE_ACCOUNT_B64 ? process.env.GOOGLE_SERVICE_ACCOUNT_B64.length : 0,
+    }
+  };
 
+  // Test 1 : googleapis installée ?
+  try {
+    require("googleapis");
+    result.googleapis_installed = true;
+  } catch (e) {
+    result.googleapis_installed = false;
+    result.googleapis_error = e.message;
+    return res.json({ ok: false, step: "googleapis_require", result });
+  }
+
+  // Test 2 : string-similarity installée ?
+  try {
+    require("string-similarity");
+    result.string_similarity_installed = true;
+  } catch (e) {
+    result.string_similarity_installed = false;
+    result.string_similarity_error = e.message;
+    return res.json({ ok: false, step: "string_similarity_require", result });
+  }
+
+  // Test 3 : Parse du JSON service account
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_B64
+    ? Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_B64, "base64").toString("utf8")
+    : process.env.GOOGLE_SERVICE_ACCOUNT;
+  if (!raw) {
+    return res.json({ ok: false, step: "env_missing", result, error: "GOOGLE_SERVICE_ACCOUNT_B64 et GOOGLE_SERVICE_ACCOUNT absents" });
+  }
+  try {
+    const creds = JSON.parse(raw);
+    result.service_account_email = creds.client_email || "(manquant)";
+    result.service_account_project = creds.project_id || "(manquant)";
+    result.has_private_key = !!creds.private_key;
+  } catch (e) {
+    return res.json({ ok: false, step: "json_parse", result, error: "JSON invalide: " + e.message });
+  }
+
+  // Test 4 : Init client Google Calendar
+  const cal = getGoogleCalendarClient();
+  if (!cal) {
+    return res.json({ ok: false, step: "calendar_client_init", result, error: "getGoogleCalendarClient() a renvoyé null — voir logs Render au démarrage" });
+  }
+  result.calendar_client_ok = true;
+
+  // Test 5 : Lister les events du jour (teste l'authentification + les droits)
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendarId) {
+    return res.json({ ok: false, step: "calendar_id_missing", result });
+  }
+  try {
+    const today = new Date();
+    const dayStart = new Date(today); dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(today); dayEnd.setHours(23, 59, 59, 999);
+    const list = await cal.events.list({
+      calendarId,
+      timeMin: dayStart.toISOString(),
+      timeMax: dayEnd.toISOString(),
+      maxResults: 5,
+    });
+    result.list_test_ok = true;
+    result.events_today_count = (list.data.items || []).length;
+  } catch (e) {
+    result.list_test_ok = false;
+    result.list_test_error = e.message;
+    result.list_test_status = e.code || e.response?.status || null;
+    result.list_test_details = e.response?.data?.error || null;
+    return res.json({ ok: false, step: "calendar_list", result });
+  }
+
+  // Test 6 : Créer un événement de test (puis le supprimer)
+  try {
+    const testEvent = await cal.events.insert({
+      calendarId,
+      requestBody: {
+        summary: "[TEST MAT] Diagnostic — à supprimer",
+        description: "Événement de diagnostic créé par /debug-calendar. Sera supprimé automatiquement.",
+        start: { dateTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(), timeZone: "Europe/Paris" },
+        end: { dateTime: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), timeZone: "Europe/Paris" },
+      }
+    });
+    result.insert_test_ok = true;
+    result.test_event_id = testEvent.data.id;
+    result.test_event_link = testEvent.data.htmlLink;
+
+    // Supprimer immédiatement l'événement de test
+    try {
+      await cal.events.delete({ calendarId, eventId: testEvent.data.id });
+      result.delete_test_ok = true;
+    } catch (delErr) {
+      result.delete_test_ok = false;
+      result.delete_test_error = delErr.message;
+    }
+  } catch (e) {
+    result.insert_test_ok = false;
+    result.insert_test_error = e.message;
+    result.insert_test_status = e.code || e.response?.status || null;
+    result.insert_test_details = e.response?.data?.error || null;
+    return res.json({ ok: false, step: "calendar_insert", result });
+  }
+
+  res.json({ ok: true, step: "all_passed", result });
+});
 
 // ── Diagnostic Trello (à supprimer après test) ────────────────
 app.get("/debug-trello", async (req, res) => {
