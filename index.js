@@ -110,6 +110,51 @@ async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
 async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
 
+function getParisDateParts() {
+  const now = new Date();
+  const fmt = new Intl.DateTimeFormat('fr-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  const get = t => fmt.find(p => p.type === t)?.value || '';
+  const day = `${get('year')}-${get('month')}-${get('day')}`;
+  return { day, month: day.slice(0, 7) };
+}
+function pctTrend(current, previous) {
+  if (!previous) return current > 0 ? 100 : 0;
+  return Number((((current - previous) / previous) * 100).toFixed(1));
+}
+function incStat(obj, key, inc = 1) { obj[key] = (obj[key] || 0) + inc; }
+function sanitizeDeviceInfo(device = {}) {
+  const clean = (v, max = 80, fallback = 'Inconnu') => String(v || fallback).trim().substring(0, max) || fallback;
+  return {
+    type: clean(device.type, 60),
+    model: clean(device.model, 80),
+    os: clean(device.os, 80),
+    browser: clean(device.browser, 80),
+    screen: clean(device.screen, 30),
+    pwa: clean(device.pwa, 30),
+    matVersion: clean(device.matVersion || device.appVersion, 30, 'Inconnue')
+  };
+}
+function bumpDeviceBreakdown(target, device) {
+  if (!target.types) target.types = {};
+  if (!target.models) target.models = {};
+  if (!target.os) target.os = {};
+  if (!target.browsers) target.browsers = {};
+  if (!target.pwa) target.pwa = {};
+  if (!target.screens) target.screens = {};
+  if (!target.appVersions) target.appVersions = {};
+  incStat(target.types, device.type);
+  incStat(target.models, device.model);
+  incStat(target.os, device.os);
+  incStat(target.browsers, device.browser);
+  incStat(target.pwa, device.pwa);
+  incStat(target.screens, device.screen);
+  incStat(target.appVersions, device.matVersion);
+}
+function compactSeenMap(mapObj = {}, keepKeys = []) {
+  const keep = new Set(keepKeys);
+  for (const k of Object.keys(mapObj)) if (!keep.has(k)) delete mapObj[k];
+}
+
 // ─── CORS ─────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin",  "*");
@@ -1351,17 +1396,54 @@ app.get("/admin/dashboard", adminAuth, async (req, res) => {
         claude:  { credits: claudeCredits, priceIn: CLAUDE_PRICE_IN, priceOut: CLAUDE_PRICE_OUT },
         mistral: { usage: mistralUsage,    priceIn: MISTRAL_PRICE_IN, priceOut: MISTRAL_PRICE_OUT }
       },
-      app: {
-        totalAcces:    appStats.totalAcces || 0,
-        totalInstalls: appStats.services?.installation || 0,
-        parService:    appStats.services || {},
-        parJour:       appStats.parJour  || {},
-        uniqueUsers: {
-          total: appStats.uniqueUsers?.total || 0,
-          today: (appStats.uniqueUsers?.byDay?.[new Date().toISOString().slice(0,10)] || []).length,
-          month: (appStats.uniqueUsers?.byMonth?.[new Date().toISOString().slice(0,7)] || []).length,
-        },
-      },
+      app: (() => {
+        const nowParts = getParisDateParts();
+        const today = nowParts.day;
+        const month = nowParts.month;
+        const yesterdayDate = new Date();
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yFmt = new Intl.DateTimeFormat('fr-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(yesterdayDate);
+        const yGet = t => yFmt.find(p => p.type === t)?.value || '';
+        const yesterday = `${yGet('year')}-${yGet('month')}-${yGet('day')}`;
+        const prevMonthDate = new Date();
+        prevMonthDate.setMonth(prevMonthDate.getMonth() - 1);
+        const pFmt = new Intl.DateTimeFormat('fr-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(prevMonthDate);
+        const pGet = t => pFmt.find(p => p.type === t)?.value || '';
+        const prevMonth = `${pGet('year')}-${pGet('month')}`;
+        const uniqueToday = (appStats.uniqueUsers?.byDay?.[today] || []).length;
+        const uniqueMonth = (appStats.uniqueUsers?.byMonth?.[month] || []).length;
+        const uniqueYesterday = (appStats.uniqueUsers?.byDay?.[yesterday] || []).length;
+        const uniquePrevMonth = (appStats.uniqueUsers?.byMonth?.[prevMonth] || []).length;
+        const dayAccess = Object.values(appStats.parJour?.[today] || {}).reduce((a,b) => a + Number(b || 0), 0);
+        const prevDayAccess = Object.values(appStats.parJour?.[yesterday] || {}).reduce((a,b) => a + Number(b || 0), 0);
+        const monthAccess = Object.entries(appStats.parJour || {}).filter(([d]) => d.startsWith(month)).reduce((sum, [, svcs]) => sum + Object.values(svcs || {}).reduce((a,b)=>a + Number(b || 0), 0), 0);
+        const prevMonthAccess = Object.entries(appStats.parJour || {}).filter(([d]) => d.startsWith(prevMonth)).reduce((sum, [, svcs]) => sum + Object.values(svcs || {}).reduce((a,b)=>a + Number(b || 0), 0), 0);
+        return {
+          totalAcces: appStats.totalAcces || 0,
+          totalInstalls: appStats.services?.installation || 0,
+          parService: appStats.services || {},
+          parJour: appStats.parJour || {},
+          overview: {
+            today, month,
+            uniqueToday, uniqueMonth, uniqueYesterday, uniquePrevMonth,
+            uniqueTrendDay: pctTrend(uniqueToday, uniqueYesterday),
+            uniqueTrendMonth: pctTrend(uniqueMonth, uniquePrevMonth),
+            accessToday: dayAccess,
+            accessYesterday: prevDayAccess,
+            accessMonth: monthAccess,
+            accessPrevMonth: prevMonthAccess,
+            accessTrendDay: pctTrend(dayAccess, prevDayAccess),
+            accessTrendMonth: pctTrend(monthAccess, prevMonthAccess)
+          },
+          uniqueUsers: { total: appStats.uniqueUsers?.total || 0, today: uniqueToday, month: uniqueMonth },
+          devices: {
+            today: appStats.deviceStats?.byDay?.[today] || {},
+            month: appStats.deviceStats?.byMonth?.[month] || {},
+            appOpensByDay: appStats.deviceStats?.appOpensByDay || {},
+            appOpensByMonth: appStats.deviceStats?.appOpensByMonth || {}
+          }
+        };
+      })(),
       iaCategories: {
         total:   appStats.iaCategories?.total   || {},
         parJour: appStats.iaCategories?.parJour || {},
@@ -1485,7 +1567,6 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
         eventLocation
       );
       result.facebook = fbResult;
-      if (fbResult.warning) result.warnings.push("Facebook: " + fbResult.warning);
       // Si FB a hébergé la photo, récupérer l'URL pour stocker dans l'actu
       if (fbResult.photo_url) finalPhotoUrl = fbResult.photo_url;
     } catch (e) {
@@ -1579,55 +1660,6 @@ app.get("/admin/calendar/day", adminAuth, async (req, res) => {
 app.post("/admin/purge", adminAuth, async (req, res) => {
   const { type, beforeDate } = req.body || {};
   if (!type || !beforeDate) return res.status(400).json({ error: "type et beforeDate requis" });
-
-  const monthCutoff = beforeDate.slice(0, 7);
-
-  async function purgeStatsDaily() {
-    const stats = await readStats();
-    const keys = Object.keys(stats.parJour || {}).filter(d => d < beforeDate);
-    keys.forEach(k => delete stats.parJour[k]);
-
-    if (stats.uniqueUsers?.byDay) {
-      Object.keys(stats.uniqueUsers.byDay).filter(d => d < beforeDate).forEach(k => delete stats.uniqueUsers.byDay[k]);
-    }
-    if (stats.uniqueUsers?.byMonth) {
-      Object.keys(stats.uniqueUsers.byMonth).filter(m => m < monthCutoff).forEach(k => delete stats.uniqueUsers.byMonth[k]);
-    }
-
-    const remainingParJour = stats.parJour || {};
-    stats.services = {};
-    stats.totalAcces = 0;
-    for (const svcs of Object.values(remainingParJour)) {
-      for (const [svc, cnt] of Object.entries(svcs || {})) {
-        const n = Number(cnt || 0);
-        stats.services[svc] = (stats.services[svc] || 0) + n;
-        stats.totalAcces += n;
-      }
-    }
-
-    await writeStats(stats);
-    return keys.length;
-  }
-
-  async function purgeIaDaily() {
-    const ia = await readIaStats();
-    const keys = Object.keys(ia.daily || {}).filter(d => d < beforeDate);
-    keys.forEach(k => delete ia.daily[k]);
-    await writeIaStats(ia);
-    return keys.length;
-  }
-
-  async function purgeIaCategoriesDaily() {
-    const stats = await readStats();
-    if (!stats.iaCategories) stats.iaCategories = {};
-    const cats = stats.iaCategories.parJour || {};
-    const keys = Object.keys(cats).filter(d => d < beforeDate);
-    keys.forEach(k => delete cats[k]);
-    stats.iaCategories.parJour = cats;
-    await writeStats(stats);
-    return keys.length;
-  }
-
   let deleted = 0;
   try {
     if (type === "actus") {
@@ -1641,30 +1673,52 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
       deleted = signals.length - filtered.length;
       await writeSignals(filtered);
     } else if (type === "stats_parjour") {
-      deleted = await purgeStatsDaily();
+      const stats = await readStats();
+      const keys = Object.keys(stats.parJour || {}).filter(d => d < beforeDate);
+      keys.forEach(k => delete stats.parJour[k]);
+      deleted = keys.length;
+      await writeStats(stats);
     } else if (type === "ia_stats_daily") {
-      deleted = await purgeIaDaily();
+      const ia = await readIaStats();
+      const keys = Object.keys(ia.daily || {}).filter(d => d < beforeDate);
+      keys.forEach(k => delete ia.daily[k]);
+      deleted = keys.length;
+      await writeIaStats(ia);
     } else if (type === "ia_categories_parjour") {
-      deleted = await purgeIaCategoriesDaily();
-    } else if (type === "all") {
-      const [a, s, st, iaD, iaC] = await Promise.all([
-        (async () => {
-          const actus = await readNews();
-          const filtered = actus.filter(x => (x.dateISO || "") >= beforeDate);
-          await writeNews(filtered);
-          return actus.length - filtered.length;
-        })(),
-        (async () => {
-          const signals = await readSignals();
-          const filtered = signals.filter(x => (x.dateISO || "") >= beforeDate);
-          await writeSignals(filtered);
-          return signals.length - filtered.length;
-        })(),
-        purgeStatsDaily(),
-        purgeIaDaily(),
-        purgeIaCategoriesDaily()
-      ]);
-      deleted = a + s + st + iaD + iaC;
+      const stats = await readStats();
+      const cats = (stats.iaCategories || {}).parJour || {};
+      const keys = Object.keys(cats).filter(d => d < beforeDate);
+      keys.forEach(k => delete cats[k]);
+      deleted = keys.length;
+      await writeStats(stats);
+    } else if (type === "all_before") {
+      const stats = await readStats();
+      const ia = await readIaStats();
+      const cutoffMonth = beforeDate.slice(0, 7);
+      const actus = await readNews();
+      const filteredActus = actus.filter(a => (a.dateISO || "") >= beforeDate);
+      deleted += actus.length - filteredActus.length;
+      await writeNews(filteredActus);
+      const signals = await readSignals();
+      const filteredSignals = signals.filter(s => (s.dateISO || "") >= beforeDate);
+      deleted += signals.length - filteredSignals.length;
+      await writeSignals(filteredSignals);
+      for (const key of Object.keys(stats.parJour || {}).filter(d => d < beforeDate)) { delete stats.parJour[key]; deleted++; }
+      if (stats.uniqueUsers?.byDay) for (const key of Object.keys(stats.uniqueUsers.byDay).filter(d => d < beforeDate)) { delete stats.uniqueUsers.byDay[key]; deleted++; }
+      if (stats.uniqueUsers?.byMonth) for (const key of Object.keys(stats.uniqueUsers.byMonth).filter(m => m < cutoffMonth)) { delete stats.uniqueUsers.byMonth[key]; deleted++; }
+      if (stats.iaCategories?.parJour) for (const key of Object.keys(stats.iaCategories.parJour).filter(d => d < beforeDate)) { delete stats.iaCategories.parJour[key]; deleted++; }
+      if (stats.deviceStats) {
+        const ds = stats.deviceStats;
+        for (const key of Object.keys(ds.appOpensByDay || {}).filter(d => d < beforeDate)) { delete ds.appOpensByDay[key]; deleted++; }
+        for (const key of Object.keys(ds.daySeen || {}).filter(d => d < beforeDate)) { delete ds.daySeen[key]; deleted++; }
+        for (const key of Object.keys(ds.byDay || {}).filter(d => d < beforeDate)) { delete ds.byDay[key]; deleted++; }
+        for (const key of Object.keys(ds.byMonth || {}).filter(m => m < cutoffMonth)) { delete ds.byMonth[key]; deleted++; }
+        for (const key of Object.keys(ds.monthSeen || {}).filter(m => m < cutoffMonth)) { delete ds.monthSeen[key]; deleted++; }
+        for (const key of Object.keys(ds.appOpensByMonth || {}).filter(m => m < cutoffMonth)) { delete ds.appOpensByMonth[key]; deleted++; }
+      }
+      for (const key of Object.keys(ia.daily || {}).filter(d => d < beforeDate)) { delete ia.daily[key]; deleted++; }
+      await writeStats(stats);
+      await writeIaStats(ia);
     } else {
       return res.status(400).json({ error: "type inconnu" });
     }
@@ -1674,8 +1728,7 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
   }
 });
 
-// ── Route : visiteurs uniques ─────────────────────────────────────────────────
-// ── Route : visiteurs uniques ─────────────────────────────────────────────────
+// ── Route : visiteurs uniques// ── Route : visiteurs uniques ─────────────────────────────────────────────────
 // Exposé via /admin/dashboard dans le champ app.uniqueUsers
 
 // ── Webhook Facebook (feed only) ──────────────────────────────
@@ -1810,82 +1863,78 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
 // ═══════════════════════════════════════════════════════════════
 
 // ── Publier une actu sur Facebook (sans #app-mezieres) ───────
-function buildFacebookActuMessage(title, description) {
-  const cleanTitle = String(title || '').trim();
-  const cleanDescription = String(description || '').trim();
-  const parts = [];
-
-  if (cleanTitle) parts.push(`📢 ${cleanTitle}`);
-  if (cleanDescription) {
-    const normalized = cleanDescription
-      .replace(/\r/g, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-    parts.push(normalized);
-  }
-
-  return parts.join('\n\n').substring(0, 5000).trim();
-}
-
-async function postFacebookFeed(pageId, message) {
-  const r = await axios.post(
-    `https://graph.facebook.com/v19.0/${pageId}/feed`,
-    { message, access_token: PAGE_ACCESS_TOKEN }
-  );
-  return { ok: true, mode: 'feed', post_id: r.data.id };
-}
-
-async function postFacebookPhoto(pageId, message, imageBase64) {
-  const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
-  const FormData = require("form-data");
-  const form = new FormData();
-  form.append("source", imageBuffer, { filename: "photo.jpg", contentType: "image/jpeg" });
-  form.append("message", message);
-  form.append("access_token", PAGE_ACCESS_TOKEN);
-
-  const r = await axios.post(
-    `https://graph.facebook.com/v19.0/${pageId}/photos`,
-    form,
-    { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
-  );
-  return {
-    ok: true,
-    mode: 'photo',
-    post_id: r.data.post_id || r.data.id,
-    photo_id: r.data.id,
-    photo_url: `https://graph.facebook.com/${r.data.id}/picture`
-  };
-}
-
 async function publishActuToFacebook(title, description, imageBase64, eventDate, eventLocation) {
   const pageId = await resolveFacebookPageId();
   if (!pageId || !PAGE_ACCESS_TOKEN) {
     throw new Error("Page Facebook ou token manquant");
   }
 
-  const message = buildFacebookActuMessage(title, description);
+  const lines = [];
+  lines.push(`📢 ${String(title || '').trim()}`);
+  if (description) {
+    const cleaned = String(description)
+      .replace(/\r/g, '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean)
+      .join('\n\n')
+      .substring(0, 2200);
+    if (cleaned) lines.push(cleaned);
+  }
+  if (eventDate) {
+    const d = new Date(eventDate);
+    const dateStr = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    const hasTime = /T\d{2}:\d{2}/.test(eventDate);
+    const timeStr = hasTime ? ` à ${d.getHours().toString().padStart(2,'0')}h${d.getMinutes().toString().padStart(2,'0')}` : "";
+    lines.push(`📅 ${dateStr}${timeStr}`);
+    if (eventLocation) lines.push(`📍 ${String(eventLocation).trim()}`);
+  }
+  const message = lines.join("\n\n").substring(0, 2800);
+
+  const postTextOnly = async () => {
+    const r = await axios.post(`https://graph.facebook.com/v19.0/${pageId}/feed`, {
+      message,
+      access_token: PAGE_ACCESS_TOKEN
+    });
+    return { ok: true, mode: 'feed', post_id: r.data.id, fallbackUsed: false };
+  };
 
   try {
     if (imageBase64) {
       try {
-        return await postFacebookPhoto(pageId, message, imageBase64);
+        const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
+        const FormData = require("form-data");
+        const form = new FormData();
+        form.append("source", imageBuffer, { filename: "photo.jpg", contentType: "image/jpeg" });
+        form.append("message", message);
+        form.append("access_token", PAGE_ACCESS_TOKEN);
+        const r = await axios.post(
+          `https://graph.facebook.com/v19.0/${pageId}/photos`,
+          form,
+          { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
+        );
+        return {
+          ok: true,
+          mode: 'photo',
+          post_id: r.data.post_id || r.data.id,
+          photo_id: r.data.id,
+          photo_url: `https://graph.facebook.com/${r.data.id}/picture`,
+          fallbackUsed: false
+        };
       } catch (photoErr) {
-        console.warn("⚠️ Photo Facebook impossible, fallback feed:", photoErr.response?.data || photoErr.message);
-        const fallback = await postFacebookFeed(pageId, message);
-        fallback.warning = "Image non publiée sur Facebook, texte publié à la place.";
-        return fallback;
+        console.warn('⚠️ Publication photo Facebook échouée, fallback texte:', photoErr.response?.data || photoErr.message);
+        const textOnly = await postTextOnly();
+        return { ...textOnly, fallbackUsed: true, fallbackReason: photoErr.response?.data?.error?.message || photoErr.message };
       }
     }
-
-    return await postFacebookFeed(pageId, message);
+    return await postTextOnly();
   } catch (e) {
     console.error("❌ publishActuToFacebook:", e.response?.data || e.message);
     throw new Error(e.response?.data?.error?.message || e.message);
   }
 }
 
-// ── Envoyer notification push pour une actu ──────────────────
-// ── Envoyer notification push pour une actu ──────────────────
+// ── Envoyer notification push pour une actu// ── Envoyer notification push pour une actu ──────────────────
 async function sendActuPush(title, description, photoUrl) {
   const subs = await readSubs();
   if (!subs.length) return { sent: 0, failed: 0 };
@@ -2456,84 +2505,94 @@ app.post("/push/unsubscribe", async (req, res) => {
 
 // ── Stats usage ──────────────────────────────────────────────
 app.post("/stats/track", async (req, res) => {
-  const { service } = req.body || {};
+  const { service, device } = req.body || {};
   if (!service) return res.status(400).json({ error: "service requis" });
 
   const stats = await readStats();
-  const today = new Date().toISOString().slice(0, 10);
-  const month = today.slice(0, 7);
+  const { day: today, month } = getParisDateParts();
 
   if (!stats.services) stats.services = {};
   stats.services[service] = (stats.services[service] || 0) + 1;
-
   if (!stats.parJour) stats.parJour = {};
   if (!stats.parJour[today]) stats.parJour[today] = {};
   stats.parJour[today][service] = (stats.parJour[today][service] || 0) + 1;
-
   stats.totalAcces = (stats.totalAcces || 0) + 1;
 
-// Tracking visiteurs uniques via deviceId (header x-device-id uniquement — req.ip est inutile derrière Render proxy)
-const deviceId = req.headers["x-device-id"];
-if (!deviceId) return res.sendStatus(200);
-
-if (!stats.uniqueUsers) stats.uniqueUsers = { byDay:{}, byMonth:{} };
-
-// JOUR
-if (!stats.uniqueUsers.byDay[today]) stats.uniqueUsers.byDay[today] = [];
-if (!stats.uniqueUsers.byDay[today].includes(deviceId)) {
-  stats.uniqueUsers.byDay[today].push(deviceId);
-}
-
-// MOIS
-if (!stats.uniqueUsers.byMonth[month]) stats.uniqueUsers.byMonth[month] = [];
-if (!stats.uniqueUsers.byMonth[month].includes(deviceId)) {
-  stats.uniqueUsers.byMonth[month].push(deviceId);
-}
+  const deviceId = req.headers["x-device-id"] || null;
+  if (deviceId) {
+    try {
+      if (!stats.uniqueUsers) stats.uniqueUsers = { total: 0, byDay: {}, byMonth: {}, allDevices: [] };
+      const u = stats.uniqueUsers;
+      if (!u.byDay[today]) u.byDay[today] = [];
+      if (!u.byMonth[month]) u.byMonth[month] = [];
+      if (!Array.isArray(u.allDevices)) u.allDevices = [];
+      if (!u.byDay[today].includes(deviceId)) u.byDay[today].push(deviceId);
+      if (!u.byMonth[month].includes(deviceId)) u.byMonth[month].push(deviceId);
+      if (!u.allDevices.includes(deviceId)) u.allDevices.push(deviceId);
+      u.total = u.allDevices.length;
+      if (service === 'app_open' && device) {
+        const cleanDevice = sanitizeDeviceInfo(device);
+        if (!stats.deviceStats) stats.deviceStats = { byDay: {}, byMonth: {}, daySeen: {}, monthSeen: {}, appOpensByDay: {}, appOpensByMonth: {} };
+        const ds = stats.deviceStats;
+        if (!ds.daySeen[today]) ds.daySeen[today] = {};
+        if (!ds.monthSeen[month]) ds.monthSeen[month] = {};
+        if (!ds.byDay[today]) ds.byDay[today] = {};
+        if (!ds.byMonth[month]) ds.byMonth[month] = {};
+        ds.appOpensByDay[today] = (ds.appOpensByDay[today] || 0) + 1;
+        ds.appOpensByMonth[month] = (ds.appOpensByMonth[month] || 0) + 1;
+        if (!ds.daySeen[today][deviceId]) { ds.daySeen[today][deviceId] = cleanDevice; bumpDeviceBreakdown(ds.byDay[today], cleanDevice); }
+        if (!ds.monthSeen[month][deviceId]) { ds.monthSeen[month][deviceId] = cleanDevice; bumpDeviceBreakdown(ds.byMonth[month], cleanDevice); }
+        const keepDays = Object.keys(ds.daySeen).sort().slice(-90);
+        compactSeenMap(ds.daySeen, keepDays); compactSeenMap(ds.byDay, keepDays); compactSeenMap(ds.appOpensByDay, keepDays);
+        const keepMonths = Object.keys(ds.monthSeen).sort().slice(-24);
+        compactSeenMap(ds.monthSeen, keepMonths); compactSeenMap(ds.byMonth, keepMonths); compactSeenMap(ds.appOpensByMonth, keepMonths);
+      }
+    } catch(e) { console.warn('stats/track unique device:', e.message); }
+  }
   await writeStats(stats);
   res.json({ success: true });
 });
 
 app.get("/stats", async (req, res) => {
   const stats = await readStats();
-
-  const today = new Date().toISOString().slice(0,10);
-  const month = today.slice(0,7);
-
-  const uniqueToday = stats.uniqueUsers?.byDay?.[today]?.length || 0;
-  const uniqueMonth = stats.uniqueUsers?.byMonth?.[month]?.length || 0;
-
-  // tendance jour
-  const yesterday = new Date(Date.now() - 86400000)
-    .toISOString().slice(0,10);
-
-  const uniqueYesterday = stats.uniqueUsers?.byDay?.[yesterday]?.length || 0;
-
-  const trendDay = uniqueYesterday > 0
-    ? ((uniqueToday - uniqueYesterday) / uniqueYesterday) * 100
-    : 0;
-
-  // tendance mois
-  const prevMonthDate = new Date();
-  prevMonthDate.setMonth(prevMonthDate.getMonth() - 1);
-  const prevMonth = prevMonthDate.toISOString().slice(0,7);
-
-  const uniquePrevMonth = stats.uniqueUsers?.byMonth?.[prevMonth]?.length || 0;
-
-  const trendMonth = uniquePrevMonth > 0
-    ? ((uniqueMonth - uniquePrevMonth) / uniquePrevMonth) * 100
-    : 0;
-
+  const parJour = stats.parJour || {};
+  const { day: today, month } = getParisDateParts();
+  const yesterdayDate = new Date(); yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yFmt = new Intl.DateTimeFormat('fr-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(yesterdayDate);
+  const yGet = t => yFmt.find(p => p.type === t)?.value || '';
+  const yesterday = `${yGet('year')}-${yGet('month')}-${yGet('day')}`;
+  const prevMonthDate = new Date(); prevMonthDate.setMonth(prevMonthDate.getMonth() - 1);
+  const pFmt = new Intl.DateTimeFormat('fr-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(prevMonthDate);
+  const pGet = t => pFmt.find(p => p.type === t)?.value || '';
+  const prevMonth = `${pGet('year')}-${pGet('month')}`;
+  const installations = Object.entries(parJour).sort(([a],[b]) => b.localeCompare(a)).slice(0, 30).map(([date, svcs]) => ({ date, installations: svcs.installation || 0, acces: Object.values(svcs).reduce((s,v)=>s+v,0) }));
+  const accessToday = Object.values(parJour[today] || {}).reduce((a,b) => a + Number(b || 0), 0);
+  const accessYesterday = Object.values(parJour[yesterday] || {}).reduce((a,b) => a + Number(b || 0), 0);
+  const accessMonth = Object.entries(parJour).filter(([d]) => d.startsWith(month)).reduce((sum, [, svcs]) => sum + Object.values(svcs || {}).reduce((a,b)=>a + Number(b || 0), 0), 0);
+  const accessPrevMonth = Object.entries(parJour).filter(([d]) => d.startsWith(prevMonth)).reduce((sum, [, svcs]) => sum + Object.values(svcs || {}).reduce((a,b)=>a + Number(b || 0), 0), 0);
   res.json({
-    uniqueVisitors: {
-      today: uniqueToday,
-      month: uniqueMonth,
-      trendDay: Number(trendDay.toFixed(1)),
-      trendMonth: Number(trendMonth.toFixed(1))
+    totalAcces: stats.totalAcces || 0,
+    totalInstalls: stats.services?.installation || 0,
+    parService: stats.services || {},
+    derniers30jours: installations,
+    uniqueUsers: stats.uniqueUsers || { total: 0, byDay: {}, byMonth: {}, allDevices: [] },
+    deviceStats: stats.deviceStats || {},
+    overview: {
+      today, month,
+      uniqueToday: (stats.uniqueUsers?.byDay?.[today] || []).length,
+      uniqueMonth: (stats.uniqueUsers?.byMonth?.[month] || []).length,
+      uniqueYesterday: (stats.uniqueUsers?.byDay?.[yesterday] || []).length,
+      uniquePrevMonth: (stats.uniqueUsers?.byMonth?.[prevMonth] || []).length,
+      accessToday, accessYesterday, accessMonth, accessPrevMonth,
+      uniqueTrendDay: pctTrend((stats.uniqueUsers?.byDay?.[today] || []).length, (stats.uniqueUsers?.byDay?.[yesterday] || []).length),
+      uniqueTrendMonth: pctTrend((stats.uniqueUsers?.byMonth?.[month] || []).length, (stats.uniqueUsers?.byMonth?.[prevMonth] || []).length),
+      accessTrendDay: pctTrend(accessToday, accessYesterday),
+      accessTrendMonth: pctTrend(accessMonth, accessPrevMonth)
     }
   });
 });
 
-// ── Route setup webhook (à appeler une seule fois) ───────────
+// ── Route setup webhook// ── Route setup webhook (à appeler une seule fois) ───────────
 app.get("/setup-webhook", async (req, res) => {
   if (!PAGE_ACCESS_TOKEN) return res.status(500).json({ error: "PAGE_ACCESS_TOKEN manquant" });
 
