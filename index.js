@@ -11,6 +11,7 @@ const webpush   = require("web-push");
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
+app.set('trust proxy', true); // Render est derrière un reverse proxy
 
 // ─── Variables d'environnement ────────────────────────────────
 const PAGE_ACCESS_TOKEN    = process.env.PAGE_ACCESS_TOKEN;
@@ -1665,9 +1666,17 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
     return { duplicate: true };
   }
 
-  const title = msg.replace(/#app-mezieres/gi,"").replace(/\s+/g," ").trim().substring(0,120);
+  // Texte complet du post, sans le hashtag
+  const fullText = (msg || "").replace(/#app-mezieres/gi, "").trim();
+
+  // Découpage propre : 1ère ligne (non vide) = titre, reste = description
+  const lines = fullText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  const title = (lines[0] || "Actualité").substring(0, 150);
+  const description = lines.length > 1 ? lines.slice(1).join("\n").substring(0, 3000) : null;
+
   const actus = await readNews();
 
+  // Détection de doublon : même titre + même photo
   const alreadyInNews = actus.some(a =>
     (a.title || "").trim() === title &&
     (a.photo || null) === (photoUrl || null)
@@ -1685,14 +1694,17 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   const actu = {
     id: Date.now(),
     title,
+    description,                        // NOUVEAU — texte complet après la 1ère ligne
     date: new Date().toLocaleDateString("fr-FR"),
-    photo: photoUrl || null
+    dateISO: new Date().toISOString().slice(0, 10),
+    photo: photoUrl || null,
+    source: "facebook"
   };
 
   actus.unshift(actu);
-  if (actus.length > 20) actus.splice(20);
+  if (actus.length > 30) actus.splice(30);
   await writeNews(actus);
-  console.log(`💾 Actu stockée: "${title}"`);
+  console.log(`💾 Actu FB stockée: "${title}" (${description ? description.length + ' car. desc' : 'sans description'})`);
 
   if (postKey) {
     seen[postKey] = Date.now();
@@ -1702,13 +1714,20 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
     await writeSeenPosts(Object.fromEntries(entries));
   }
 
+  // Envoi notification push
   const subs = await readSubs();
   console.log(`📱 Envoi push à ${subs.length} abonné(s)`);
+
+  // Body = description (si présente) ou titre, tronqué à 200 caractères
+  const notifBody = (description || title).substring(0, 200);
+
   const payload = JSON.stringify({
-    title:"MAT — Mézières Avec Toi",
-    body:title.substring(0,80),
-    icon:"./icon-192.png",
-    badge:"./icon-192.png"
+    title: `MAT — ${title.substring(0, 60)}`,
+    body: notifBody,
+    icon: "./icon-192.png",
+    badge: "./icon-192.png",
+    image: photoUrl || undefined,
+    data: { url: "/#notifs" }
   });
 
   const dead = [];
@@ -2369,9 +2388,10 @@ app.post("/stats/track", async (req, res) => {
 
   stats.totalAcces = (stats.totalAcces || 0) + 1;
 
-  // Tracking visiteurs uniques via deviceId (header x-device-id ou IP)
-  const deviceId = req.headers["x-device-id"] || req.ip || "unknown";
-  if (deviceId !== "unknown") {
+// Tracking visiteurs uniques via deviceId (header x-device-id uniquement — req.ip est inutile derrière Render proxy)
+  const deviceId = req.headers["x-device-id"] || null;
+  
+  if (deviceId) {
     try {
       if (!stats.uniqueUsers) stats.uniqueUsers = { total: 0, byDay: {}, byMonth: {} };
       const u = stats.uniqueUsers;
