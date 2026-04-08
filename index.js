@@ -2478,9 +2478,6 @@ if (!deviceId) return res.sendStatus(200);
 
 if (!stats.uniqueUsers) stats.uniqueUsers = { byDay:{}, byMonth:{} };
 
-const today = new Date().toISOString().slice(0,10);
-const month = today.slice(0,7);
-
 // JOUR
 if (!stats.uniqueUsers.byDay[today]) stats.uniqueUsers.byDay[today] = [];
 if (!stats.uniqueUsers.byDay[today].includes(deviceId)) {
