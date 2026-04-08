@@ -158,7 +158,7 @@ function compactSeenMap(mapObj = {}, keepKeys = []) {
 // ─── CORS ─────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin",  "*");
-  res.header("Access-Control-Allow-Headers", "Content-Type, x-admin-token");
+res.header("Access-Control-Allow-Headers", "Content-Type, x-admin-token, x-device-id");
   res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   next();
 });
@@ -2518,7 +2518,7 @@ app.post("/stats/track", async (req, res) => {
   stats.parJour[today][service] = (stats.parJour[today][service] || 0) + 1;
   stats.totalAcces = (stats.totalAcces || 0) + 1;
 
-  const deviceId = req.headers["x-device-id"] || null;
+const deviceId = req.headers["x-device-id"] || req.body?.deviceId || null;
   if (deviceId) {
     try {
       if (!stats.uniqueUsers) stats.uniqueUsers = { total: 0, byDay: {}, byMonth: {}, allDevices: [] };
