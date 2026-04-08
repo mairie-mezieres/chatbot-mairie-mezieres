@@ -1485,6 +1485,7 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
         eventLocation
       );
       result.facebook = fbResult;
+      if (fbResult.warning) result.warnings.push("Facebook: " + fbResult.warning);
       // Si FB a hébergé la photo, récupérer l'URL pour stocker dans l'actu
       if (fbResult.photo_url) finalPhotoUrl = fbResult.photo_url;
     } catch (e) {
@@ -1578,6 +1579,55 @@ app.get("/admin/calendar/day", adminAuth, async (req, res) => {
 app.post("/admin/purge", adminAuth, async (req, res) => {
   const { type, beforeDate } = req.body || {};
   if (!type || !beforeDate) return res.status(400).json({ error: "type et beforeDate requis" });
+
+  const monthCutoff = beforeDate.slice(0, 7);
+
+  async function purgeStatsDaily() {
+    const stats = await readStats();
+    const keys = Object.keys(stats.parJour || {}).filter(d => d < beforeDate);
+    keys.forEach(k => delete stats.parJour[k]);
+
+    if (stats.uniqueUsers?.byDay) {
+      Object.keys(stats.uniqueUsers.byDay).filter(d => d < beforeDate).forEach(k => delete stats.uniqueUsers.byDay[k]);
+    }
+    if (stats.uniqueUsers?.byMonth) {
+      Object.keys(stats.uniqueUsers.byMonth).filter(m => m < monthCutoff).forEach(k => delete stats.uniqueUsers.byMonth[k]);
+    }
+
+    const remainingParJour = stats.parJour || {};
+    stats.services = {};
+    stats.totalAcces = 0;
+    for (const svcs of Object.values(remainingParJour)) {
+      for (const [svc, cnt] of Object.entries(svcs || {})) {
+        const n = Number(cnt || 0);
+        stats.services[svc] = (stats.services[svc] || 0) + n;
+        stats.totalAcces += n;
+      }
+    }
+
+    await writeStats(stats);
+    return keys.length;
+  }
+
+  async function purgeIaDaily() {
+    const ia = await readIaStats();
+    const keys = Object.keys(ia.daily || {}).filter(d => d < beforeDate);
+    keys.forEach(k => delete ia.daily[k]);
+    await writeIaStats(ia);
+    return keys.length;
+  }
+
+  async function purgeIaCategoriesDaily() {
+    const stats = await readStats();
+    if (!stats.iaCategories) stats.iaCategories = {};
+    const cats = stats.iaCategories.parJour || {};
+    const keys = Object.keys(cats).filter(d => d < beforeDate);
+    keys.forEach(k => delete cats[k]);
+    stats.iaCategories.parJour = cats;
+    await writeStats(stats);
+    return keys.length;
+  }
+
   let deleted = 0;
   try {
     if (type === "actus") {
@@ -1591,24 +1641,30 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
       deleted = signals.length - filtered.length;
       await writeSignals(filtered);
     } else if (type === "stats_parjour") {
-      const stats = await readStats();
-      const keys = Object.keys(stats.parJour || {}).filter(d => d < beforeDate);
-      keys.forEach(k => delete stats.parJour[k]);
-      deleted = keys.length;
-      await writeStats(stats);
+      deleted = await purgeStatsDaily();
     } else if (type === "ia_stats_daily") {
-      const ia = await readIaStats();
-      const keys = Object.keys(ia.daily || {}).filter(d => d < beforeDate);
-      keys.forEach(k => delete ia.daily[k]);
-      deleted = keys.length;
-      await writeIaStats(ia);
+      deleted = await purgeIaDaily();
     } else if (type === "ia_categories_parjour") {
-      const stats = await readStats();
-      const cats = (stats.iaCategories || {}).parJour || {};
-      const keys = Object.keys(cats).filter(d => d < beforeDate);
-      keys.forEach(k => delete cats[k]);
-      deleted = keys.length;
-      await writeStats(stats);
+      deleted = await purgeIaCategoriesDaily();
+    } else if (type === "all") {
+      const [a, s, st, iaD, iaC] = await Promise.all([
+        (async () => {
+          const actus = await readNews();
+          const filtered = actus.filter(x => (x.dateISO || "") >= beforeDate);
+          await writeNews(filtered);
+          return actus.length - filtered.length;
+        })(),
+        (async () => {
+          const signals = await readSignals();
+          const filtered = signals.filter(x => (x.dateISO || "") >= beforeDate);
+          await writeSignals(filtered);
+          return signals.length - filtered.length;
+        })(),
+        purgeStatsDaily(),
+        purgeIaDaily(),
+        purgeIaCategoriesDaily()
+      ]);
+      deleted = a + s + st + iaD + iaC;
     } else {
       return res.status(400).json({ error: "type inconnu" });
     }
@@ -1618,6 +1674,7 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
   }
 });
 
+// ── Route : visiteurs uniques ─────────────────────────────────────────────────
 // ── Route : visiteurs uniques ─────────────────────────────────────────────────
 // Exposé via /admin/dashboard dans le champ app.uniqueUsers
 
@@ -1753,54 +1810,81 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
 // ═══════════════════════════════════════════════════════════════
 
 // ── Publier une actu sur Facebook (sans #app-mezieres) ───────
+function buildFacebookActuMessage(title, description) {
+  const cleanTitle = String(title || '').trim();
+  const cleanDescription = String(description || '').trim();
+  const parts = [];
+
+  if (cleanTitle) parts.push(`📢 ${cleanTitle}`);
+  if (cleanDescription) {
+    const normalized = cleanDescription
+      .replace(/\r/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    parts.push(normalized);
+  }
+
+  return parts.join('\n\n').substring(0, 5000).trim();
+}
+
+async function postFacebookFeed(pageId, message) {
+  const r = await axios.post(
+    `https://graph.facebook.com/v19.0/${pageId}/feed`,
+    { message, access_token: PAGE_ACCESS_TOKEN }
+  );
+  return { ok: true, mode: 'feed', post_id: r.data.id };
+}
+
+async function postFacebookPhoto(pageId, message, imageBase64) {
+  const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
+  const FormData = require("form-data");
+  const form = new FormData();
+  form.append("source", imageBuffer, { filename: "photo.jpg", contentType: "image/jpeg" });
+  form.append("message", message);
+  form.append("access_token", PAGE_ACCESS_TOKEN);
+
+  const r = await axios.post(
+    `https://graph.facebook.com/v19.0/${pageId}/photos`,
+    form,
+    { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
+  );
+  return {
+    ok: true,
+    mode: 'photo',
+    post_id: r.data.post_id || r.data.id,
+    photo_id: r.data.id,
+    photo_url: `https://graph.facebook.com/${r.data.id}/picture`
+  };
+}
+
 async function publishActuToFacebook(title, description, imageBase64, eventDate, eventLocation) {
   const pageId = await resolveFacebookPageId();
   if (!pageId || !PAGE_ACCESS_TOKEN) {
     throw new Error("Page Facebook ou token manquant");
   }
 
-  // Construction du message (sans #app-mezieres pour éviter double notif)
-  let message = title;
-  if (description) message += `\n\n${description}`;
-  if (eventDate) {
-    const d = new Date(eventDate);
-    const dateStr = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-    const hasTime = /T\d{2}:\d{2}/.test(eventDate);
-    const timeStr = hasTime ? ` à ${d.getHours().toString().padStart(2,'0')}h${d.getMinutes().toString().padStart(2,'0')}` : "";
-    message += `\n\n📅 ${dateStr}${timeStr}`;
-    if (eventLocation) message += `\n📍 ${eventLocation}`;
-  }
+  const message = buildFacebookActuMessage(title, description);
 
   try {
     if (imageBase64) {
-      // Publier avec photo : POST /{page-id}/photos
-      const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
-      const FormData = require("form-data");
-      const form = new FormData();
-      form.append("source", imageBuffer, { filename: "photo.jpg", contentType: "image/jpeg" });
-      form.append("message", message);
-      form.append("access_token", PAGE_ACCESS_TOKEN);
-
-      const r = await axios.post(
-        `https://graph.facebook.com/v19.0/${pageId}/photos`,
-        form,
-        { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
-      );
-      return { ok: true, post_id: r.data.post_id || r.data.id, photo_id: r.data.id, photo_url: `https://graph.facebook.com/${r.data.id}/picture` };
-    } else {
-      // Post texte simple : POST /{page-id}/feed
-      const r = await axios.post(
-        `https://graph.facebook.com/v19.0/${pageId}/feed`,
-        { message, access_token: PAGE_ACCESS_TOKEN }
-      );
-      return { ok: true, post_id: r.data.id };
+      try {
+        return await postFacebookPhoto(pageId, message, imageBase64);
+      } catch (photoErr) {
+        console.warn("⚠️ Photo Facebook impossible, fallback feed:", photoErr.response?.data || photoErr.message);
+        const fallback = await postFacebookFeed(pageId, message);
+        fallback.warning = "Image non publiée sur Facebook, texte publié à la place.";
+        return fallback;
+      }
     }
+
+    return await postFacebookFeed(pageId, message);
   } catch (e) {
     console.error("❌ publishActuToFacebook:", e.response?.data || e.message);
     throw new Error(e.response?.data?.error?.message || e.message);
   }
 }
 
+// ── Envoyer notification push pour une actu ──────────────────
 // ── Envoyer notification push pour une actu ──────────────────
 async function sendActuPush(title, description, photoUrl) {
   const subs = await readSubs();
@@ -2389,46 +2473,66 @@ app.post("/stats/track", async (req, res) => {
   stats.totalAcces = (stats.totalAcces || 0) + 1;
 
 // Tracking visiteurs uniques via deviceId (header x-device-id uniquement — req.ip est inutile derrière Render proxy)
-  const deviceId = req.headers["x-device-id"] || null;
-  
-  if (deviceId) {
-    try {
-      if (!stats.uniqueUsers) stats.uniqueUsers = { total: 0, byDay: {}, byMonth: {} };
-      const u = stats.uniqueUsers;
-      if (!u.byDay[today]) u.byDay[today] = [];
-      if (!u.byMonth[month]) u.byMonth[month] = [];
-      // Ajouter deviceId s'il est nouveau pour cette période
-      const isNewToday   = !u.byDay[today].includes(deviceId);
-      const isNewMonth   = !u.byMonth[month].includes(deviceId);
-      const isNewTotal   = !(u.allDevices || []).includes(deviceId);
-      if (isNewToday)  { u.byDay[today].push(deviceId); }
-      if (isNewMonth)  { u.byMonth[month].push(deviceId); }
-      if (isNewTotal)  { if (!u.allDevices) u.allDevices = []; u.allDevices.push(deviceId); u.total = u.allDevices.length; }
-    } catch(_) {}
-  }
+const deviceId = req.headers["x-device-id"];
+if (!deviceId) return res.sendStatus(200);
 
+if (!stats.uniqueUsers) stats.uniqueUsers = { byDay:{}, byMonth:{} };
+
+const today = new Date().toISOString().slice(0,10);
+const month = today.slice(0,7);
+
+// JOUR
+if (!stats.uniqueUsers.byDay[today]) stats.uniqueUsers.byDay[today] = [];
+if (!stats.uniqueUsers.byDay[today].includes(deviceId)) {
+  stats.uniqueUsers.byDay[today].push(deviceId);
+}
+
+// MOIS
+if (!stats.uniqueUsers.byMonth[month]) stats.uniqueUsers.byMonth[month] = [];
+if (!stats.uniqueUsers.byMonth[month].includes(deviceId)) {
+  stats.uniqueUsers.byMonth[month].push(deviceId);
+}
   await writeStats(stats);
   res.json({ success: true });
 });
 
 app.get("/stats", async (req, res) => {
   const stats = await readStats();
-  const parJour = stats.parJour || {};
 
-  const installations = Object.entries(parJour)
-    .sort(([a],[b]) => b.localeCompare(a))
-    .slice(0, 30)
-    .map(([date, svcs]) => ({
-      date,
-      installations: svcs.installation || 0,
-      acces: Object.values(svcs).reduce((s,v)=>s+v,0)
-    }));
+  const today = new Date().toISOString().slice(0,10);
+  const month = today.slice(0,7);
+
+  const uniqueToday = stats.uniqueUsers?.byDay?.[today]?.length || 0;
+  const uniqueMonth = stats.uniqueUsers?.byMonth?.[month]?.length || 0;
+
+  // tendance jour
+  const yesterday = new Date(Date.now() - 86400000)
+    .toISOString().slice(0,10);
+
+  const uniqueYesterday = stats.uniqueUsers?.byDay?.[yesterday]?.length || 0;
+
+  const trendDay = uniqueYesterday > 0
+    ? ((uniqueToday - uniqueYesterday) / uniqueYesterday) * 100
+    : 0;
+
+  // tendance mois
+  const prevMonthDate = new Date();
+  prevMonthDate.setMonth(prevMonthDate.getMonth() - 1);
+  const prevMonth = prevMonthDate.toISOString().slice(0,7);
+
+  const uniquePrevMonth = stats.uniqueUsers?.byMonth?.[prevMonth]?.length || 0;
+
+  const trendMonth = uniquePrevMonth > 0
+    ? ((uniqueMonth - uniquePrevMonth) / uniquePrevMonth) * 100
+    : 0;
 
   res.json({
-    totalAcces:      stats.totalAcces || 0,
-    totalInstalls:   stats.services?.installation || 0,
-    parService:      stats.services || {},
-    derniers30jours: installations,
+    uniqueVisitors: {
+      today: uniqueToday,
+      month: uniqueMonth,
+      trendDay: Number(trendDay.toFixed(1)),
+      trendMonth: Number(trendMonth.toFixed(1))
+    }
   });
 });
 
