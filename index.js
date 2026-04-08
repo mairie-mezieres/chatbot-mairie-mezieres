@@ -2530,49 +2530,23 @@ app.post("/stats/track", async (req, res) => {
       if (!u.byMonth[month].includes(deviceId)) u.byMonth[month].push(deviceId);
       if (!u.allDevices.includes(deviceId)) u.allDevices.push(deviceId);
       u.total = u.allDevices.length;
-
-      if (!stats.deviceStats) {
-        stats.deviceStats = { byDay: {}, byMonth: {}, daySeen: {}, monthSeen: {}, appOpensByDay: {}, appOpensByMonth: {} };
-      }
-      const ds = stats.deviceStats;
-      if (!ds.daySeen[today]) ds.daySeen[today] = {};
-      if (!ds.monthSeen[month]) ds.monthSeen[month] = {};
-      if (!ds.byDay[today]) ds.byDay[today] = {};
-      if (!ds.byMonth[month]) ds.byMonth[month] = {};
-
-      if (service === 'app_open') {
+      if (service === 'app_open' && device) {
+        const cleanDevice = sanitizeDeviceInfo(device);
+        if (!stats.deviceStats) stats.deviceStats = { byDay: {}, byMonth: {}, daySeen: {}, monthSeen: {}, appOpensByDay: {}, appOpensByMonth: {} };
+        const ds = stats.deviceStats;
+        if (!ds.daySeen[today]) ds.daySeen[today] = {};
+        if (!ds.monthSeen[month]) ds.monthSeen[month] = {};
+        if (!ds.byDay[today]) ds.byDay[today] = {};
+        if (!ds.byMonth[month]) ds.byMonth[month] = {};
         ds.appOpensByDay[today] = (ds.appOpensByDay[today] || 0) + 1;
         ds.appOpensByMonth[month] = (ds.appOpensByMonth[month] || 0) + 1;
+        if (!ds.daySeen[today][deviceId]) { ds.daySeen[today][deviceId] = cleanDevice; bumpDeviceBreakdown(ds.byDay[today], cleanDevice); }
+        if (!ds.monthSeen[month][deviceId]) { ds.monthSeen[month][deviceId] = cleanDevice; bumpDeviceBreakdown(ds.byMonth[month], cleanDevice); }
+        const keepDays = Object.keys(ds.daySeen).sort().slice(-90);
+        compactSeenMap(ds.daySeen, keepDays); compactSeenMap(ds.byDay, keepDays); compactSeenMap(ds.appOpensByDay, keepDays);
+        const keepMonths = Object.keys(ds.monthSeen).sort().slice(-24);
+        compactSeenMap(ds.monthSeen, keepMonths); compactSeenMap(ds.byMonth, keepMonths); compactSeenMap(ds.appOpensByMonth, keepMonths);
       }
-
-      let cleanDevice;
-      if (device) {
-        cleanDevice = sanitizeDeviceInfo(device);
-      } else if (ds.daySeen[today][deviceId]) {
-        cleanDevice = ds.daySeen[today][deviceId];
-      } else if (ds.monthSeen[month][deviceId]) {
-        cleanDevice = ds.monthSeen[month][deviceId];
-      } else {
-        cleanDevice = sanitizeDeviceInfo({});
-      }
-
-      if (!ds.daySeen[today][deviceId]) {
-        ds.daySeen[today][deviceId] = cleanDevice;
-        bumpDeviceBreakdown(ds.byDay[today], cleanDevice);
-      }
-      if (!ds.monthSeen[month][deviceId]) {
-        ds.monthSeen[month][deviceId] = cleanDevice;
-        bumpDeviceBreakdown(ds.byMonth[month], cleanDevice);
-      }
-
-      const keepDays = Object.keys(ds.daySeen).sort().slice(-90);
-      compactSeenMap(ds.daySeen, keepDays);
-      compactSeenMap(ds.byDay, keepDays);
-      compactSeenMap(ds.appOpensByDay, keepDays);
-      const keepMonths = Object.keys(ds.monthSeen).sort().slice(-24);
-      compactSeenMap(ds.monthSeen, keepMonths);
-      compactSeenMap(ds.byMonth, keepMonths);
-      compactSeenMap(ds.appOpensByMonth, keepMonths);
     } catch(e) { console.warn('stats/track unique device:', e.message); }
   }
   await writeStats(stats);
