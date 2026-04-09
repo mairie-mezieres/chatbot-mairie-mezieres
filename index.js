@@ -1682,7 +1682,7 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
   // 4. Envoyer notification push
   if (sendPush) {
     try {
-      result.push = await sendActuPush(cleanTitle, cleanDescription, finalPhotoUrl);
+      result.push = await sendActuPush(cleanTitle, cleanDescription, finalPhotoUrl, actu.id);
     } catch (e) {
       result.warnings.push("Push: " + e.message);
       result.push = { ok: false, error: e.message };
@@ -1955,37 +1955,10 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   }
 
   // Envoi notification push
-  const subs = await readSubs();
-  console.log(`📱 Envoi push à ${subs.length} abonné(s)`);
+  const pushResult = await sendActuPush(title, description, photoUrl, actu.id);
+  console.log(`📱 Envoi push à ${pushResult.total || 0} abonné(s)`);
 
-  // Body = description (si présente) ou titre, tronqué à 200 caractères
-  const notifBody = (description || title).substring(0, 200);
-
-  const payload = JSON.stringify({
-    title: `MAT — ${title.substring(0, 60)}`,
-    body: notifBody,
-    icon: "./icon-192.png",
-    badge: "./icon-192.png",
-    image: photoUrl || undefined,
-    data: { url: "/#notifs" }
-  });
-
-  const dead = [];
-  for (const sub of subs) {
-    try {
-      await webpush.sendNotification(sub, payload);
-    } catch(e) {
-      if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
-    }
-  }
-
-  if (dead.length) {
-    const alive = subs.filter(s => !dead.includes(s.endpoint));
-    await writeSubs(alive);
-    console.log(`🗑️ ${dead.length} subscription(s) expirée(s) supprimée(s)`);
-  }
-
-  return { duplicate: false };
+  return { duplicate: false, push: pushResult };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2062,19 +2035,32 @@ async function publishActuToFacebook(title, description, imageBase64, eventDate,
 
 // ── Envoyer notification push pour une actu
 
-// ── Envoyer notification push pour une actu// ── Envoyer notification push pour une actu ──────────────────
-async function sendActuPush(title, description, photoUrl) {
-  const subs = await readSubs();
-  if (!subs.length) return { sent: 0, failed: 0 };
+// ── Envoyer notification push pour une actu ──────────────────
+function buildActuPushPayload(title, description, photoUrl, actuId) {
+  const safeId = actuId != null ? String(actuId) : "";
+  const detailHash = safeId ? `/#actu=${encodeURIComponent(safeId)}` : "/#notifs";
 
-  const payload = JSON.stringify({
-    title: `MAT — ${title.substring(0, 60)}`,
-    body: (description || title).substring(0, 150),
+  return JSON.stringify({
+    title: `MAT — ${String(title || "").substring(0, 60)}`,
+    body: String(description || title || "").substring(0, 150),
     icon: "./icon-192.png",
     badge: "./icon-192.png",
     image: photoUrl || undefined,
-    data: { url: "/#notifs" }
+    actions: [{ action: "detail", title: "Détail" }],
+    data: {
+      url: detailHash,
+      listUrl: "/#notifs",
+      actuId: safeId || null,
+      open: safeId ? "actu" : "notifs"
+    }
   });
+}
+
+async function sendActuPush(title, description, photoUrl, actuId) {
+  const subs = await readSubs();
+  if (!subs.length) return { sent: 0, failed: 0, total: 0 };
+
+  const payload = buildActuPushPayload(title, description, photoUrl, actuId);
 
   let sent = 0, failed = 0;
   const dead = [];
