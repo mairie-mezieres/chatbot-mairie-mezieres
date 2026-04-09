@@ -14,7 +14,8 @@
     "form-data": "^4.0.0",
     "googleapis": "^134.0.0",
     "string-similarity": "^4.0.4",
-    "web-push": "^3.6.0"
+    "web-push": "^3.6.0",
+    "cloudinary": "^2.9.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"
