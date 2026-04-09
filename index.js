@@ -8,6 +8,7 @@ const express   = require("express");
 const axios     = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const webpush   = require("web-push");
+const cloudinary = require("cloudinary").v2;
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -23,6 +24,11 @@ const VAPID_PRIVATE_KEY    = process.env.VAPID_PRIVATE_KEY;
 const VAPID_EMAIL          = "mailto:mairie@mezieres-lez-clery.fr";
 const REDIS_URL            = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN          = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+const CLOUDINARY_NAME      = process.env.CLOUDINARY_NAME || "";
+const CLOUDINARY_KEY       = process.env.CLOUDINARY_KEY || "";
+const CLOUDINARY_SECRET    = process.env.CLOUDINARY_SECRET || "";
+const CLOUDINARY_ENABLED   = !!(CLOUDINARY_NAME && CLOUDINARY_KEY && CLOUDINARY_SECRET);
 
 const MISTRAL_API_KEY      = process.env.MISTRAL_API_KEY || "";
 const MISTRAL_MODEL        = process.env.MISTRAL_MODEL || "mistral-small-latest";
@@ -53,6 +59,16 @@ const OPEN_METEO_TZ             = process.env.OPEN_METEO_TZ || "Europe/Paris";
 const WEATHER_CHECK_INTERVAL_MS = Number(process.env.WEATHER_CHECK_INTERVAL_MS || 15 * 60 * 1000);
 
 const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
+
+if (CLOUDINARY_ENABLED) {
+  cloudinary.config({
+    cloud_name: CLOUDINARY_NAME,
+    api_key: CLOUDINARY_KEY,
+    api_secret: CLOUDINARY_SECRET,
+    secure: true
+  });
+  console.log("✅ Cloudinary configuré");
+}
 
 // ─── Web Push VAPID ───────────────────────────────────────────
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
@@ -109,6 +125,38 @@ async function readMelCache()           { return (await redisGet("mat:mel:cache"
 async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
 async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
+
+function getDataUriMimeType(dataUri = "") {
+  const m = String(dataUri).match(/^data:([^;]+);base64,/i);
+  return (m?.[1] || "image/jpeg").toLowerCase();
+}
+
+async function uploadActuImageToCloudinary(imageBase64) {
+  if (!imageBase64) return null;
+  if (!CLOUDINARY_ENABLED) throw new Error("Cloudinary non configuré");
+
+  const mimeType = getDataUriMimeType(imageBase64);
+  return await cloudinary.uploader.upload(imageBase64, {
+    folder: "mat/actus",
+    resource_type: "image",
+    overwrite: false,
+    invalidate: false,
+    use_filename: false,
+    unique_filename: true,
+    format: mimeType.includes("png") ? "png" : undefined
+  });
+}
+
+async function deleteActuImageFromCloudinary(publicId) {
+  if (!publicId) return { result: "skipped" };
+  if (!CLOUDINARY_ENABLED) throw new Error("Cloudinary non configuré");
+
+  return await cloudinary.uploader.destroy(publicId, {
+    resource_type: "image",
+    type: "upload",
+    invalidate: true
+  });
+}
 
 function getParisDateParts() {
   const now = new Date();
@@ -1483,11 +1531,24 @@ app.get("/admin/actus", adminAuth, async (req, res) => {
 app.delete("/admin/actus/:id", adminAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const actus = await readNews();
+  const actu = actus.find(a => a.id === id);
+  if (!actu) return res.status(404).json({ error: "Actu non trouvée" });
+
+  let cloudinaryResult = null;
+  if (actu.photoPublicId) {
+    try {
+      cloudinaryResult = await deleteActuImageFromCloudinary(actu.photoPublicId);
+    } catch (e) {
+      return res.status(502).json({ error: "Suppression Cloudinary impossible : " + e.message });
+    }
+  }
+
   const filtered = actus.filter(a => a.id !== id);
-  if (filtered.length === actus.length) return res.status(404).json({ error: "Actu non trouvée" });
   await writeNews(filtered);
-  res.json({ ok: true, deleted: id });
+  res.json({ ok: true, deleted: id, cloudinary: cloudinaryResult });
 });
+
+// ── Liste signalements (admin)
 
 // ── Liste signalements (admin) ────────────────────────────────
 app.get("/admin/signals", adminAuth, async (req, res) => {
@@ -1543,6 +1604,10 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
     return res.status(400).json({ error: "title requis" });
   }
 
+  if (publishFacebook && !imageBase64) {
+    return res.status(400).json({ error: "imageBase64 requis pour publier sur Facebook avec image" });
+  }
+
   const cleanTitle = String(title).trim().substring(0, 150);
   const cleanDescription = String(description || "").trim().substring(0, 3000);
 
@@ -1550,13 +1615,33 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
     ok: true,
     actu: null,
     facebook: null,
+    cloudinary: null,
     push: null,
     calendar: null,
     warnings: []
   };
 
-  // 1. Publier sur Facebook EN PREMIER (pour récupérer l'URL de la photo hébergée)
+  // 1. Uploader l'image vers Cloudinary en premier pour stocker une URL stable + public_id supprimable
   let finalPhotoUrl = imageUrl || null;
+  let finalPhotoPublicId = null;
+  if (imageBase64) {
+    try {
+      const upload = await uploadActuImageToCloudinary(imageBase64);
+      finalPhotoUrl = upload.secure_url || upload.url || finalPhotoUrl;
+      finalPhotoPublicId = upload.public_id || null;
+      result.cloudinary = {
+        ok: true,
+        public_id: upload.public_id,
+        asset_id: upload.asset_id || null,
+        secure_url: upload.secure_url || upload.url || null
+      };
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: "Cloudinary: " + e.message });
+    }
+  }
+
+  // 2. Publier sur Facebook avec image quand imageBase64 est fourni.
+  //    Si l'image Facebook échoue, on annule la création pour éviter une actu partielle.
   if (publishFacebook) {
     try {
       const fbResult = await publishActuToFacebook(
@@ -1567,15 +1652,15 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
         eventLocation
       );
       result.facebook = fbResult;
-      // Si FB a hébergé la photo, récupérer l'URL pour stocker dans l'actu
-      if (fbResult.photo_url) finalPhotoUrl = fbResult.photo_url;
     } catch (e) {
-      result.warnings.push("Facebook: " + e.message);
-      result.facebook = { ok: false, error: e.message };
+      if (finalPhotoPublicId) {
+        try { await deleteActuImageFromCloudinary(finalPhotoPublicId); } catch (_) {}
+      }
+      return res.status(502).json({ ok: false, error: "Facebook: " + e.message });
     }
   }
 
-  // 2. Stocker l'actu dans Redis (pour affichage dans la PWA)
+  // 3. Stocker l'actu dans Redis (pour affichage dans la PWA)
   const actus = await readNews();
   const actu = {
     id: Date.now(),
@@ -1584,6 +1669,7 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
     date: new Date().toLocaleDateString("fr-FR"),
     dateISO: new Date().toISOString().slice(0, 10),
     photo: finalPhotoUrl,
+    photoPublicId: finalPhotoPublicId,
     eventDate: eventDate || null,
     eventLocation: eventLocation || null,
     source: "admin"
@@ -1593,7 +1679,7 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
   await writeNews(actus);
   result.actu = actu;
 
-  // 3. Envoyer notification push
+  // 4. Envoyer notification push
   if (sendPush) {
     try {
       result.push = await sendActuPush(cleanTitle, cleanDescription, finalPhotoUrl);
@@ -1603,7 +1689,7 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
     }
   }
 
-  // 4. Créer/remplacer événement Google Agenda
+  // 5. Créer/remplacer événement Google Agenda
   if (createCalendar && eventDate) {
     try {
       result.calendar = await upsertGoogleCalendarEvent(
@@ -1620,6 +1706,8 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
 
   res.json(result);
 });
+
+// ── Route : lister événements calendar d'un jour donné (doublon check)
 
 // ── Route : lister événements calendar d'un jour donné (doublon check) ──
 app.get("/admin/calendar/day", adminAuth, async (req, res) => {
@@ -1660,30 +1748,59 @@ app.get("/admin/calendar/day", adminAuth, async (req, res) => {
 app.post("/admin/purge", adminAuth, async (req, res) => {
   const { type, beforeDate } = req.body || {};
   if (!type || !beforeDate) return res.status(400).json({ error: "type et beforeDate requis" });
+
   let deleted = 0;
+  const cloudinaryResults = [];
+
+  async function cleanupActusImages(actusToDelete = []) {
+    for (const actu of actusToDelete) {
+      if (!actu.photoPublicId) continue;
+      try {
+        const r = await deleteActuImageFromCloudinary(actu.photoPublicId);
+        cloudinaryResults.push({
+          id: actu.id,
+          publicId: actu.photoPublicId,
+          result: r?.result || "ok"
+        });
+      } catch (e) {
+        cloudinaryResults.push({
+          id: actu.id,
+          publicId: actu.photoPublicId,
+          error: e.message
+        });
+      }
+    }
+  }
+
   try {
     if (type === "actus") {
       const actus = await readNews();
+      const toDelete = actus.filter(a => (a.dateISO || "") < beforeDate);
       const filtered = actus.filter(a => (a.dateISO || "") >= beforeDate);
+      await cleanupActusImages(toDelete);
       deleted = actus.length - filtered.length;
       await writeNews(filtered);
+
     } else if (type === "signals") {
       const signals = await readSignals();
       const filtered = signals.filter(s => (s.dateISO || "") >= beforeDate);
       deleted = signals.length - filtered.length;
       await writeSignals(filtered);
+
     } else if (type === "stats_parjour") {
       const stats = await readStats();
       const keys = Object.keys(stats.parJour || {}).filter(d => d < beforeDate);
       keys.forEach(k => delete stats.parJour[k]);
       deleted = keys.length;
       await writeStats(stats);
+
     } else if (type === "ia_stats_daily") {
       const ia = await readIaStats();
       const keys = Object.keys(ia.daily || {}).filter(d => d < beforeDate);
       keys.forEach(k => delete ia.daily[k]);
       deleted = keys.length;
       await writeIaStats(ia);
+
     } else if (type === "ia_categories_parjour") {
       const stats = await readStats();
       const cats = (stats.iaCategories || {}).parJour || {};
@@ -1691,18 +1808,24 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
       keys.forEach(k => delete cats[k]);
       deleted = keys.length;
       await writeStats(stats);
+
     } else if (type === "all_before") {
       const stats = await readStats();
       const ia = await readIaStats();
       const cutoffMonth = beforeDate.slice(0, 7);
+
       const actus = await readNews();
+      const oldActus = actus.filter(a => (a.dateISO || "") < beforeDate);
       const filteredActus = actus.filter(a => (a.dateISO || "") >= beforeDate);
+      await cleanupActusImages(oldActus);
       deleted += actus.length - filteredActus.length;
       await writeNews(filteredActus);
+
       const signals = await readSignals();
       const filteredSignals = signals.filter(s => (s.dateISO || "") >= beforeDate);
       deleted += signals.length - filteredSignals.length;
       await writeSignals(filteredSignals);
+
       for (const key of Object.keys(stats.parJour || {}).filter(d => d < beforeDate)) { delete stats.parJour[key]; deleted++; }
       if (stats.uniqueUsers?.byDay) for (const key of Object.keys(stats.uniqueUsers.byDay).filter(d => d < beforeDate)) { delete stats.uniqueUsers.byDay[key]; deleted++; }
       if (stats.uniqueUsers?.byMonth) for (const key of Object.keys(stats.uniqueUsers.byMonth).filter(m => m < cutoffMonth)) { delete stats.uniqueUsers.byMonth[key]; deleted++; }
@@ -1716,17 +1839,24 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
         for (const key of Object.keys(ds.monthSeen || {}).filter(m => m < cutoffMonth)) { delete ds.monthSeen[key]; deleted++; }
         for (const key of Object.keys(ds.appOpensByMonth || {}).filter(m => m < cutoffMonth)) { delete ds.appOpensByMonth[key]; deleted++; }
       }
+
       for (const key of Object.keys(ia.daily || {}).filter(d => d < beforeDate)) { delete ia.daily[key]; deleted++; }
       await writeStats(stats);
       await writeIaStats(ia);
+
     } else {
       return res.status(400).json({ error: "type inconnu" });
     }
-    res.json({ ok: true, deleted });
+
+    const extra = cloudinaryResults.length ? { cloudinary: cloudinaryResults } : {};
+    res.json({ ok: true, deleted, ...extra });
+
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ── Route : visiteurs uniques// ── Route : visiteurs uniques
 
 // ── Route : visiteurs uniques// ── Route : visiteurs uniques ─────────────────────────────────────────────────
 // Exposé via /admin/dashboard dans le champ app.uniqueUsers
@@ -1901,38 +2031,36 @@ async function publishActuToFacebook(title, description, imageBase64, eventDate,
 
   try {
     if (imageBase64) {
-      try {
-        const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
-        const FormData = require("form-data");
-        const form = new FormData();
-        form.append("source", imageBuffer, { filename: "photo.jpg", contentType: "image/jpeg" });
-        form.append("message", message);
-        form.append("access_token", PAGE_ACCESS_TOKEN);
-        const r = await axios.post(
-          `https://graph.facebook.com/v19.0/${pageId}/photos`,
-          form,
-          { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
-        );
-        return {
-          ok: true,
-          mode: 'photo',
-          post_id: r.data.post_id || r.data.id,
-          photo_id: r.data.id,
-          photo_url: `https://graph.facebook.com/${r.data.id}/picture`,
-          fallbackUsed: false
-        };
-      } catch (photoErr) {
-        console.warn('⚠️ Publication photo Facebook échouée, fallback texte:', photoErr.response?.data || photoErr.message);
-        const textOnly = await postTextOnly();
-        return { ...textOnly, fallbackUsed: true, fallbackReason: photoErr.response?.data?.error?.message || photoErr.message };
-      }
+      const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
+      const FormData = require("form-data");
+      const form = new FormData();
+      form.append("source", imageBuffer, { filename: "photo.jpg", contentType: getDataUriMimeType(imageBase64) || "image/jpeg" });
+      form.append("message", message);
+      form.append("access_token", PAGE_ACCESS_TOKEN);
+      const r = await axios.post(
+        `https://graph.facebook.com/v19.0/${pageId}/photos`,
+        form,
+        { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
+      );
+      return {
+        ok: true,
+        mode: 'photo',
+        post_id: r.data.post_id || r.data.id,
+        photo_id: r.data.id,
+        photo_url: `https://graph.facebook.com/${r.data.id}/picture`,
+        fallbackUsed: false
+      };
     }
+
     return await postTextOnly();
   } catch (e) {
     console.error("❌ publishActuToFacebook:", e.response?.data || e.message);
     throw new Error(e.response?.data?.error?.message || e.message);
   }
 }
+
+
+// ── Envoyer notification push pour une actu
 
 // ── Envoyer notification push pour une actu// ── Envoyer notification push pour une actu ──────────────────
 async function sendActuPush(title, description, photoUrl) {
