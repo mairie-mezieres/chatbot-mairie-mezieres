@@ -3217,7 +3217,7 @@ app.get("/admin/services/test", adminAuth, async (req, res) => {
     if (!PAGE_ACCESS_TOKEN) {
       return { status: "warn", message: "Facebook non configuré", details: { has_page_token: false } };
     }
-    const pageId = await getFacebookPageId();
+    const pageId = await resolveFacebookPageId();
     if (!pageId) throw new Error("Impossible de résoudre l'identifiant de page");
     const pageInfo = await axios.get(`https://graph.facebook.com/v19.0/${pageId}`, {
       params: { access_token: PAGE_ACCESS_TOKEN, fields: "id,name" },
