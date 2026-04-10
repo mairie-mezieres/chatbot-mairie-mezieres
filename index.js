@@ -4,6 +4,7 @@
 // Facebook feed only (plus de MEL sur Messenger)
 // ════════════════════════════════════════════════════════════
 
+
 const express   = require("express");
 const axios     = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
@@ -3001,17 +3002,21 @@ app.get("/admin/services/test", adminAuth, async (req, res) => {
         durationMs: Date.now() - started,
       };
     } catch (e) {
-      return {
-        key,
-        label,
-        icon,
-        status: "danger",
-        message: e.response?.data?.error || e.message || "Erreur",
-        details: e.response?.data || null,
-        checkedAt,
-        durationMs: Date.now() - started,
-      };
-    }
+  const apiError = e.response?.data?.error;
+  return {
+    key,
+    label,
+    icon,
+    status: "danger",
+    message:
+      (typeof apiError === "string" ? apiError : apiError?.message) ||
+      e.message ||
+      "Erreur",
+    details: apiError || e.response?.data || null,
+    checkedAt,
+    durationMs: Date.now() - started,
+  };
+}
   }
 
   const services = [];
@@ -3213,22 +3218,24 @@ app.get("/admin/services/test", adminAuth, async (req, res) => {
     };
   }));
 
-  services.push(await runCheck("facebook", "Facebook Page", "📘", async () => {
-    if (!PAGE_ACCESS_TOKEN) {
-      return { status: "warn", message: "Facebook non configuré", details: { has_page_token: false } };
-    }
-    const pageId = await resolveFacebookPageId();
-    if (!pageId) throw new Error("Impossible de résoudre l'identifiant de page");
-    const pageInfo = await axios.get(`https://graph.facebook.com/v19.0/${pageId}`, {
-      params: { access_token: PAGE_ACCESS_TOKEN, fields: "id,name" },
-      timeout: 10000
-    });
-    return {
-      status: "ok",
-      message: `Page connectée : ${pageInfo.data?.name || pageId}`,
-      details: { page_id: pageInfo.data?.id || pageId, page_name: pageInfo.data?.name || null }
-    };
-  }));
+services.push(await runCheck("facebook", "Facebook Page", "📘", async () => {
+  if (!PAGE_ACCESS_TOKEN) {
+    return { status: "warn", message: "Facebook non configuré", details: { has_page_token: false } };
+  }
+  const pageId = await resolveFacebookPageId();
+  if (!pageId) throw new Error("Impossible de résoudre l'identifiant de page");
+
+  const pageInfo = await axios.get(`https://graph.facebook.com/v19.0/${pageId}`, {
+    params: { access_token: PAGE_ACCESS_TOKEN, fields: "id,name" },
+    timeout: 10000
+  });
+
+  return {
+    status: "ok",
+    message: `Page connectée : ${pageInfo.data?.name || pageId}`,
+    details: { page_id: pageInfo.data?.id || pageId, page_name: pageInfo.data?.name || null }
+  };
+}));
 
   services.push(await runCheck("push", "Notifications push", "🔔", async () => {
     const subs = await readSubs();
