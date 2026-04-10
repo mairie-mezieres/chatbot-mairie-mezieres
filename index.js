@@ -8,7 +8,6 @@ const express   = require("express");
 const axios     = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const webpush   = require("web-push");
-const cloudinary = require("cloudinary").v2;
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -24,11 +23,6 @@ const VAPID_PRIVATE_KEY    = process.env.VAPID_PRIVATE_KEY;
 const VAPID_EMAIL          = "mailto:mairie@mezieres-lez-clery.fr";
 const REDIS_URL            = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN          = process.env.UPSTASH_REDIS_REST_TOKEN;
-
-const CLOUDINARY_NAME      = process.env.CLOUDINARY_NAME || "";
-const CLOUDINARY_KEY       = process.env.CLOUDINARY_KEY || "";
-const CLOUDINARY_SECRET    = process.env.CLOUDINARY_SECRET || "";
-const CLOUDINARY_ENABLED   = !!(CLOUDINARY_NAME && CLOUDINARY_KEY && CLOUDINARY_SECRET);
 
 const MISTRAL_API_KEY      = process.env.MISTRAL_API_KEY || "";
 const MISTRAL_MODEL        = process.env.MISTRAL_MODEL || "mistral-small-latest";
@@ -59,16 +53,6 @@ const OPEN_METEO_TZ             = process.env.OPEN_METEO_TZ || "Europe/Paris";
 const WEATHER_CHECK_INTERVAL_MS = Number(process.env.WEATHER_CHECK_INTERVAL_MS || 15 * 60 * 1000);
 
 const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
-
-if (CLOUDINARY_ENABLED) {
-  cloudinary.config({
-    cloud_name: CLOUDINARY_NAME,
-    api_key: CLOUDINARY_KEY,
-    api_secret: CLOUDINARY_SECRET,
-    secure: true
-  });
-  console.log("✅ Cloudinary configuré");
-}
 
 // ─── Web Push VAPID ───────────────────────────────────────────
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
@@ -125,38 +109,6 @@ async function readMelCache()           { return (await redisGet("mat:mel:cache"
 async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
 async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
-
-function getDataUriMimeType(dataUri = "") {
-  const m = String(dataUri).match(/^data:([^;]+);base64,/i);
-  return (m?.[1] || "image/jpeg").toLowerCase();
-}
-
-async function uploadActuImageToCloudinary(imageBase64) {
-  if (!imageBase64) return null;
-  if (!CLOUDINARY_ENABLED) throw new Error("Cloudinary non configuré");
-
-  const mimeType = getDataUriMimeType(imageBase64);
-  return await cloudinary.uploader.upload(imageBase64, {
-    folder: "mat/actus",
-    resource_type: "image",
-    overwrite: false,
-    invalidate: false,
-    use_filename: false,
-    unique_filename: true,
-    format: mimeType.includes("png") ? "png" : undefined
-  });
-}
-
-async function deleteActuImageFromCloudinary(publicId) {
-  if (!publicId) return { result: "skipped" };
-  if (!CLOUDINARY_ENABLED) throw new Error("Cloudinary non configuré");
-
-  return await cloudinary.uploader.destroy(publicId, {
-    resource_type: "image",
-    type: "upload",
-    invalidate: true
-  });
-}
 
 function getParisDateParts() {
   const now = new Date();
@@ -1531,24 +1483,11 @@ app.get("/admin/actus", adminAuth, async (req, res) => {
 app.delete("/admin/actus/:id", adminAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const actus = await readNews();
-  const actu = actus.find(a => a.id === id);
-  if (!actu) return res.status(404).json({ error: "Actu non trouvée" });
-
-  let cloudinaryResult = null;
-  if (actu.photoPublicId) {
-    try {
-      cloudinaryResult = await deleteActuImageFromCloudinary(actu.photoPublicId);
-    } catch (e) {
-      return res.status(502).json({ error: "Suppression Cloudinary impossible : " + e.message });
-    }
-  }
-
   const filtered = actus.filter(a => a.id !== id);
+  if (filtered.length === actus.length) return res.status(404).json({ error: "Actu non trouvée" });
   await writeNews(filtered);
-  res.json({ ok: true, deleted: id, cloudinary: cloudinaryResult });
+  res.json({ ok: true, deleted: id });
 });
-
-// ── Liste signalements (admin)
 
 // ── Liste signalements (admin) ────────────────────────────────
 app.get("/admin/signals", adminAuth, async (req, res) => {
@@ -1604,10 +1543,6 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
     return res.status(400).json({ error: "title requis" });
   }
 
-  if (publishFacebook && !imageBase64) {
-    return res.status(400).json({ error: "imageBase64 requis pour publier sur Facebook avec image" });
-  }
-
   const cleanTitle = String(title).trim().substring(0, 150);
   const cleanDescription = String(description || "").trim().substring(0, 3000);
 
@@ -1615,33 +1550,13 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
     ok: true,
     actu: null,
     facebook: null,
-    cloudinary: null,
     push: null,
     calendar: null,
     warnings: []
   };
 
-  // 1. Uploader l'image vers Cloudinary en premier pour stocker une URL stable + public_id supprimable
+  // 1. Publier sur Facebook EN PREMIER (pour récupérer l'URL de la photo hébergée)
   let finalPhotoUrl = imageUrl || null;
-  let finalPhotoPublicId = null;
-  if (imageBase64) {
-    try {
-      const upload = await uploadActuImageToCloudinary(imageBase64);
-      finalPhotoUrl = upload.secure_url || upload.url || finalPhotoUrl;
-      finalPhotoPublicId = upload.public_id || null;
-      result.cloudinary = {
-        ok: true,
-        public_id: upload.public_id,
-        asset_id: upload.asset_id || null,
-        secure_url: upload.secure_url || upload.url || null
-      };
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: "Cloudinary: " + e.message });
-    }
-  }
-
-  // 2. Publier sur Facebook avec image quand imageBase64 est fourni.
-  //    Si l'image Facebook échoue, on annule la création pour éviter une actu partielle.
   if (publishFacebook) {
     try {
       const fbResult = await publishActuToFacebook(
@@ -1652,15 +1567,15 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
         eventLocation
       );
       result.facebook = fbResult;
+      // Si FB a hébergé la photo, récupérer l'URL pour stocker dans l'actu
+      if (fbResult.photo_url) finalPhotoUrl = fbResult.photo_url;
     } catch (e) {
-      if (finalPhotoPublicId) {
-        try { await deleteActuImageFromCloudinary(finalPhotoPublicId); } catch (_) {}
-      }
-      return res.status(502).json({ ok: false, error: "Facebook: " + e.message });
+      result.warnings.push("Facebook: " + e.message);
+      result.facebook = { ok: false, error: e.message };
     }
   }
 
-  // 3. Stocker l'actu dans Redis (pour affichage dans la PWA)
+  // 2. Stocker l'actu dans Redis (pour affichage dans la PWA)
   const actus = await readNews();
   const actu = {
     id: Date.now(),
@@ -1669,7 +1584,6 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
     date: new Date().toLocaleDateString("fr-FR"),
     dateISO: new Date().toISOString().slice(0, 10),
     photo: finalPhotoUrl,
-    photoPublicId: finalPhotoPublicId,
     eventDate: eventDate || null,
     eventLocation: eventLocation || null,
     source: "admin"
@@ -1679,17 +1593,17 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
   await writeNews(actus);
   result.actu = actu;
 
-  // 4. Envoyer notification push
+  // 3. Envoyer notification push
   if (sendPush) {
     try {
-      result.push = await sendActuPush(cleanTitle, cleanDescription, finalPhotoUrl, actu.id);
+      result.push = await sendActuPush(cleanTitle, cleanDescription, finalPhotoUrl);
     } catch (e) {
       result.warnings.push("Push: " + e.message);
       result.push = { ok: false, error: e.message };
     }
   }
 
-  // 5. Créer/remplacer événement Google Agenda
+  // 4. Créer/remplacer événement Google Agenda
   if (createCalendar && eventDate) {
     try {
       result.calendar = await upsertGoogleCalendarEvent(
@@ -1706,8 +1620,6 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
 
   res.json(result);
 });
-
-// ── Route : lister événements calendar d'un jour donné (doublon check)
 
 // ── Route : lister événements calendar d'un jour donné (doublon check) ──
 app.get("/admin/calendar/day", adminAuth, async (req, res) => {
@@ -1748,59 +1660,30 @@ app.get("/admin/calendar/day", adminAuth, async (req, res) => {
 app.post("/admin/purge", adminAuth, async (req, res) => {
   const { type, beforeDate } = req.body || {};
   if (!type || !beforeDate) return res.status(400).json({ error: "type et beforeDate requis" });
-
   let deleted = 0;
-  const cloudinaryResults = [];
-
-  async function cleanupActusImages(actusToDelete = []) {
-    for (const actu of actusToDelete) {
-      if (!actu.photoPublicId) continue;
-      try {
-        const r = await deleteActuImageFromCloudinary(actu.photoPublicId);
-        cloudinaryResults.push({
-          id: actu.id,
-          publicId: actu.photoPublicId,
-          result: r?.result || "ok"
-        });
-      } catch (e) {
-        cloudinaryResults.push({
-          id: actu.id,
-          publicId: actu.photoPublicId,
-          error: e.message
-        });
-      }
-    }
-  }
-
   try {
     if (type === "actus") {
       const actus = await readNews();
-      const toDelete = actus.filter(a => (a.dateISO || "") < beforeDate);
       const filtered = actus.filter(a => (a.dateISO || "") >= beforeDate);
-      await cleanupActusImages(toDelete);
       deleted = actus.length - filtered.length;
       await writeNews(filtered);
-
     } else if (type === "signals") {
       const signals = await readSignals();
       const filtered = signals.filter(s => (s.dateISO || "") >= beforeDate);
       deleted = signals.length - filtered.length;
       await writeSignals(filtered);
-
     } else if (type === "stats_parjour") {
       const stats = await readStats();
       const keys = Object.keys(stats.parJour || {}).filter(d => d < beforeDate);
       keys.forEach(k => delete stats.parJour[k]);
       deleted = keys.length;
       await writeStats(stats);
-
     } else if (type === "ia_stats_daily") {
       const ia = await readIaStats();
       const keys = Object.keys(ia.daily || {}).filter(d => d < beforeDate);
       keys.forEach(k => delete ia.daily[k]);
       deleted = keys.length;
       await writeIaStats(ia);
-
     } else if (type === "ia_categories_parjour") {
       const stats = await readStats();
       const cats = (stats.iaCategories || {}).parJour || {};
@@ -1808,24 +1691,18 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
       keys.forEach(k => delete cats[k]);
       deleted = keys.length;
       await writeStats(stats);
-
     } else if (type === "all_before") {
       const stats = await readStats();
       const ia = await readIaStats();
       const cutoffMonth = beforeDate.slice(0, 7);
-
       const actus = await readNews();
-      const oldActus = actus.filter(a => (a.dateISO || "") < beforeDate);
       const filteredActus = actus.filter(a => (a.dateISO || "") >= beforeDate);
-      await cleanupActusImages(oldActus);
       deleted += actus.length - filteredActus.length;
       await writeNews(filteredActus);
-
       const signals = await readSignals();
       const filteredSignals = signals.filter(s => (s.dateISO || "") >= beforeDate);
       deleted += signals.length - filteredSignals.length;
       await writeSignals(filteredSignals);
-
       for (const key of Object.keys(stats.parJour || {}).filter(d => d < beforeDate)) { delete stats.parJour[key]; deleted++; }
       if (stats.uniqueUsers?.byDay) for (const key of Object.keys(stats.uniqueUsers.byDay).filter(d => d < beforeDate)) { delete stats.uniqueUsers.byDay[key]; deleted++; }
       if (stats.uniqueUsers?.byMonth) for (const key of Object.keys(stats.uniqueUsers.byMonth).filter(m => m < cutoffMonth)) { delete stats.uniqueUsers.byMonth[key]; deleted++; }
@@ -1839,24 +1716,17 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
         for (const key of Object.keys(ds.monthSeen || {}).filter(m => m < cutoffMonth)) { delete ds.monthSeen[key]; deleted++; }
         for (const key of Object.keys(ds.appOpensByMonth || {}).filter(m => m < cutoffMonth)) { delete ds.appOpensByMonth[key]; deleted++; }
       }
-
       for (const key of Object.keys(ia.daily || {}).filter(d => d < beforeDate)) { delete ia.daily[key]; deleted++; }
       await writeStats(stats);
       await writeIaStats(ia);
-
     } else {
       return res.status(400).json({ error: "type inconnu" });
     }
-
-    const extra = cloudinaryResults.length ? { cloudinary: cloudinaryResults } : {};
-    res.json({ ok: true, deleted, ...extra });
-
+    res.json({ ok: true, deleted });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
 });
-
-// ── Route : visiteurs uniques// ── Route : visiteurs uniques
 
 // ── Route : visiteurs uniques// ── Route : visiteurs uniques ─────────────────────────────────────────────────
 // Exposé via /admin/dashboard dans le champ app.uniqueUsers
@@ -1955,10 +1825,37 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   }
 
   // Envoi notification push
-  const pushResult = await sendActuPush(title, description, photoUrl, actu.id);
-  console.log(`📱 Envoi push à ${pushResult.total || 0} abonné(s)`);
+  const subs = await readSubs();
+  console.log(`📱 Envoi push à ${subs.length} abonné(s)`);
 
-  return { duplicate: false, push: pushResult };
+  // Body = description (si présente) ou titre, tronqué à 200 caractères
+  const notifBody = (description || title).substring(0, 200);
+
+  const payload = JSON.stringify({
+    title: `MAT — ${title.substring(0, 60)}`,
+    body: notifBody,
+    icon: "./icon-192.png",
+    badge: "./icon-192.png",
+    image: photoUrl || undefined,
+    data: { url: "/#notifs" }
+  });
+
+  const dead = [];
+  for (const sub of subs) {
+    try {
+      await webpush.sendNotification(sub, payload);
+    } catch(e) {
+      if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
+    }
+  }
+
+  if (dead.length) {
+    const alive = subs.filter(s => !dead.includes(s.endpoint));
+    await writeSubs(alive);
+    console.log(`🗑️ ${dead.length} subscription(s) expirée(s) supprimée(s)`);
+  }
+
+  return { duplicate: false };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2004,27 +1901,32 @@ async function publishActuToFacebook(title, description, imageBase64, eventDate,
 
   try {
     if (imageBase64) {
-      const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
-      const FormData = require("form-data");
-      const form = new FormData();
-      form.append("source", imageBuffer, { filename: "photo.jpg", contentType: getDataUriMimeType(imageBase64) || "image/jpeg" });
-      form.append("message", message);
-      form.append("access_token", PAGE_ACCESS_TOKEN);
-      const r = await axios.post(
-        `https://graph.facebook.com/v19.0/${pageId}/photos`,
-        form,
-        { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
-      );
-      return {
-        ok: true,
-        mode: 'photo',
-        post_id: r.data.post_id || r.data.id,
-        photo_id: r.data.id,
-        photo_url: `https://graph.facebook.com/${r.data.id}/picture`,
-        fallbackUsed: false
-      };
+      try {
+        const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
+        const FormData = require("form-data");
+        const form = new FormData();
+        form.append("source", imageBuffer, { filename: "photo.jpg", contentType: "image/jpeg" });
+        form.append("message", message);
+        form.append("access_token", PAGE_ACCESS_TOKEN);
+        const r = await axios.post(
+          `https://graph.facebook.com/v19.0/${pageId}/photos`,
+          form,
+          { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
+        );
+        return {
+          ok: true,
+          mode: 'photo',
+          post_id: r.data.post_id || r.data.id,
+          photo_id: r.data.id,
+          photo_url: `https://graph.facebook.com/${r.data.id}/picture`,
+          fallbackUsed: false
+        };
+      } catch (photoErr) {
+        console.warn('⚠️ Publication photo Facebook échouée, fallback texte:', photoErr.response?.data || photoErr.message);
+        const textOnly = await postTextOnly();
+        return { ...textOnly, fallbackUsed: true, fallbackReason: photoErr.response?.data?.error?.message || photoErr.message };
+      }
     }
-
     return await postTextOnly();
   } catch (e) {
     console.error("❌ publishActuToFacebook:", e.response?.data || e.message);
@@ -2032,35 +1934,19 @@ async function publishActuToFacebook(title, description, imageBase64, eventDate,
   }
 }
 
+// ── Envoyer notification push pour une actu// ── Envoyer notification push pour une actu ──────────────────
+async function sendActuPush(title, description, photoUrl) {
+  const subs = await readSubs();
+  if (!subs.length) return { sent: 0, failed: 0 };
 
-// ── Envoyer notification push pour une actu
-
-// ── Envoyer notification push pour une actu ──────────────────
-function buildActuPushPayload(title, description, photoUrl, actuId) {
-  const safeId = actuId != null ? String(actuId) : "";
-  const detailHash = safeId ? `/#actu=${encodeURIComponent(safeId)}` : "/#notifs";
-
-  return JSON.stringify({
-    title: `MAT — ${String(title || "").substring(0, 60)}`,
-    body: String(description || title || "").substring(0, 150),
+  const payload = JSON.stringify({
+    title: `MAT — ${title.substring(0, 60)}`,
+    body: (description || title).substring(0, 150),
     icon: "./icon-192.png",
     badge: "./icon-192.png",
     image: photoUrl || undefined,
-    actions: [{ action: "detail", title: "Détail" }],
-    data: {
-      url: detailHash,
-      listUrl: "/#notifs",
-      actuId: safeId || null,
-      open: safeId ? "actu" : "notifs"
-    }
+    data: { url: "/#notifs" }
   });
-}
-
-async function sendActuPush(title, description, photoUrl, actuId) {
-  const subs = await readSubs();
-  if (!subs.length) return { sent: 0, failed: 0, total: 0 };
-
-  const payload = buildActuPushPayload(title, description, photoUrl, actuId);
 
   let sent = 0, failed = 0;
   const dead = [];
@@ -2957,6 +2843,200 @@ app.get("/debug-trello", async (req, res) => {
   }
 });
 
+function serviceOk(key, label, message, detail = null, meta = null) {
+  return { key, label, status: "ok", message, detail, meta };
+}
+function serviceWarn(key, label, message, detail = null, meta = null) {
+  return { key, label, status: "warn", message, detail, meta };
+}
+function serviceError(key, label, message, detail = null, meta = null) {
+  return { key, label, status: "error", message, detail, meta };
+}
+function summarizeServiceResults(services = []) {
+  return {
+    ok: services.filter(s => s.status === "ok").length,
+    warn: services.filter(s => s.status === "warn").length,
+    error: services.filter(s => s.status === "error").length,
+    total: services.length,
+  };
+}
+
+app.get("/admin/services/test", adminAuth, async (req, res) => {
+  const services = [];
+
+  services.push(serviceOk("server", "Serveur API", "API joignable", { version: "v6.5", route: "/admin/services/test" }));
+
+  // Redis / Upstash
+  if (!REDIS_URL || !REDIS_TOKEN) {
+    services.push(serviceWarn("redis", "Redis / Upstash", "Variables Redis absentes", { has_url: !!REDIS_URL, has_token: !!REDIS_TOKEN }));
+  } else {
+    try {
+      const info = await axios.get(`${REDIS_URL}/info`, { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 10000 });
+      const infoText = info.data?.result || "";
+      const used = (infoText.match(/used_memory:(\d+)/) || [])[1];
+      const subs = await readSubs();
+      services.push(serviceOk("redis", "Redis / Upstash", "Connexion OK", { used_memory_bytes: used ? Number(used) : null, push_subscribers: subs.length }));
+    } catch (e) {
+      services.push(serviceError("redis", "Redis / Upstash", "Connexion impossible", e.response?.data || e.message));
+    }
+  }
+
+  // Cloudinary
+  if (!CLOUDINARY_ENABLED) {
+    services.push(serviceWarn("cloudinary", "Cloudinary", "Non configuré", { has_name: !!CLOUDINARY_NAME, has_key: !!CLOUDINARY_KEY, has_secret: !!CLOUDINARY_SECRET }));
+  } else {
+    try {
+      const ping = await cloudinary.api.ping();
+      services.push(serviceOk("cloudinary", "Cloudinary", "Connexion OK", ping));
+    } catch (e) {
+      services.push(serviceError("cloudinary", "Cloudinary", "Erreur de connexion", e.message));
+    }
+  }
+
+  // Open-Meteo
+  try {
+    const forecast = await fetchOpenMeteoForecast();
+    const cur = forecast?.current || {};
+    services.push(serviceOk("open_meteo", "Open-Meteo", "Prévisions récupérées", { temperature_2m: cur.temperature_2m, weather_code: cur.weather_code, wind_speed_10m: cur.wind_speed_10m }));
+  } catch (e) {
+    services.push(serviceError("open_meteo", "Open-Meteo", "Prévisions indisponibles", e.response?.data || e.message));
+  }
+
+  // Météo-France vigilance
+  if (!METEOFRANCE_VIGILANCE_URL) {
+    services.push(serviceWarn("meteo_france", "Météo-France Vigilance", "URL non configurée"));
+  } else {
+    try {
+      const raw = await fetchMeteoFranceVigilanceRaw();
+      const vigilance = extractDepartmentVigilance(raw, "45");
+      services.push(serviceOk("meteo_france", "Météo-France Vigilance", vigilance ? "Vigilance récupérée" : "Flux reçu sans vigilance exploitable", vigilance || { has_product: !!raw?.product }));
+    } catch (e) {
+      services.push(serviceError("meteo_france", "Météo-France Vigilance", "Flux indisponible", e.response?.data || e.message));
+    }
+  }
+
+  // Horaires Rémi
+  try {
+    await refreshRemiCache();
+    if (!anthropic) {
+      services.push(serviceWarn("remi", "Bus Rémi", "Anthropic non configuré — extraction PDF limitée", { cache: remiCache.content || null }));
+    } else if (!remiCache.content || remiCache.content.includes("erreur") || remiCache.content.includes("non accessible")) {
+      services.push(serviceWarn("remi", "Bus Rémi", "Cache Rémi incomplet", { cache: remiCache.content || null }));
+    } else {
+      services.push(serviceOk("remi", "Bus Rémi", "Horaires mis à jour", { updated_at: remiCache.lastUpdate, preview: remiCache.content.substring(0, 140) }));
+    }
+  } catch (e) {
+    services.push(serviceError("remi", "Bus Rémi", "Échec d'actualisation", e.message));
+  }
+
+  // Agenda public ICS
+  if (!GOOGLE_CALENDAR_ICAL) {
+    services.push(serviceWarn("agenda_public", "Agenda public ICS", "URL ICS absente"));
+  } else {
+    try {
+      await refreshCalendarCache();
+      if (!calendarCache.content || calendarCache.content.includes("non accessible")) {
+        services.push(serviceWarn("agenda_public", "Agenda public ICS", "Flux ICS inaccessible", { cache: calendarCache.content || null }));
+      } else {
+        services.push(serviceOk("agenda_public", "Agenda public ICS", "Flux ICS OK", { updated_at: calendarCache.lastUpdate, preview: calendarCache.content.substring(0, 140) }));
+      }
+    } catch (e) {
+      services.push(serviceError("agenda_public", "Agenda public ICS", "Erreur de lecture ICS", e.message));
+    }
+  }
+
+  // Google Calendar API (lecture + écriture de test)
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendarId || !(process.env.GOOGLE_SERVICE_ACCOUNT_B64 || process.env.GOOGLE_SERVICE_ACCOUNT)) {
+    services.push(serviceWarn("google_calendar", "Google Calendar API", "Configuration incomplète", { has_calendar_id: !!calendarId, has_service_account_b64: !!process.env.GOOGLE_SERVICE_ACCOUNT_B64, has_service_account_raw: !!process.env.GOOGLE_SERVICE_ACCOUNT }));
+  } else {
+    try {
+      const cal = getGoogleCalendarClient();
+      if (!cal) throw new Error("Client Google Calendar non initialisé");
+      const today = new Date();
+      const dayStart = new Date(today); dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(today); dayEnd.setHours(23, 59, 59, 999);
+      const list = await cal.events.list({ calendarId, timeMin: dayStart.toISOString(), timeMax: dayEnd.toISOString(), maxResults: 5, singleEvents: true });
+      let testWrite = false;
+      let testDelete = false;
+      let testEventId = null;
+      try {
+        const created = await cal.events.insert({
+          calendarId,
+          requestBody: {
+            summary: "[TEST MAT] Diagnostic automatique",
+            description: "Événement temporaire créé par /admin/services/test. Suppression immédiate.",
+            start: { dateTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(), timeZone: "Europe/Paris" },
+            end: { dateTime: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), timeZone: "Europe/Paris" },
+          }
+        });
+        testWrite = true;
+        testEventId = created.data.id;
+        try {
+          await cal.events.delete({ calendarId, eventId: created.data.id });
+          testDelete = true;
+        } catch (_) {}
+      } catch (_) {}
+      services.push((testWrite && testDelete) ? serviceOk("google_calendar", "Google Calendar API", "Lecture et écriture OK", { events_today: (list.data.items || []).length, write_test: testWrite, delete_test: testDelete }) : serviceWarn("google_calendar", "Google Calendar API", "Lecture OK, écriture à vérifier", { events_today: (list.data.items || []).length, write_test: testWrite, delete_test: testDelete, test_event_id: testEventId }));
+    } catch (e) {
+      services.push(serviceError("google_calendar", "Google Calendar API", "Accès impossible", e.response?.data || e.message));
+    }
+  }
+
+  // Trello
+  if (!TRELLO_KEY || !TRELLO_TOKEN || !TRELLO_LIST_ID) {
+    services.push(serviceWarn("trello", "Trello", "Configuration incomplète", { has_key: !!TRELLO_KEY, has_token: !!TRELLO_TOKEN, has_list_id: !!TRELLO_LIST_ID }));
+  } else {
+    try {
+      const listRes = await axios.get(`https://api.trello.com/1/lists/${TRELLO_LIST_ID}`, { params: { key: TRELLO_KEY, token: TRELLO_TOKEN }, timeout: 10000 });
+      services.push(serviceOk("trello", "Trello", "Liste accessible", { id: listRes.data.id, name: listRes.data.name }));
+    } catch (e) {
+      services.push(serviceError("trello", "Trello", "Liste inaccessible", e.response?.data || e.message));
+    }
+  }
+
+  // Mistral
+  if (!MISTRAL_API_KEY) {
+    services.push(serviceWarn("mistral", "Mistral", "Clé API absente", { model: MISTRAL_MODEL }));
+  } else {
+    try {
+      const reply = await callMistral([{ role: "user", content: "Bonjour" }], "Tu réponds uniquement : OK");
+      services.push(serviceOk("mistral", "Mistral", "Réponse générée", { model: MISTRAL_MODEL, preview: String(reply).substring(0, 80) }));
+    } catch (e) {
+      services.push(serviceError("mistral", "Mistral", "Erreur API", e.response?.data || e.message));
+    }
+  }
+
+  // Facebook
+  if (!PAGE_ACCESS_TOKEN) {
+    services.push(serviceWarn("facebook", "Facebook", "Token absent"));
+  } else {
+    try {
+      const pageId = await resolveFacebookPageId();
+      if (!pageId) throw new Error("Page introuvable");
+      const pageInfo = await axios.get(`https://graph.facebook.com/v19.0/${pageId}`, { params: { fields: "id,name", access_token: PAGE_ACCESS_TOKEN }, timeout: 10000 });
+      services.push(serviceOk("facebook", "Facebook", "Page accessible", pageInfo.data));
+    } catch (e) {
+      services.push(serviceError("facebook", "Facebook", "Accès impossible", e.response?.data || e.message));
+    }
+  }
+
+  // Web Push
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+    services.push(serviceWarn("push", "Notifications push", "VAPID non configuré", { has_public_key: !!VAPID_PUBLIC_KEY, has_private_key: !!VAPID_PRIVATE_KEY }));
+  } else {
+    try {
+      const subs = await readSubs();
+      services.push(subs.length ? serviceOk("push", "Notifications push", "Configuration OK", { subscribers: subs.length }) : serviceWarn("push", "Notifications push", "Configuration OK, aucun abonné", { subscribers: 0 }));
+    } catch (e) {
+      services.push(serviceError("push", "Notifications push", "Lecture des abonnés impossible", e.message));
+    }
+  }
+
+  const summary = summarizeServiceResults(services);
+  res.json({ ok: summary.error === 0, checkedAt: new Date().toISOString(), summary, services });
+});
+
 app.get("/", async (req, res) => {
   const [subs, news, ideas, signals] = await Promise.all([
     readSubs(), readNews(), readIdeas(), readSignals()
@@ -2972,7 +3052,8 @@ app.get("/", async (req, res) => {
     routes: [
       "/webhook","/mel","/signal","/signalements","/actus","/push/subscribe",
       "/push/unsubscribe","/refresh","/calendar","/bus",
-      "/meteo/commune","/meteo/vigilance","/meteo/alertes/check"
+      "/meteo/commune","/meteo/vigilance","/meteo/alertes/check",
+      "/admin/services/test"
     ],
   });
 });
