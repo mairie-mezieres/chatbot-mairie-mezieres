@@ -83,7 +83,7 @@ async function redisGet(key) {
   try {
     const r = await axios.get(
       `${REDIS_URL}/get/${encodeURIComponent(key)}`,
-      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } }
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 8000 }
     );
     const val = r.data.result;
     if (val === null || val === undefined) return null;
@@ -101,7 +101,7 @@ async function redisSet(key, value) {
     await axios.post(
       `${REDIS_URL}/set/${encoded}`,
       JSON.stringify(value),
-      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" } }
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
     );
   } catch(e) {
     console.warn(`Redis SET ${key}:`, e.message);
@@ -3324,17 +3324,24 @@ app.listen(PORT, async () => {
   console.log(`🌦️ Météo      : /meteo/commune`);
   console.log(`⚠️ Vigilance  : /meteo/vigilance`);
 
-  refreshCalendarCache().catch(e => console.warn("Calendar cache init:", e.message));
-  refreshRemiCache().catch(e => console.warn("Remi cache init:", e.message));
+  // Délai de 20s avant les init réseau pour laisser le DNS Render se stabiliser
+  setTimeout(() => {
+    refreshCalendarCache().catch(e => console.warn("Calendar cache init:", e.message));
+    refreshRemiCache().catch(e => console.warn("Remi cache init:", e.message));
+  }, 20000);
 
-  axios.get(`http://127.0.0.1:${PORT}/meteo/alertes/check`)
-    .catch(e => console.warn("Weather check initial:", e.message));
+  // Weather check initial après 30s (DNS + réseau garantis stables)
+  setTimeout(() => {
+    axios.get(`http://127.0.0.1:${PORT}/meteo/alertes/check`)
+      .catch(e => console.warn("Weather check initial:", e.message));
 
-  setInterval(async () => {
-    try {
-      await axios.get(`http://127.0.0.1:${PORT}/meteo/alertes/check`);
-    } catch (e) {
-      console.warn("Weather check auto:", e.message);
-    }
-  }, WEATHER_CHECK_INTERVAL_MS);
+    // Puis polling toutes les WEATHER_CHECK_INTERVAL_MS
+    setInterval(async () => {
+      try {
+        await axios.get(`http://127.0.0.1:${PORT}/meteo/alertes/check`);
+      } catch (e) {
+        console.warn("Weather check auto:", e.message);
+      }
+    }, WEATHER_CHECK_INTERVAL_MS);
+  }, 30000);
 });
