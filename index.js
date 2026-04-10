@@ -39,6 +39,10 @@ const TRELLO_KEY     = process.env.TRELLO_KEY || "";
 const TRELLO_TOKEN   = process.env.TRELLO_TOKEN || "";
 const TRELLO_LIST_ID = process.env.TRELLO_LIST_ID || "";
 
+const UPSTASH_EMAIL         = process.env.UPSTASH_EMAIL || "";
+const UPSTASH_API_KEY       = process.env.UPSTASH_API_KEY || "";
+const UPSTASH_REDIS_DB_ID   = process.env.UPSTASH_REDIS_DB_ID || "";
+
 const ADMIN_PASSWORD        = process.env.ADMIN_PASSWORD || "mat-admin-2024";
 const MISTRAL_BILLING_URL   = "https://api.mistral.ai/v1/usage";
 // Tarifs Mistral Small (€/1M tokens) — à ajuster si changement
@@ -107,7 +111,23 @@ async function redisSet(key, value) {
     console.warn(`Redis SET ${key}:`, e.message);
   }
 }
+async function getUpstashRedisStats() {
+  if (!UPSTASH_EMAIL || !UPSTASH_API_KEY || !UPSTASH_REDIS_DB_ID) return null;
 
+  try {
+    const basic = Buffer.from(`${UPSTASH_EMAIL}:${UPSTASH_API_KEY}`).toString("base64");
+    const r = await axios.get(
+      `https://api.upstash.com/v2/redis/stats/${UPSTASH_REDIS_DB_ID}`,
+      {
+        headers: { Authorization: `Basic ${basic}` },
+        timeout: 8000
+      }
+    );
+    return r.data || null;
+  } catch (e) {
+    return { error: e.message };
+  }
+}
 async function readSubs()               { return (await redisGet("mat:subs")) || []; }
 async function writeSubs(d)             { await redisSet("mat:subs", d); }
 async function readNews()               { return (await redisGet("mat:actus")) || []; }
@@ -1367,9 +1387,15 @@ app.post("/admin/login", (req, res) => {
 // ── Stats globales ────────────────────────────────────────────
 app.get("/admin/dashboard", adminAuth, async (req, res) => {
   try {
-    const [appStats, iaStats, subs, news, ideas, signals] = await Promise.all([
-      readStats(), readIaStats(), readSubs(), readNews(), readIdeas(), readSignals()
-    ]);
+    const [appStats, iaStats, subs, news, ideas, signals, upstashStats] = await Promise.all([
+  readStats(),
+  readIaStats(),
+  readSubs(),
+  readNews(),
+  readIdeas(),
+  readSignals(),
+  getUpstashRedisStats()
+]);
 
     // Taille Redis estimée
     let redisSize = null;
@@ -1432,13 +1458,45 @@ app.get("/admin/dashboard", adminAuth, async (req, res) => {
 
     res.json({
       ok: true,
-      redis: {
-        usedBytes: redisSize,
-        usedMB: redisSize ? parseFloat((redisSize / 1024 / 1024).toFixed(2)) : null,
-        limitMB: 256,
-        pct: redisSize ? parseFloat((redisSize / 1024 / 1024 / 256 * 100).toFixed(1)) : null,
-        keys: { subs: subs.length, actus: news.length, ideas: ideas.length, signals: signals.length }
+    redis: {
+      usedBytes: redisSize,
+      usedMB: redisSize ? parseFloat((redisSize / 1024 / 1024).toFixed(2)) : null,
+      limitMB: 256,
+      pct: redisSize ? parseFloat((redisSize / 1024 / 1024 / 256 * 100).toFixed(1)) : null,
+    
+      commands: {
+        day: typeof upstashStats?.daily_net_commands === "number" ? upstashStats.daily_net_commands : null,
+        month: typeof upstashStats?.total_monthly_requests === "number" ? upstashStats.total_monthly_requests : null,
+    
+        readDay: typeof upstashStats?.daily_read_requests === "number" ? upstashStats.daily_read_requests : null,
+        writeDay: typeof upstashStats?.daily_write_requests === "number" ? upstashStats.daily_write_requests : null,
+    
+        readMonth: typeof upstashStats?.total_monthly_read_requests === "number" ? upstashStats.total_monthly_read_requests : null,
+        writeMonth: typeof upstashStats?.total_monthly_write_requests === "number" ? upstashStats.total_monthly_write_requests : null,
+    
+        limitDay: 10000,
+        limitMonth: 500000,
+    
+        pctDay:
+          typeof upstashStats?.daily_net_commands === "number"
+            ? parseFloat((upstashStats.daily_net_commands / 10000 * 100).toFixed(1))
+            : null,
+    
+        pctMonth:
+          typeof upstashStats?.total_monthly_requests === "number"
+            ? parseFloat((upstashStats.total_monthly_requests / 500000 * 100).toFixed(1))
+            : null,
+    
+        error: upstashStats?.error || null
       },
+    
+      keys: {
+        subs: subs.length,
+        actus: news.length,
+        ideas: ideas.length,
+        signals: signals.length
+      }
+    },
       ia: {
         daily:   enriched(iaDaily),
         monthly: enriched(iaMonthly),
