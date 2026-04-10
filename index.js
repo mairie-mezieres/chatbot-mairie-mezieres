@@ -375,6 +375,52 @@ let remiCache     = { content: "", lastUpdate: null };
 let calendarCache = { content: "", lastUpdate: null };
 const CACHE_MS    = 7 * 24 * 60 * 60 * 1000;
 
+// ─── Cache mémoire stats (évite les lectures/écritures Redis à chaque appel MEL) ──
+// Les stats sont bufferisées en mémoire et flushées vers Redis toutes les 5 minutes.
+// Réduit drastiquement le nb de commandes Redis (plan gratuit Upstash = 10 000/jour).
+let _statsCache    = null;  // cache mémoire de mat:stats
+let _iaStatsCache  = null;  // cache mémoire de mat:ia:stats
+let _statsDirty    = false; // mat:stats a été modifié depuis le dernier flush
+let _iaStatsDirty  = false; // mat:ia:stats a été modifié depuis le dernier flush
+const STATS_FLUSH_MS = 5 * 60 * 1000; // flush toutes les 5 minutes
+
+async function readStats() {
+  if (_statsCache !== null) return _statsCache;
+  _statsCache = (await redisGet("mat:stats")) || {};
+  return _statsCache;
+}
+async function writeStats(d) {
+  _statsCache = d;
+  _statsDirty = true;
+  // Pas d'écriture Redis immédiate — le flush périodique s'en charge
+}
+async function readIaStats() {
+  if (_iaStatsCache !== null) return _iaStatsCache;
+  _iaStatsCache = (await redisGet("mat:ia:stats")) || {};
+  return _iaStatsCache;
+}
+async function writeIaStats(d) {
+  _iaStatsCache = d;
+  _iaStatsDirty = true;
+}
+
+// Flush périodique vers Redis (toutes les 5 min)
+setInterval(async () => {
+  try {
+    if (_statsDirty && _statsCache !== null) {
+      await redisSet("mat:stats", _statsCache);
+      _statsDirty = false;
+    }
+    if (_iaStatsDirty && _iaStatsCache !== null) {
+      await redisSet("mat:ia:stats", _iaStatsCache);
+      _iaStatsDirty = false;
+    }
+  } catch(e) {
+    console.warn("Stats flush Redis:", e.message);
+  }
+}, STATS_FLUSH_MS);
+
+
 function cleanHtml(html) {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi,"")
@@ -3322,7 +3368,25 @@ services.push(await runCheck("facebook", "Facebook Page", "📘", async () => {
   res.json({ ok: true, checkedAt, summary, services });
 });
 
-app.get("/", async (req, res) => {
+// Compteurs en mémoire (pas d'appel Redis pour le health check Render)
+const _memStats = { bootTime: new Date().toISOString() };
+
+app.get("/", (req, res) => {
+  // Réponse instantanée sans Redis - health check Render
+  res.json({
+    status:  "MAT est en ligne 🌲",
+    version: "6.5 — Mistral principal + Claude secours + MEL améliorée",
+    uptime:  Math.floor(process.uptime()) + "s",
+    routes: [
+      "/webhook","/mel","/signal","/signalements","/actus","/push/subscribe",
+      "/push/unsubscribe","/refresh","/calendar","/bus",
+      "/meteo/commune","/meteo/vigilance","/meteo/alertes/check"
+    ],
+  });
+});
+
+// Route stats complètes avec Redis (à la demande uniquement)
+app.get("/status", async (req, res) => {
   const [subs, news, ideas, signals] = await Promise.all([
     readSubs(), readNews(), readIdeas(), readSignals()
   ]);
