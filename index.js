@@ -147,6 +147,45 @@ async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
 async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
 
+function getDefaultAdminSettings() {
+  return {
+    detailedStatsEnabled: true, // météo, contact, actualités, signalement, idées, app_resume...
+    melUsageStatsEnabled: true, // usage MEL + catégories IA
+    appOpenStatsEnabled: true   // nombre d'ouvertures d'application
+  };
+}
+
+async function readAdminSettings() {
+  const saved = (await redisGet("mat:admin:settings")) || {};
+  return { ...getDefaultAdminSettings(), ...saved };
+}
+
+async function writeAdminSettings(settings) {
+  await redisSet("mat:admin:settings", {
+    ...getDefaultAdminSettings(),
+    ...(settings || {})
+  });
+}
+
+function shouldTrackService(service, settings) {
+  // Toujours gardé
+  if (service === "installation") return true;
+
+  // Options dédiées
+  if (service === "mel") return settings.melUsageStatsEnabled !== false;
+  if (service === "app_open") return settings.appOpenStatsEnabled !== false;
+
+  // Tout le reste = stats détaillées
+  return settings.detailedStatsEnabled !== false;
+}
+
+function shouldTrackDeviceBreakdown(service, settings) {
+  // La répartition appareils n'est pas une stat "en dur"
+  if (service === "app_open") return settings.appOpenStatsEnabled !== false;
+  if (service === "mel") return settings.melUsageStatsEnabled !== false;
+  return settings.detailedStatsEnabled !== false;
+}
+
 function getDataUriMimeType(dataUri = "") {
   const m = String(dataUri).match(/^data:([^;]+);base64,/i);
   return (m?.[1] || "image/jpeg").toLowerCase();
@@ -1201,6 +1240,9 @@ ${context}`;
 // Evite la race condition entre trackIaQuestionCategories et trackStat mel
 // qui lisaient/ecrivaient la meme cle Redis en parallele depuis le frontend.
 async function trackMelStats(userText) {
+  const settings = await readAdminSettings();
+  if (settings.melUsageStatsEnabled === false) return;
+
   const stats = await readStats();
   const today = new Date().toISOString().slice(0, 10);
   const month = today.slice(0, 7);
@@ -1433,15 +1475,16 @@ app.post("/admin/login", (req, res) => {
 // ── Stats globales ────────────────────────────────────────────
 app.get("/admin/dashboard", adminAuth, async (req, res) => {
   try {
-    const [appStats, iaStats, subs, news, ideas, signals, upstashStats] = await Promise.all([
-  readStats(),
-  readIaStats(),
-  readSubs(),
-  readNews(),
-  readIdeas(),
-  readSignals(),
-  getUpstashRedisStats()
-]);
+    const [appStats, iaStats, subs, news, ideas, signals, upstashStats, adminSettings] = await Promise.all([
+      readStats(),
+      readIaStats(),
+      readSubs(),
+      readNews(),
+      readIdeas(),
+      readSignals(),
+      getUpstashRedisStats(),
+      readAdminSettings()
+    ]);
 
     // Taille Redis estimée
     let redisSize = null;
@@ -1606,6 +1649,32 @@ app.get("/admin/dashboard", adminAuth, async (req, res) => {
       }
     });
   } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+//Modifier les régagles
+app.get("/admin/settings", adminAuth, async (req, res) => {
+  try {
+    const settings = await readAdminSettings();
+    res.json({ ok: true, settings });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/admin/settings", adminAuth, async (req, res) => {
+  try {
+    const current = await readAdminSettings();
+    const next = {
+      ...current,
+      detailedStatsEnabled: req.body?.detailedStatsEnabled !== false,
+      melUsageStatsEnabled: req.body?.melUsageStatsEnabled !== false,
+      appOpenStatsEnabled: req.body?.appOpenStatsEnabled !== false
+    };
+    await writeAdminSettings(next);
+    res.json({ ok: true, settings: next });
+  } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
@@ -2752,75 +2821,127 @@ app.post("/stats/track", async (req, res) => {
   const { service, device } = req.body || {};
   if (!service) return res.status(400).json({ error: "service requis" });
 
+  const settings = await readAdminSettings();
+  const trackService = shouldTrackService(service, settings);
+  const trackBreakdown = shouldTrackDeviceBreakdown(service, settings);
+
   const stats = await readStats();
   const { day: today, month } = getParisDateParts();
+  let changed = false;
 
-  if (!stats.services) stats.services = {};
-  stats.services[service] = (stats.services[service] || 0) + 1;
-  if (!stats.parJour) stats.parJour = {};
-  if (!stats.parJour[today]) stats.parJour[today] = {};
-  stats.parJour[today][service] = (stats.parJour[today][service] || 0) + 1;
-  stats.totalAcces = (stats.totalAcces || 0) + 1;
+  // ── 1) Compteurs de service / accès (optionnels selon réglages)
+  if (trackService) {
+    if (!stats.services) stats.services = {};
+    if (!stats.parJour) stats.parJour = {};
+    if (!stats.parJour[today]) stats.parJour[today] = {};
 
-const deviceId = req.headers["x-device-id"] || req.body?.deviceId || null;
+    stats.services[service] = (stats.services[service] || 0) + 1;
+    stats.parJour[today][service] = (stats.parJour[today][service] || 0) + 1;
+    stats.totalAcces = (stats.totalAcces || 0) + 1;
+    changed = true;
+  }
+
+  // ── 2) Visiteurs uniques : TOUJOURS gardés
+  const deviceId = req.headers["x-device-id"] || req.body?.deviceId || null;
   if (deviceId) {
     try {
-      if (!stats.uniqueUsers) stats.uniqueUsers = { total: 0, byDay: {}, byMonth: {}, allDevices: [] };
+      if (!stats.uniqueUsers) {
+        stats.uniqueUsers = { total: 0, byDay: {}, byMonth: {}, allDevices: [] };
+      }
       const u = stats.uniqueUsers;
       if (!u.byDay[today]) u.byDay[today] = [];
       if (!u.byMonth[month]) u.byMonth[month] = [];
       if (!Array.isArray(u.allDevices)) u.allDevices = [];
-      if (!u.byDay[today].includes(deviceId)) u.byDay[today].push(deviceId);
-      if (!u.byMonth[month].includes(deviceId)) u.byMonth[month].push(deviceId);
-      if (!u.allDevices.includes(deviceId)) u.allDevices.push(deviceId);
+
+      if (!u.byDay[today].includes(deviceId)) {
+        u.byDay[today].push(deviceId);
+        changed = true;
+      }
+      if (!u.byMonth[month].includes(deviceId)) {
+        u.byMonth[month].push(deviceId);
+        changed = true;
+      }
+      if (!u.allDevices.includes(deviceId)) {
+        u.allDevices.push(deviceId);
+        changed = true;
+      }
       u.total = u.allDevices.length;
 
-      if (!stats.deviceStats) {
-        stats.deviceStats = { byDay: {}, byMonth: {}, daySeen: {}, monthSeen: {}, appOpensByDay: {}, appOpensByMonth: {} };
-      }
-      const ds = stats.deviceStats;
-      if (!ds.daySeen[today]) ds.daySeen[today] = {};
-      if (!ds.monthSeen[month]) ds.monthSeen[month] = {};
-      if (!ds.byDay[today]) ds.byDay[today] = {};
-      if (!ds.byMonth[month]) ds.byMonth[month] = {};
+      // ── 3) Breakdown appareils / ouvertures app : optionnels
+      if (trackBreakdown) {
+        if (!stats.deviceStats) {
+          stats.deviceStats = {
+            byDay: {},
+            byMonth: {},
+            daySeen: {},
+            monthSeen: {},
+            appOpensByDay: {},
+            appOpensByMonth: {}
+          };
+        }
 
-      if (service === 'app_open') {
-        ds.appOpensByDay[today] = (ds.appOpensByDay[today] || 0) + 1;
-        ds.appOpensByMonth[month] = (ds.appOpensByMonth[month] || 0) + 1;
-      }
+        const ds = stats.deviceStats;
+        if (!ds.daySeen[today]) ds.daySeen[today] = {};
+        if (!ds.monthSeen[month]) ds.monthSeen[month] = {};
+        if (!ds.byDay[today]) ds.byDay[today] = {};
+        if (!ds.byMonth[month]) ds.byMonth[month] = {};
+        if (!ds.appOpensByDay) ds.appOpensByDay = {};
+        if (!ds.appOpensByMonth) ds.appOpensByMonth = {};
 
-      let cleanDevice;
-      if (device) {
-        cleanDevice = sanitizeDeviceInfo(device);
-      } else if (ds.daySeen[today][deviceId]) {
-        cleanDevice = ds.daySeen[today][deviceId];
-      } else if (ds.monthSeen[month][deviceId]) {
-        cleanDevice = ds.monthSeen[month][deviceId];
-      } else {
-        cleanDevice = sanitizeDeviceInfo({});
-      }
+        let cleanDevice;
+        if (device) {
+          cleanDevice = sanitizeDeviceInfo(device);
+        } else if (ds.daySeen[today][deviceId]) {
+          cleanDevice = ds.daySeen[today][deviceId];
+        } else if (ds.monthSeen[month][deviceId]) {
+          cleanDevice = ds.monthSeen[month][deviceId];
+        } else {
+          cleanDevice = sanitizeDeviceInfo({});
+        }
 
-      if (!ds.daySeen[today][deviceId]) {
-        ds.daySeen[today][deviceId] = cleanDevice;
-        bumpDeviceBreakdown(ds.byDay[today], cleanDevice);
-      }
-      if (!ds.monthSeen[month][deviceId]) {
-        ds.monthSeen[month][deviceId] = cleanDevice;
-        bumpDeviceBreakdown(ds.byMonth[month], cleanDevice);
-      }
+        if (!ds.daySeen[today][deviceId]) {
+          ds.daySeen[today][deviceId] = cleanDevice;
+          bumpDeviceBreakdown(ds.byDay[today], cleanDevice);
+          changed = true;
+        }
 
-      const keepDays = Object.keys(ds.daySeen).sort().slice(-90);
-      compactSeenMap(ds.daySeen, keepDays);
-      compactSeenMap(ds.byDay, keepDays);
-      compactSeenMap(ds.appOpensByDay, keepDays);
-      const keepMonths = Object.keys(ds.monthSeen).sort().slice(-24);
-      compactSeenMap(ds.monthSeen, keepMonths);
-      compactSeenMap(ds.byMonth, keepMonths);
-      compactSeenMap(ds.appOpensByMonth, keepMonths);
-    } catch(e) { console.warn('stats/track unique device:', e.message); }
+        if (!ds.monthSeen[month][deviceId]) {
+          ds.monthSeen[month][deviceId] = cleanDevice;
+          bumpDeviceBreakdown(ds.byMonth[month], cleanDevice);
+          changed = true;
+        }
+
+        // Nombre d'ouvertures d'app : option dédiée
+        if (service === "app_open" && settings.appOpenStatsEnabled !== false) {
+          ds.appOpensByDay[today] = (ds.appOpensByDay[today] || 0) + 1;
+          ds.appOpensByMonth[month] = (ds.appOpensByMonth[month] || 0) + 1;
+          changed = true;
+        }
+
+        const keepDays = Object.keys(ds.daySeen).sort().slice(-90);
+        compactSeenMap(ds.daySeen, keepDays);
+        compactSeenMap(ds.byDay, keepDays);
+        compactSeenMap(ds.appOpensByDay, keepDays);
+
+        const keepMonths = Object.keys(ds.monthSeen).sort().slice(-24);
+        compactSeenMap(ds.monthSeen, keepMonths);
+        compactSeenMap(ds.byMonth, keepMonths);
+        compactSeenMap(ds.appOpensByMonth, keepMonths);
+      }
+    } catch (e) {
+      console.warn("stats/track unique device:", e.message);
+    }
   }
-  await writeStats(stats);
-  res.json({ success: true });
+
+  if (changed) {
+    await writeStats(stats);
+  }
+
+  res.json({
+    success: true,
+    trackedService: trackService,
+    settings
+  });
 });
 
 app.get("/stats", async (req, res) => {
