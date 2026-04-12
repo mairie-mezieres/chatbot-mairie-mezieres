@@ -1475,16 +1475,16 @@ app.post("/admin/login", (req, res) => {
 // ── Stats globales ────────────────────────────────────────────
 app.get("/admin/dashboard", adminAuth, async (req, res) => {
   try {
-    const [appStats, iaStats, subs, news, ideas, signals, upstashStats, adminSettings] = await Promise.all([
-      readStats(),
-      readIaStats(),
-      readSubs(),
-      readNews(),
-      readIdeas(),
-      readSignals(),
-      getUpstashRedisStats(),
-      readAdminSettings()
-    ]);
+  const [appStats, iaStats, subs, news, ideas, signals, upstashStats, adminSettings] = await Promise.all([
+    readStats(),
+    readIaStats(),
+    readSubs(),
+    readNews(),
+    readIdeas(),
+    readSignals(),
+    getUpstashRedisStats(),
+    readAdminSettings()
+  ]);
 
     // Taille Redis estimée
     let redisSize = null;
@@ -1668,9 +1668,9 @@ app.post("/admin/settings", adminAuth, async (req, res) => {
     const current = await readAdminSettings();
     const next = {
       ...current,
-      detailedStatsEnabled: req.body?.detailedStatsEnabled !== false,
-      melUsageStatsEnabled: req.body?.melUsageStatsEnabled !== false,
-      appOpenStatsEnabled: req.body?.appOpenStatsEnabled !== false
+      detailedStatsEnabled: req.body?.detailedStatsEnabled === true,
+      melUsageStatsEnabled: req.body?.melUsageStatsEnabled === true,
+      appOpenStatsEnabled: req.body?.appOpenStatsEnabled === true
     };
     await writeAdminSettings(next);
     res.json({ ok: true, settings: next });
