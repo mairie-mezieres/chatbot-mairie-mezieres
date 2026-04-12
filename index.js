@@ -1646,7 +1646,8 @@ app.get("/admin/dashboard", adminAuth, async (req, res) => {
         parMois: appStats.iaCategories?.parMois || {},
         sources: appStats.iaCategories?.sources || {},
         trends:  computeIaCategoryTrends(appStats.iaCategories?.parJour || {})
-      }
+      },
+      settings: adminSettings
     });
   } catch(e) {
     res.status(500).json({ ok: false, error: e.message });
