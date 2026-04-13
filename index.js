@@ -649,7 +649,7 @@ const VIGILANCE_PHENOMENA = {
   9: "vagues-submersion",
 };
 
-async function fetchOpenMeteoForecast() {
+/*async function fetchOpenMeteoForecast() {
   const url =
     `https://api.open-meteo.com/v1/forecast` +
     `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
@@ -663,8 +663,21 @@ async function fetchOpenMeteoForecast() {
 
   const r = await axios.get(url, { timeout: 15000 });
   return r.data;
-}
+}*/
 
+async function fetchOpenMeteoForecast() {
+  const url =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
+    `&longitude=${encodeURIComponent(OPEN_METEO_LON)}` +
+    `&current=temperature_2m,weather_code,wind_speed_10m` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset` +
+    `&forecast_days=3` +
+    `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}`;
+
+  const r = await axios.get(url, { timeout: 15000 });
+  return r.data;
+}
 async function fetchMeteoFranceVigilanceRaw() {
   if (!METEOFRANCE_VIGILANCE_URL) {
     throw new Error("METEOFRANCE_VIGILANCE_URL non configurée");
@@ -2724,15 +2737,27 @@ app.get("/meteo/vigilance", async (req, res) => {
 app.get("/meteo/commune", async (req, res) => {
   try {
     const [forecast, rawVigilance] = await Promise.all([
-      getCachedMeteoForecast(),  // <-- utilise le cache
+      getCachedMeteoForecast(),
       fetchMeteoFranceVigilanceRaw().catch(() => null),
     ]);
 
     const vigilance = extractDepartmentVigilance(rawVigilance, "45");
-    res.json({ forecast, vigilance });
+    return res.json({ forecast, vigilance, stale: false });
   } catch (e) {
     console.error("❌ /meteo/commune:", e.message);
-    res.status(500).json({ error: "Météo indisponible" });
+
+    if (_meteoCache) {
+      return res.json({
+        forecast: _meteoCache,
+        vigilance: null,
+        stale: true
+      });
+    }
+
+    return res.status(500).json({
+      error: "Météo indisponible",
+      detail: e.message
+    });
   }
 });
 
@@ -3268,7 +3293,7 @@ app.get("/admin/services/test", adminAuth, async (req, res) => {
   }));
 
   services.push(await runCheck("meteo", "Open-Meteo commune", "🌤️", async () => {
-    const forecast = await fetchOpenMeteoForecast();
+    const forecast = await getCachedMeteoForecast();
     const cur = forecast?.current || {};
     return {
       status: "ok",
