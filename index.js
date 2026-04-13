@@ -649,7 +649,7 @@ const VIGILANCE_PHENOMENA = {
   9: "vagues-submersion",
 };
 
-/*async function fetchOpenMeteoForecast() {
+async function fetchOpenMeteoForecast() {
   const url =
     `https://api.open-meteo.com/v1/forecast` +
     `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
@@ -663,21 +663,46 @@ const VIGILANCE_PHENOMENA = {
 
   const r = await axios.get(url, { timeout: 15000 });
   return r.data;
-}*/
-
-async function fetchOpenMeteoForecast() {
-  const url =
-    `https://api.open-meteo.com/v1/forecast` +
-    `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
-    `&longitude=${encodeURIComponent(OPEN_METEO_LON)}` +
-    `&current=temperature_2m,weather_code,wind_speed_10m` +
-    `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset` +
-    `&forecast_days=3` +
-    `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}`;
-
-  const r = await axios.get(url, { timeout: 15000 });
-  return r.data;
 }
+
+let _meteoCache = null;
+let _meteoCacheTime = 0;
+const METEO_CACHE_TTL = 30 * 60 * 1000; // 30 min
+
+async function getCachedMeteoForecast(options = {}) {
+  const allowStale = options.allowStale !== false;
+  const now = Date.now();
+
+  if (_meteoCache && (now - _meteoCacheTime) < METEO_CACHE_TTL) {
+    return {
+      data: _meteoCache,
+      stale: false,
+      cacheTime: _meteoCacheTime
+    };
+  }
+
+  try {
+    const data = await fetchOpenMeteoForecast();
+    _meteoCache = data;
+    _meteoCacheTime = now;
+    return {
+      data,
+      stale: false,
+      cacheTime: _meteoCacheTime
+    };
+  } catch (e) {
+    if (allowStale && _meteoCache) {
+      console.warn("⚠️ Open-Meteo indisponible, retour du cache périmé");
+      return {
+        data: _meteoCache,
+        stale: true,
+        cacheTime: _meteoCacheTime
+      };
+    }
+    throw e;
+  }
+}
+
 async function fetchMeteoFranceVigilanceRaw() {
   if (!METEOFRANCE_VIGILANCE_URL) {
     throw new Error("METEOFRANCE_VIGILANCE_URL non configurée");
