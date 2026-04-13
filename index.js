@@ -2675,41 +2675,15 @@ app.get("/actus", async (req, res) => {
   res.json({ actus, count: actus.length });
 });
 
-// ════════════════════════════════════════
-// PROXY MÉTÉO — Open-Meteo (contourne CORS)
-// ════════════════════════════════════════
-const METEO_OPEN_URL = 'https://api.open-meteo.com/v1/forecast?latitude=47.822&longitude=1.808&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,pressure_msl,precipitation,wind_gusts_10m&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,wind_gusts_10m,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_sum,uv_index_max,sunrise,sunset,wind_direction_10m_dominant,wind_gusts_10m_max&past_days=1&timezone=Europe%2FParis&forecast_days=10';
-
-// Cache 10 minutes pour éviter de spammer Open-Meteo
-let _meteoCache = null;
-let _meteoCacheTime = 0;
-const METEO_CACHE_TTL = 10 * 60 * 1000; // 10 min
-
-async function getCachedMeteoForecast() {
-  const now = Date.now();
-  if (_meteoCache && (now - _meteoCacheTime) < METEO_CACHE_TTL) {
-    return _meteoCache;
-  }
-  const data = await fetchOpenMeteoForecast();
-  _meteoCache = data;
-  _meteoCacheTime = now;
-  return data;
-}
-
 app.get('/meteo/forecast', async (req, res) => {
   try {
-    const now = Date.now();
-    if (_meteoCache && (now - _meteoCacheTime) < METEO_CACHE_TTL) {
-      res.set('Access-Control-Allow-Origin', '*');
-      return res.json(_meteoCache);
-    }
-    const r = await fetch(METEO_OPEN_URL);
-    if (!r.ok) throw new Error('Open-Meteo HTTP ' + r.status);
-    const data = await r.json();
-    _meteoCache = data;
-    _meteoCacheTime = now;
+    const result = await getCachedMeteoForecast({ allowStale: true });
     res.set('Access-Control-Allow-Origin', '*');
-    res.json(data);
+    res.json({
+      ...result.data,
+      stale: result.stale,
+      cacheTime: result.cacheTime
+    });
   } catch (e) {
     console.error('[meteo/forecast] error:', e.message);
     res.set('Access-Control-Allow-Origin', '*');
@@ -2717,44 +2691,23 @@ app.get('/meteo/forecast', async (req, res) => {
   }
 });
 
-// ── Météo commune + vigilance Météo-France ───────────────────
-app.get("/meteo/vigilance", async (req, res) => {
-  try {
-    const raw = await fetchMeteoFranceVigilanceRaw();
-    const vigilance = extractDepartmentVigilance(raw, "45");
-    res.json({ ok: true, vigilance, raw });
-  } catch (e) {
-    console.error("❌ /meteo/vigilance:", e.response?.status, e.response?.data || e.message);
-    res.status(500).json({
-      ok: false,
-      error: "Vigilance indisponible",
-      status: e.response?.status || null,
-      details: e.response?.data || e.message
-    });
-  }
-});
-
 app.get("/meteo/commune", async (req, res) => {
   try {
-    const [forecast, rawVigilance] = await Promise.all([
-      getCachedMeteoForecast(),
+    const [forecastResult, rawVigilance] = await Promise.all([
+      getCachedMeteoForecast({ allowStale: true }),
       fetchMeteoFranceVigilanceRaw().catch(() => null),
     ]);
 
     const vigilance = extractDepartmentVigilance(rawVigilance, "45");
-    res.json({ forecast, vigilance });
+    res.json({
+      forecast: forecastResult.data,
+      vigilance,
+      stale: forecastResult.stale,
+      cacheTime: forecastResult.cacheTime
+    });
   } catch (e) {
-    console.error("❌ /meteo/commune full:", {
-      message: e.message,
-      status: e.response?.status,
-      data: e.response?.data,
-      stack: e.stack
-    });
-
-    res.status(500).json({
-      error: "Météo indisponible",
-      detail: e.response?.data || e.message
-    });
+    console.error("❌ /meteo/commune:", e.message);
+    res.status(500).json({ error: "Météo indisponible", detail: e.message });
   }
 });
 
@@ -3290,8 +3243,9 @@ app.get("/admin/services/test", adminAuth, async (req, res) => {
   }));
 
   services.push(await runCheck("meteo", "Open-Meteo commune", "🌤️", async () => {
-    const forecast = await getCachedMeteoForecast();
-    const cur = forecast?.current || {};
+  const result = await getCachedMeteoForecast({ allowStale: true });
+  const forecast = result.data;
+  const cur = forecast?.current || {};
     return {
       status: "ok",
       message: `Température reçue : ${Math.round(Number(cur.temperature_2m || 0))}°C`,
