@@ -649,7 +649,7 @@ const VIGILANCE_PHENOMENA = {
   9: "vagues-submersion",
 };
 
-async function fetchOpenMeteoForecast() {
+/*async function fetchOpenMeteoForecast() {
   const url =
     `https://api.open-meteo.com/v1/forecast` +
     `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
@@ -659,6 +659,19 @@ async function fetchOpenMeteoForecast() {
     `&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_sum,uv_index_max,sunrise,sunset,wind_direction_10m_dominant,wind_gusts_10m_max` +
     `&past_days=1` +
     `&forecast_days=10` +
+    `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}`;
+
+  const r = await axios.get(url, { timeout: 15000 });
+  return r.data;
+}*/
+async function fetchOpenMeteoForecast() {
+  const url =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
+    `&longitude=${encodeURIComponent(OPEN_METEO_LON)}` +
+    `&current=temperature_2m,weather_code,wind_speed_10m` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset` +
+    `&forecast_days=3` +
     `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}`;
 
   const r = await axios.get(url, { timeout: 15000 });
