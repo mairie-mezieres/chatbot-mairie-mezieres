@@ -2742,21 +2742,18 @@ app.get("/meteo/commune", async (req, res) => {
     ]);
 
     const vigilance = extractDepartmentVigilance(rawVigilance, "45");
-    return res.json({ forecast, vigilance, stale: false });
+    res.json({ forecast, vigilance });
   } catch (e) {
-    console.error("❌ /meteo/commune:", e.message);
+    console.error("❌ /meteo/commune full:", {
+      message: e.message,
+      status: e.response?.status,
+      data: e.response?.data,
+      stack: e.stack
+    });
 
-    if (_meteoCache) {
-      return res.json({
-        forecast: _meteoCache,
-        vigilance: null,
-        stale: true
-      });
-    }
-
-    return res.status(500).json({
+    res.status(500).json({
       error: "Météo indisponible",
-      detail: e.message
+      detail: e.response?.data || e.message
     });
   }
 });
