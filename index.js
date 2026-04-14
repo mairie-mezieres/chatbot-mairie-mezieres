@@ -4,28 +4,6 @@
 // Facebook feed only (plus de MEL sur Messenger)
 // ════════════════════════════════════════════════════════════
 
-function csvEnv(name) {
-  return String(process.env[name] || "")
-    .split(",")
-    .map(v => v.trim())
-    .filter(Boolean);
-}
-
-const TRELLO_NOTIFY = {
-  bug: {
-    memberIds: csvEnv("TRELLO_NOTIFY_BUG_IDS"),
-    usernames: csvEnv("TRELLO_NOTIFY_BUG_USERS"),
-  },
-  signalement: {
-    memberIds: csvEnv("TRELLO_NOTIFY_SIG_IDS"),
-    usernames: csvEnv("TRELLO_NOTIFY_SIG_USERS"),
-  },
-  demande: {
-    memberIds: csvEnv("TRELLO_NOTIFY_DEMANDE_IDS"),
-    usernames: csvEnv("TRELLO_NOTIFY_DEMANDE_USERS"),
-  }
-};
-
 const express   = require("express");
 const axios     = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
