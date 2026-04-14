@@ -2685,6 +2685,26 @@ app.get("/api/zone-plu", async (req, res) => {
     return res.status(502).json({ ok:false, error:"Service IGN indisponible" });
   }
 });
+
+// Endpoint à ajouter dans index.js
+app.get('/api/install-count', async (req, res) => {
+  try {
+    // Clé Redis déjà utilisée pour les stats standalone
+    // On récupère le cache ou on recalcule
+    const cached = await redis.get('mat:install_count_cache');
+    if (cached) return res.json({ count: parseInt(cached) });
+
+    // Compter les devices distincts ayant ouvert en mode standalone
+    const keys = await redis.keys('mat:device:*:standalone');
+    const count = keys.length;
+
+    await redis.set('mat:install_count_cache', count, { ex: 86400 }); // TTL 24h
+    res.json({ count });
+  } catch(e) {
+    res.json({ count: 0 });
+  }
+});
+
 // ════════════════════════════════════════════════════════════
 // ENDPOINT /api/parcours — Génération de parcours IA (Mistral)
 // + proxy Overpass pour réseau de chemins OSM
