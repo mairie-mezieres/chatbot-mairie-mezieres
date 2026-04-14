@@ -2393,7 +2393,6 @@ async function publishActuToFacebook(title, description, imageBase64, eventDate,
 // ── Envoyer notification push pour une actu ──────────────────
 function buildActuPushPayload(title, description, photoUrl, actuId) {
   const safeId = actuId != null ? String(actuId) : "";
-  const detailHash = safeId ? `/#actu=${encodeURIComponent(safeId)}` : "/#notifs";
 
   return JSON.stringify({
     title: `MAT — ${String(title || "").substring(0, 60)}`,
@@ -2403,14 +2402,13 @@ function buildActuPushPayload(title, description, photoUrl, actuId) {
     image: photoUrl || undefined,
     actions: [{ action: "detail", title: "Détail" }],
     data: {
-      url: detailHash,
-      listUrl: "/#notifs",
+      url: safeId ? `./#actu=${encodeURIComponent(safeId)}` : "./#notifs",
+      listUrl: "./#notifs",
       actuId: safeId || null,
       open: safeId ? "actu" : "notifs"
     }
   });
 }
-
 async function sendActuPush(title, description, photoUrl, actuId) {
   const subs = await readSubs();
   if (!subs.length) return { sent: 0, failed: 0, total: 0 };
