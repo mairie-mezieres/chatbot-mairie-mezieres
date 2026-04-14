@@ -38,6 +38,8 @@ const MISTRAL_URL          = process.env.MISTRAL_URL || "https://api.mistral.ai/
 const TRELLO_KEY     = process.env.TRELLO_KEY || "";
 const TRELLO_TOKEN   = process.env.TRELLO_TOKEN || "";
 const TRELLO_LIST_ID = process.env.TRELLO_LIST_ID || "";
+const TRELLO_MEMBER_ID = process.env.TRELLO_MEMBER_ID || "";
+const TRELLO_USERNAME  = process.env.TRELLO_USERNAME || "";
 
 const UPSTASH_EMAIL         = process.env.UPSTASH_EMAIL || "";
 const UPSTASH_API_KEY       = process.env.UPSTASH_API_KEY || "";
@@ -1439,18 +1441,19 @@ async function createTrelloCard(name, desc, photoB64) {
     return null;
   }
 
-  // 1. Créer la carte
+  // 1. Créer la carte en t'assignant dessus
   const cardRes = await axios.post(
     "https://api.trello.com/1/cards",
     null,
     {
       params: {
-        key:     TRELLO_KEY,
-        token:   TRELLO_TOKEN,
-        idList:  TRELLO_LIST_ID,
-        name:    name.substring(0, 512),
-        desc:    desc.substring(0, 16384),
-        pos:     "top",
+        key: TRELLO_KEY,
+        token: TRELLO_TOKEN,
+        idList: TRELLO_LIST_ID,
+        name: String(name || "Sans titre").substring(0, 512),
+        desc: String(desc || "").substring(0, 16384),
+        pos: "top",
+        ...(TRELLO_MEMBER_ID ? { idMembers: TRELLO_MEMBER_ID } : {})
       },
       timeout: 15000,
     }
@@ -1459,7 +1462,28 @@ async function createTrelloCard(name, desc, photoB64) {
   const card = cardRes.data;
   console.log(`✅ Trello carte créée: ${card.id} — ${card.shortUrl}`);
 
-  // 2. Attacher la photo si présente (base64 → Buffer)
+  // 2. Commentaire avec mention pour déclencher une notif plus visible
+  if (TRELLO_USERNAME) {
+    try {
+      await axios.post(
+        `https://api.trello.com/1/cards/${card.id}/actions/comments`,
+        null,
+        {
+          params: {
+            key: TRELLO_KEY,
+            token: TRELLO_TOKEN,
+            text: `@${TRELLO_USERNAME} Nouvelle carte MAT`
+          },
+          timeout: 10000
+        }
+      );
+      console.log(`🔔 Mention Trello ajoutée sur ${card.id}`);
+    } catch (commentErr) {
+      console.warn("⚠️ Échec commentaire Trello:", commentErr.message);
+    }
+  }
+
+  // 3. Attacher la photo si présente
   if (photoB64 && photoB64.startsWith("data:image")) {
     try {
       const matches = photoB64.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
@@ -1470,7 +1494,10 @@ async function createTrelloCard(name, desc, photoB64) {
 
         const FormData = require("form-data");
         const form = new FormData();
-        form.append("file", buffer, { filename: `photo.${ext}`, contentType: mimeType });
+        form.append("file", buffer, {
+          filename: `photo.${ext}`,
+          contentType: mimeType
+        });
         form.append("name", `photo.${ext}`);
         form.append("mimeType", mimeType);
 
@@ -1488,7 +1515,6 @@ async function createTrelloCard(name, desc, photoB64) {
       }
     } catch (attachErr) {
       console.warn("⚠️ Échec attachement photo Trello:", attachErr.message);
-      // La carte est créée, la photo est optionnelle — on ne fail pas
     }
   }
 
