@@ -4,6 +4,27 @@
 // Facebook feed only (plus de MEL sur Messenger)
 // ════════════════════════════════════════════════════════════
 
+function csvEnv(name) {
+  return String(process.env[name] || "")
+    .split(",")
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
+const TRELLO_NOTIFY = {
+  bug: {
+    memberIds: csvEnv("TRELLO_NOTIFY_BUG_IDS"),
+    usernames: csvEnv("TRELLO_NOTIFY_BUG_USERS"),
+  },
+  signalement: {
+    memberIds: csvEnv("TRELLO_NOTIFY_SIG_IDS"),
+    usernames: csvEnv("TRELLO_NOTIFY_SIG_USERS"),
+  },
+  demande: {
+    memberIds: csvEnv("TRELLO_NOTIFY_DEMANDE_IDS"),
+    usernames: csvEnv("TRELLO_NOTIFY_DEMANDE_USERS"),
+  }
+};
 
 const express   = require("express");
 const axios     = require("axios");
@@ -35,11 +56,38 @@ const MISTRAL_API_KEY      = process.env.MISTRAL_API_KEY || "";
 const MISTRAL_MODEL        = process.env.MISTRAL_MODEL || "mistral-small-latest";
 const MISTRAL_URL          = process.env.MISTRAL_URL || "https://api.mistral.ai/v1/chat/completions";
 
-const TRELLO_KEY     = process.env.TRELLO_KEY || "";
-const TRELLO_TOKEN   = process.env.TRELLO_TOKEN || "";
-const TRELLO_LIST_ID = process.env.TRELLO_LIST_ID || "";
-const TRELLO_MEMBER_ID = process.env.TRELLO_MEMBER_ID || "";
-const TRELLO_USERNAME  = process.env.TRELLO_USERNAME || "";
+const TRELLO_KEY              = process.env.TRELLO_KEY || "";
+const TRELLO_TOKEN            = process.env.TRELLO_TOKEN || "";
+
+const TRELLO_LIST_ID_BUG      = process.env.TRELLO_LIST_ID_BUG || "";
+const TRELLO_LIST_ID_SIG      = process.env.TRELLO_LIST_ID_SIG || "";
+const TRELLO_LIST_ID_DEMANDE  = process.env.TRELLO_LIST_ID_DEMANDE || "";
+
+function csvEnv(name) {
+  return String(process.env[name] || "")
+    .split(",")
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
+const TRELLO_NOTIFY = {
+  bug: {
+    listId: TRELLO_LIST_ID_BUG,
+    memberIds: csvEnv("TRELLO_NOTIFY_BUG_IDS"),
+    usernames: csvEnv("TRELLO_NOTIFY_BUG_USERS"),
+  },
+  signalement: {
+    listId: TRELLO_LIST_ID_SIG,
+    memberIds: csvEnv("TRELLO_NOTIFY_SIG_IDS"),
+    usernames: csvEnv("TRELLO_NOTIFY_SIG_USERS"),
+  },
+  demande: {
+    listId: TRELLO_LIST_ID_DEMANDE,
+    memberIds: csvEnv("TRELLO_NOTIFY_DEMANDE_IDS"),
+    usernames: csvEnv("TRELLO_NOTIFY_DEMANDE_USERS"),
+  }
+};
+
 
 const UPSTASH_EMAIL         = process.env.UPSTASH_EMAIL || "";
 const UPSTASH_API_KEY       = process.env.UPSTASH_API_KEY || "";
@@ -1435,13 +1483,19 @@ function isSameWeatherAlert(a, b) {
 // ═══════════════════════════════════════════════════════════════
 // TRELLO — Création de cartes avec pièce jointe image
 // ═══════════════════════════════════════════════════════════════
-async function createTrelloCard(name, desc, photoB64) {
-  if (!TRELLO_KEY || !TRELLO_TOKEN || !TRELLO_LIST_ID) {
-    console.warn("⚠️ Trello non configuré — variables manquantes");
+async function createTrelloCard(type, name, desc, photoB64) {
+  if (!TRELLO_KEY || !TRELLO_TOKEN) {
+    console.warn("⚠️ Trello non configuré — clé/token manquants");
     return null;
   }
 
-  // 1. Créer la carte en t'assignant dessus
+  const cfg = TRELLO_NOTIFY[type];
+  if (!cfg || !cfg.listId) {
+    console.warn(`⚠️ Trello non configuré pour le type "${type}"`);
+    return null;
+  }
+
+  // 1. Créer la carte dans la bonne liste + affecter les membres
   const cardRes = await axios.post(
     "https://api.trello.com/1/cards",
     null,
@@ -1449,11 +1503,11 @@ async function createTrelloCard(name, desc, photoB64) {
       params: {
         key: TRELLO_KEY,
         token: TRELLO_TOKEN,
-        idList: TRELLO_LIST_ID,
+        idList: cfg.listId,
         name: String(name || "Sans titre").substring(0, 512),
         desc: String(desc || "").substring(0, 16384),
         pos: "top",
-        ...(TRELLO_MEMBER_ID ? { idMembers: TRELLO_MEMBER_ID } : {})
+        ...(cfg.memberIds.length ? { idMembers: cfg.memberIds.join(",") } : {})
       },
       timeout: 15000,
     }
@@ -1462,9 +1516,10 @@ async function createTrelloCard(name, desc, photoB64) {
   const card = cardRes.data;
   console.log(`✅ Trello carte créée: ${card.id} — ${card.shortUrl}`);
 
-  // 2. Commentaire avec mention pour déclencher une notif plus visible
-  if (TRELLO_USERNAME) {
+  // 2. Ajouter un commentaire avec @mentions
+  if (cfg.usernames.length) {
     try {
+      const mentions = cfg.usernames.map(u => `@${u}`).join(" ");
       await axios.post(
         `https://api.trello.com/1/cards/${card.id}/actions/comments`,
         null,
@@ -1472,12 +1527,12 @@ async function createTrelloCard(name, desc, photoB64) {
           params: {
             key: TRELLO_KEY,
             token: TRELLO_TOKEN,
-            text: `@${TRELLO_USERNAME} Nouvelle carte MAT`
+            text: `${mentions}\nNouvelle carte MAT de type : ${type}`
           },
-          timeout: 10000
+          timeout: 10000,
         }
       );
-      console.log(`🔔 Mention Trello ajoutée sur ${card.id}`);
+      console.log(`🔔 Mentions Trello ajoutées sur ${card.id}`);
     } catch (commentErr) {
       console.warn("⚠️ Échec commentaire Trello:", commentErr.message);
     }
@@ -1520,7 +1575,6 @@ async function createTrelloCard(name, desc, photoB64) {
 
   return card;
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // TRACKING IA — tokens + coûts
@@ -2691,16 +2745,23 @@ Les waypoints doivent former une boucle réaliste de ~${distance} km au départ 
 // ── Signalement citoyen → Redis + Trello ─────────────────────
 app.post("/signal", async (req, res) => {
   const { cat, desc, lat, lon, photoB64, type } = req.body || {};
-  const mapsLink = (lat && lon) ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=18` : null;
-  const isBug     = (type === "bug"     || (cat || "").startsWith("[BUG]"));
+
+  const mapsLink = (lat && lon)
+    ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=18`
+    : null;
+
+  const isBug     = (type === "bug" || (cat || "").startsWith("[BUG]"));
   const isContact = (type === "contact" || (cat || "").startsWith("[Demande]"));
-  const isSignal  = !isBug && !isContact;
+  const signalType = isBug ? "bug" : isContact ? "demande" : "signalement";
 
   const signal = {
     id: Date.now(),
+    type: signalType,
     cat: cat || "Non précisée",
     desc: desc || "",
-    lat, lon, mapsLink,
+    lat,
+    lon,
+    mapsLink,
     hasPhoto: !!photoB64,
     date: new Date().toLocaleString("fr-FR"),
     dateISO: new Date().toISOString(),
@@ -2711,31 +2772,32 @@ app.post("/signal", async (req, res) => {
   signals.unshift(signal);
   if (signals.length > 100) signals.splice(100);
   await writeSignals(signals);
-  console.log(`🚨 Signalement stocké #${signal.id}: ${cat}`);
+  console.log(`🚨 Signalement stocké #${signal.id}: ${signalType} — ${signal.cat}`);
 
   // Envoi Trello
   try {
     let cardName;
-    if (isBug) {
-      cardName = `[BUG] ${(cat || "").replace("[BUG]","").trim() || "Non précisé"}`;
-    } else if (isContact) {
-      cardName = `[Demande] ${(desc || "").split("\n")[0].substring(0, 80)}`;
+
+    if (signalType === "bug") {
+      cardName = `[BUG] ${String(cat || "").replace("[BUG]", "").trim() || "Non précisé"}`;
+    } else if (signalType === "demande") {
+      cardName = `[Demande] ${String(desc || "").split("\n")[0].substring(0, 80) || "Contact mairie"}`;
     } else {
       cardName = `[Signalement] ${cat || "Non précisé"}`;
     }
 
-    const mapsLine = mapsLink ? `\n\n📍 [Voir sur la carte](${mapsLink})` : "";
+    const mapsLine = mapsLink ? `\n\n📍 Voir sur la carte : ${mapsLink}` : "";
     const dateLine = `\n\n📅 ${new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" })}`;
-    const cardDesc = (desc || "Aucune description.") + mapsLine + dateLine;
+    const typeLine = `\n🏷️ Type : ${signalType}`;
+    const cardDesc = `${desc || "Aucune description."}${typeLine}${mapsLine}${dateLine}`;
 
-    await createTrelloCard(cardName, cardDesc, photoB64 || null);
+    await createTrelloCard(signalType, cardName, cardDesc, photoB64 || null);
   } catch (trelloErr) {
     console.warn("⚠️ Trello échec (signal stocké Redis quand même):", trelloErr.message);
   }
 
   res.json({ success: true });
 });
-
 app.get("/signalements", async (req, res) => {
   const signals = await readSignals();
   res.json({ signalements: signals, count: signals.length });
@@ -3255,48 +3317,6 @@ app.get("/debug-calendar", adminAuth, async (req, res) => {
   res.json({ ok: true, step: "all_passed", result });
 });
 
-// ── Diagnostic Trello (à supprimer après test) ────────────────
-app.get("/debug-trello", async (req, res) => {
-  const result = {
-    config: {
-      has_key:     !!TRELLO_KEY,
-      has_token:   !!TRELLO_TOKEN,
-      has_list_id: !!TRELLO_LIST_ID,
-      list_id:     TRELLO_LIST_ID || "(vide)",
-      key_preview: TRELLO_KEY ? TRELLO_KEY.substring(0, 6) + "..." : "(vide)",
-    }
-  };
-
-  if (!TRELLO_KEY || !TRELLO_TOKEN || !TRELLO_LIST_ID) {
-    return res.json({ ok: false, error: "Variables Trello manquantes", result });
-  }
-
-  // Test 1 : vérifier que la liste existe
-  try {
-    const listRes = await axios.get(
-      `https://api.trello.com/1/lists/${TRELLO_LIST_ID}`,
-      { params: { key: TRELLO_KEY, token: TRELLO_TOKEN }, timeout: 10000 }
-    );
-    result.list = { id: listRes.data.id, name: listRes.data.name };
-  } catch(e) {
-    return res.json({ ok: false, error: "Liste Trello introuvable: " + (e.response?.data || e.message), result });
-  }
-
-  // Test 2 : créer une carte de test
-  try {
-    const card = await createTrelloCard(
-      "[TEST] Carte de diagnostic MAT",
-      "Test MAT " + new Date().toLocaleString("fr-FR"),
-      null
-    );
-    result.card = { id: card.id, url: card.shortUrl };
-    res.json({ ok: true, result });
-  } catch(e) {
-    res.json({ ok: false, error: "Erreur création carte: " + (e.response?.data || e.message), result });
-  }
-});
-
-
 app.get("/admin/services/test", adminAuth, async (req, res) => {
   const checkedAt = new Date().toISOString();
 
@@ -3464,16 +3484,41 @@ app.get("/admin/services/test", adminAuth, async (req, res) => {
     };
   }));
 
-  services.push(await runCheck("trello", "Trello signalements", "📌", async () => {
-    if (!TRELLO_KEY || !TRELLO_TOKEN || !TRELLO_LIST_ID) {
-      return {
-        status: "warn",
-        message: "Trello non configuré",
-        details: { has_key: !!TRELLO_KEY, has_token: !!TRELLO_TOKEN, has_list_id: !!TRELLO_LIST_ID }
-      };
-    }
+services.push(await runCheck("trello", "Trello notifications", "📌", async () => {
+  if (!TRELLO_KEY || !TRELLO_TOKEN) {
+    return {
+      status: "warn",
+      message: "Trello non configuré",
+      details: {
+        has_key: !!TRELLO_KEY,
+        has_token: !!TRELLO_TOKEN
+      }
+    };
+  }
 
-    const listRes = await axios.get(`https://api.trello.com/1/lists/${TRELLO_LIST_ID}`, {
+  const targets = [
+    { type: "bug",         listId: TRELLO_LIST_ID_BUG },
+    { type: "signalement", listId: TRELLO_LIST_ID_SIG },
+    { type: "demande",     listId: TRELLO_LIST_ID_DEMANDE }
+  ];
+
+  const missing = targets.filter(t => !t.listId).map(t => t.type);
+  if (missing.length) {
+    return {
+      status: "warn",
+      message: `Listes Trello manquantes : ${missing.join(", ")}`,
+      details: {
+        has_bug_list: !!TRELLO_LIST_ID_BUG,
+        has_sig_list: !!TRELLO_LIST_ID_SIG,
+        has_demande_list: !!TRELLO_LIST_ID_DEMANDE
+      }
+    };
+  }
+
+  const results = [];
+
+  for (const target of targets) {
+    const listRes = await axios.get(`https://api.trello.com/1/lists/${target.listId}`, {
       params: { key: TRELLO_KEY, token: TRELLO_TOKEN },
       timeout: 10000
     });
@@ -3482,9 +3527,9 @@ app.get("/admin/services/test", adminAuth, async (req, res) => {
       params: {
         key: TRELLO_KEY,
         token: TRELLO_TOKEN,
-        idList: TRELLO_LIST_ID,
-        name: "[TEST MAT] Diagnostic auto",
-        desc: "Carte créée puis supprimée automatiquement par le test admin."
+        idList: target.listId,
+        name: `[TEST MAT] Diagnostic auto ${target.type}`,
+        desc: `Carte de test créée puis supprimée automatiquement par le diagnostic admin (${target.type}).`
       },
       timeout: 10000
     });
@@ -3498,12 +3543,20 @@ app.get("/admin/services/test", adminAuth, async (req, res) => {
       deleted = true;
     }
 
-    return {
-      status: "ok",
-      message: `Liste Trello OK : ${listRes.data?.name || TRELLO_LIST_ID}`,
-      details: { list_id: TRELLO_LIST_ID, list_name: listRes.data?.name || null, deleted_test_card: deleted }
-    };
-  }));
+    results.push({
+      type: target.type,
+      list_id: target.listId,
+      list_name: listRes.data?.name || null,
+      deleted_test_card: deleted
+    });
+  }
+
+  return {
+    status: "ok",
+    message: "Listes Trello OK : bug, signalement, demande",
+    details: results
+  };
+}));
 
   services.push(await runCheck("mistral", "Mistral", "🤖", async () => {
     if (!MISTRAL_API_KEY) {
