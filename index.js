@@ -140,6 +140,8 @@ async function readSignals()            { return (await redisGet("mat:signals"))
 async function writeSignals(d)          { await redisSet("mat:signals", d); }
 async function readLastWeatherAlert()   { return await redisGet("mat:weather:last"); }
 async function writeLastWeatherAlert(d) { await redisSet("mat:weather:last", d); }
+async function readMeteoCache()       { return await redisGet("mat:meteo:cache"); }
+async function writeMeteoCache(data)  { await redisSet("mat:meteo:cache", data); }
 async function readSeenPosts()          { return (await redisGet("mat:seen_posts")) || {}; }
 async function writeSeenPosts(d)        { await redisSet("mat:seen_posts", d); }
 async function readMelCache()           { return (await redisGet("mat:mel:cache")) || {}; }
@@ -669,9 +671,11 @@ async function fetchOpenMeteoForecast() {
     `https://api.open-meteo.com/v1/forecast` +
     `?latitude=${encodeURIComponent(OPEN_METEO_LAT)}` +
     `&longitude=${encodeURIComponent(OPEN_METEO_LON)}` +
-    `&current=temperature_2m,weather_code,wind_speed_10m` +
-    `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset` +
-    `&forecast_days=3` +
+    `&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,pressure_msl,precipitation,wind_gusts_10m` +
+    `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,wind_gusts_10m,surface_pressure` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_sum,uv_index_max,sunrise,sunset,wind_direction_10m_dominant,wind_gusts_10m_max` +
+    `&past_days=1` +
+    `&forecast_days=10` +
     `&timezone=${encodeURIComponent(OPEN_METEO_TZ)}`;
 
   const r = await axios.get(url, { timeout: 15000 });
@@ -680,38 +684,80 @@ async function fetchOpenMeteoForecast() {
 
 let _meteoCache = null;
 let _meteoCacheTime = 0;
-const METEO_CACHE_TTL = 30 * 60 * 1000; // 30 min
+const METEO_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 
 async function getCachedMeteoForecast(options = {}) {
   const allowStale = options.allowStale !== false;
   const now = Date.now();
 
+  // 1) Cache mémoire prioritaire
   if (_meteoCache && (now - _meteoCacheTime) < METEO_CACHE_TTL) {
     return {
       data: _meteoCache,
       stale: false,
-      cacheTime: _meteoCacheTime
+      cacheTime: _meteoCacheTime,
+      source: "memory"
     };
   }
 
+  // 2) Cache Redis en secours
+  const redisCached = await readMeteoCache();
+  if (
+    redisCached &&
+    redisCached.data &&
+    redisCached.cacheTime &&
+    (now - redisCached.cacheTime) < METEO_CACHE_TTL
+  ) {
+    _meteoCache = redisCached.data;
+    _meteoCacheTime = redisCached.cacheTime;
+    return {
+      data: _meteoCache,
+      stale: false,
+      cacheTime: _meteoCacheTime,
+      source: "redis"
+    };
+  }
+
+  // 3) Appel Open-Meteo seulement si nécessaire
   try {
     const data = await fetchOpenMeteoForecast();
     _meteoCache = data;
     _meteoCacheTime = now;
+    await writeMeteoCache({
+      data,
+      cacheTime: now
+    });
     return {
       data,
       stale: false,
-      cacheTime: _meteoCacheTime
+      cacheTime: _meteoCacheTime,
+      source: "open-meteo"
     };
   } catch (e) {
+    // 4) Secours sur cache mémoire expiré
     if (allowStale && _meteoCache) {
-      console.warn("⚠️ Open-Meteo indisponible, retour du cache périmé");
+      console.warn("⚠️ Open-Meteo indisponible, retour du cache mémoire périmé");
       return {
         data: _meteoCache,
         stale: true,
-        cacheTime: _meteoCacheTime
+        cacheTime: _meteoCacheTime,
+        source: "memory-stale"
       };
     }
+
+    // 5) Secours sur cache Redis expiré
+    if (allowStale && redisCached && redisCached.data) {
+      console.warn("⚠️ Open-Meteo indisponible, retour du cache Redis périmé");
+      _meteoCache = redisCached.data;
+      _meteoCacheTime = redisCached.cacheTime || 0;
+      return {
+        data: redisCached.data,
+        stale: true,
+        cacheTime: redisCached.cacheTime || null,
+        source: "redis-stale"
+      };
+    }
+
     throw e;
   }
 }
@@ -2720,7 +2766,8 @@ app.get('/meteo/forecast', async (req, res) => {
     res.json({
       ...result.data,
       stale: result.stale,
-      cacheTime: result.cacheTime
+      cacheTime: result.cacheTime,
+      source: result.source
     });
   } catch (e) {
     console.error('[meteo/forecast] error:', e.message);
@@ -2741,7 +2788,8 @@ app.get("/meteo/commune", async (req, res) => {
       forecast: forecastResult.data,
       vigilance,
       stale: forecastResult.stale,
-      cacheTime: forecastResult.cacheTime
+      cacheTime: forecastResult.cacheTime,
+      source: forecastResult.source
     });
   } catch (e) {
     console.error("❌ /meteo/commune:", e.message);
