@@ -177,6 +177,14 @@ async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
 async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
 
+async function readMelTreeConfig() {
+  return await redisGet("mat:mel:tree:data");
+}
+
+async function writeMelTreeConfig(data) {
+  await redisSet("mat:mel:tree:data", data);
+}
+
 function getDefaultAdminSettings() {
   return {
     detailedStatsEnabled: true, // météo, contact, actualités, signalement, idées, app_resume...
@@ -1599,6 +1607,83 @@ function calcIaCost(provider, inTokens, outTokens) {
   return 0;
 }
 
+function normalizeMelLink(link = {}) {
+  const label = String(link.label || "").trim();
+  const tel = String(link.tel || "").trim();
+  const url = String(link.url || "").trim();
+  if (!label || (!tel && !url)) return null;
+  return tel ? { label, tel } : { label, url };
+}
+
+function normalizeMelQuestion(question = {}, idx = 0) {
+  const id = String(question.id || `q${idx + 1}`).trim();
+  const label = String(question.label || "").trim();
+  const ico = String(question.ico || "💬").trim() || "💬";
+  if (!id || !label) return null;
+
+  const out = { id, ico, label };
+
+  const prompt = String(question.prompt || "").trim();
+  const topic = String(question.topic || "").trim();
+  if (prompt) out.prompt = prompt;
+  if (topic) out.topic = topic;
+
+  const rawAnswer = question.directAnswer;
+  if (typeof rawAnswer === "string") {
+    const txt = rawAnswer.trim();
+    if (txt) out.directAnswer = { text: txt };
+  } else if (rawAnswer && typeof rawAnswer === "object") {
+    const text = String(rawAnswer.text || "").trim();
+    const links = Array.isArray(rawAnswer.links)
+      ? rawAnswer.links.map(normalizeMelLink).filter(Boolean)
+      : [];
+    if (text || links.length) {
+      out.directAnswer = {};
+      if (text) out.directAnswer.text = text;
+      if (links.length) out.directAnswer.links = links;
+    }
+  }
+
+  return out;
+}
+
+function normalizeMelCategory(key, category = {}) {
+  const cleanKey = String(key || "").trim();
+  const label = String(category.label || "").trim();
+  const ico = String(category.ico || "💬").trim() || "💬";
+  if (!cleanKey || !label) return null;
+
+  const out = {
+    label,
+    ico,
+    needZone: !!category.needZone,
+    questions: Array.isArray(category.questions)
+      ? category.questions.map(normalizeMelQuestion).filter(Boolean)
+      : []
+  };
+
+  if (category.openChatDirectly) out.openChatDirectly = true;
+  return [cleanKey, out];
+}
+
+function normalizeMelTree(tree = {}) {
+  if (!tree || typeof tree !== "object" || Array.isArray(tree)) {
+    throw new Error("Structure MEL invalide");
+  }
+
+  const out = {};
+  for (const [key, value] of Object.entries(tree)) {
+    const normalized = normalizeMelCategory(key, value);
+    if (normalized) out[normalized[0]] = normalized[1];
+  }
+
+  if (!Object.keys(out).length) {
+    throw new Error("Aucune catégorie MEL valide");
+  }
+
+  return out;
+}
+
 // ── Middleware auth admin ─────────────────────────────────────
 function adminAuth(req, res, next) {
   const token = req.headers["x-admin-token"] || req.query.token;
@@ -1832,6 +1917,34 @@ app.post("/admin/settings", adminAuth, async (req, res) => {
     res.json({ ok: true, settings: next });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/mel/tree", async (req, res) => {
+  try {
+    const tree = await readMelTreeConfig();
+    res.json({ ok: true, tree: tree || null });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/admin/mel-tree", adminAuth, async (req, res) => {
+  try {
+    const tree = await readMelTreeConfig();
+    res.json({ ok: true, tree: tree || null });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/admin/mel-tree", adminAuth, async (req, res) => {
+  try {
+    const tree = normalizeMelTree((req.body || {}).tree);
+    await writeMelTreeConfig(tree);
+    res.json({ ok: true, tree, categories: Object.keys(tree).length });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message || "Structure MEL invalide" });
   }
 });
 
