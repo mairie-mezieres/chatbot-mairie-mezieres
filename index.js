@@ -2685,26 +2685,6 @@ app.get("/api/zone-plu", async (req, res) => {
     return res.status(502).json({ ok:false, error:"Service IGN indisponible" });
   }
 });
-
-// Endpoint à ajouter dans index.js
-app.get('/api/install-count', async (req, res) => {
-  try {
-    // Clé Redis déjà utilisée pour les stats standalone
-    // On récupère le cache ou on recalcule
-    const cached = await redis.get('mat:install_count_cache');
-    if (cached) return res.json({ count: parseInt(cached) });
-
-    // Compter les devices distincts ayant ouvert en mode standalone
-    const keys = await redis.keys('mat:device:*:standalone');
-    const count = keys.length;
-
-    await redis.set('mat:install_count_cache', count, { ex: 86400 }); // TTL 24h
-    res.json({ count });
-  } catch(e) {
-    res.json({ count: 0 });
-  }
-});
-
 // ════════════════════════════════════════════════════════════
 // ENDPOINT /api/parcours — Génération de parcours IA (Mistral)
 // + proxy Overpass pour réseau de chemins OSM
@@ -3242,6 +3222,33 @@ app.get("/stats", async (req, res) => {
       accessTrendMonth: pctTrend(accessMonth, accessPrevMonth)
     }
   });
+});
+
+// ── Route : compteur public installations ────────────────────────────────────
+app.get("/api/install-count", async (req, res) => {
+  try {
+    const cached = await redisGet("mat:install_count_cache");
+    if (cached !== null && cached !== undefined) {
+      return res.json({ count: parseInt(cached) || 0 });
+    }
+    const stats = await readStats();
+    const count = stats.services?.installation || 0;
+    // Stockage avec TTL 24h via API REST Upstash (SETEX)
+    if (REDIS_URL) {
+      try {
+        const key = encodeURIComponent("mat:install_count_cache");
+        await axios.post(
+          `${REDIS_URL}/setex/${key}/86400`,
+          JSON.stringify(count),
+          { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
+        );
+      } catch (e) { console.warn("install-count cache set:", e.message); }
+    }
+    res.json({ count });
+  } catch (e) {
+    console.error("install-count error:", e.message);
+    res.json({ count: 0 });
+  }
 });
 
 // ── Route setup webhook// ── Route setup webhook (à appeler une seule fois) ───────────
