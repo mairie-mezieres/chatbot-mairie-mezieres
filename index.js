@@ -3057,6 +3057,30 @@ app.post("/push/unsubscribe", async (req, res) => {
   res.json({ success: true });
 });
 
+// ── Rappels déchets ───────────────────────────────────────────
+async function readDechetsSubs() { return (await redisGet('mat:subs:dechets')) || []; }
+async function writeDechetsSubs(d) { await redisSet('mat:subs:dechets', d); }
+
+app.post('/push/subscribe/dechets', async (req, res) => {
+  const sub = req.body;
+  if (!sub || !sub.endpoint) return res.status(400).json({ error: 'Subscription invalide' });
+  const subs = await readDechetsSubs();
+  if (!subs.some(s => s.endpoint === sub.endpoint)) {
+    subs.push(sub);
+    await writeDechetsSubs(subs);
+    console.log(`♻️ Nouvel abonné rappels déchets (total: ${subs.length})`);
+  }
+  res.json({ success: true, total: subs.length });
+});
+
+app.post('/push/unsubscribe/dechets', async (req, res) => {
+  const { endpoint } = req.body || {};
+  if (!endpoint) return res.status(400).json({ error: 'Endpoint requis' });
+  const subs = (await readDechetsSubs()).filter(s => s.endpoint !== endpoint);
+  await writeDechetsSubs(subs);
+  res.json({ success: true });
+});
+
 // ── Stats usage ──────────────────────────────────────────────
 app.post("/stats/track", async (req, res) => {
   const { service, device } = req.body || {};
@@ -3848,3 +3872,53 @@ app.listen(PORT, async () => {
     }, WEATHER_CHECK_INTERVAL_MS);
   }, 30000);
 });
+
+// ── Rappels déchets quotidiens à 18h (heure de Paris) ────────
+function _dechetsWeekNumber(d) {
+  const j = new Date(d.getFullYear(), 0, 1);
+  return Math.ceil((((d - j) / 86400000) + j.getDay() + 1) / 7);
+}
+
+function _dechetsTomorrowType() {
+  const pNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+  const tom = new Date(pNow);
+  tom.setDate(tom.getDate() + 1);
+  const dow = tom.getDay();
+  if (dow === 1) return 'noir';
+  if (dow === 2 && _dechetsWeekNumber(tom) % 2 === 0) return 'jaune';
+  return null;
+}
+
+async function _sendDechetsReminder() {
+  const type = _dechetsTomorrowType();
+  if (!type) return;
+  const subs = await readDechetsSubs();
+  if (!subs.length) return;
+  const isNoir = type === 'noir';
+  const payload = JSON.stringify({
+    title: `MAT — Collecte ${isNoir ? 'ordures ménagères' : 'recyclables'} demain`,
+    body: isNoir ? '🗑️ Pensez à sortir votre bac noir ce soir !' : '♻️ Pensez à sortir votre bac jaune ce soir !',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    data: { url: './', open: 'dechets' }
+  });
+  const dead = [];
+  for (const sub of subs) {
+    try { await webpush.sendNotification(sub, payload); }
+    catch(e) { if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint); }
+  }
+  if (dead.length) await writeDechetsSubs(subs.filter(s => !dead.includes(s.endpoint)));
+  console.log(`🗑️ Rappel déchets (${type}) → ${subs.length} abonnés`);
+}
+
+let _dechetsLastSentDate = '';
+setInterval(async () => {
+  try {
+    const pNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+    if (pNow.getHours() !== 18 || pNow.getMinutes() > 10) return;
+    const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
+    if (_dechetsLastSentDate === today) return;
+    _dechetsLastSentDate = today;
+    await _sendDechetsReminder();
+  } catch(e) { console.warn('Dechets reminder:', e.message); }
+}, 5 * 60 * 1000);
