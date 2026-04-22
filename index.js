@@ -176,6 +176,12 @@ async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
 async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
 async function readTempDocs()            { return (await redisGet("mat:docs:temp")) || []; }
 async function writeTempDocs(d)          { await redisSet("mat:docs:temp", d); }
+async function readSondages()            { return (await redisGet("mat:sondages")) || []; }
+async function writeSondages(d)          { await redisSet("mat:sondages", d); }
+async function readSondageResults(id)    { return (await redisGet("mat:sondage:results:" + id)) || {total:0,answers:{}}; }
+async function writeSondageResults(id,d) { await redisSet("mat:sondage:results:" + id, d); }
+async function readFeaturedDoc()         { return await redisGet("mat:docs:featured"); }
+async function writeFeaturedDoc(d)       { await redisSet("mat:docs:featured", d); }
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
 
 async function readMelTreeConfig() {
@@ -3887,6 +3893,92 @@ app.delete("/admin/docs/temp/:id", adminAuth, async (req, res) => {
   const docs = (await readTempDocs()).filter(d => d.id !== id);
   await writeTempDocs(docs);
   res.json({ ok: true, docs });
+});
+
+
+// ── Documents : dernier document publié ─────────────────
+app.get("/docs/featured", async (req, res) => {
+  res.json({ doc: await readFeaturedDoc() || null });
+});
+app.post("/admin/docs/featured", adminAuth, async (req, res) => {
+  const { title, url, icon, description } = req.body || {};
+  if (!title || !url) return res.status(400).json({ error: "title et url requis" });
+  const doc = { title: String(title).substring(0,200), url: String(url).substring(0,500), icon: icon ? String(icon).substring(0,10) : "📄", description: description ? String(description).substring(0,300) : "", publishedAt: new Date().toISOString() };
+  await writeFeaturedDoc(doc);
+  res.json({ ok: true, doc });
+});
+app.delete("/admin/docs/featured", adminAuth, async (req, res) => {
+  await writeFeaturedDoc(null);
+  res.json({ ok: true });
+});
+
+// ── Sondages citoyens ────────────────────────────────────
+app.get("/sondages", async (req, res) => {
+  const all = await readSondages();
+  const now = Date.now();
+  res.json({ sondages: all.filter(s => s.isActive && (!s.endsAt || new Date(s.endsAt).getTime() > now)) });
+});
+app.get("/sondages/:id", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const s = (await readSondages()).find(x => x.id === id);
+  if (!s) return res.status(404).json({ error: "Sondage non trouvé" });
+  res.json({ sondage: s, results: await readSondageResults(id) });
+});
+app.post("/sondages/:id/vote", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const all = await readSondages();
+  const s = all.find(x => x.id === id);
+  if (!s || !s.isActive) return res.status(400).json({ error: "Sondage non disponible" });
+  const { answer } = req.body || {};
+  const results = await readSondageResults(id);
+  results.total = (results.total || 0) + 1;
+  if (!results.answers) results.answers = {};
+  if (s.type === 'single') {
+    const k = String(answer); results.answers[k] = (results.answers[k] || 0) + 1;
+  } else if (s.type === 'multiple') {
+    (Array.isArray(answer) ? answer : [answer]).forEach(k => { k = String(k); results.answers[k] = (results.answers[k] || 0) + 1; });
+  } else if (s.type === 'rating') {
+    const k = String(answer); results.answers[k] = (results.answers[k] || 0) + 1;
+  } else if (s.type === 'text') {
+    if (!results.answers.texts) results.answers.texts = [];
+    if (results.answers.texts.length < 100) results.answers.texts.push(String(answer || '').substring(0, 500));
+  }
+  await writeSondageResults(id, results);
+  res.json({ ok: true, results });
+});
+app.get("/admin/sondages", adminAuth, async (req, res) => {
+  res.json({ sondages: await readSondages() });
+});
+app.post("/admin/sondages", adminAuth, async (req, res) => {
+  const { title, description, type, options, endsAt } = req.body || {};
+  if (!title || !type) return res.status(400).json({ error: "title et type requis" });
+  if (!['single','multiple','text','rating'].includes(type)) return res.status(400).json({ error: "type invalide" });
+  const sondages = await readSondages();
+  const s = { id: Date.now(), title: String(title).substring(0,200), description: description ? String(description).substring(0,500) : "", type, options: (['single','multiple'].includes(type) && Array.isArray(options)) ? options.slice(0,10).map(o => String(o).substring(0,200)) : [], isActive: true, createdAt: new Date().toISOString(), endsAt: endsAt || null };
+  sondages.push(s);
+  await writeSondages(sondages);
+  res.json({ ok: true, sondage: s });
+});
+app.patch("/admin/sondages/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const sondages = await readSondages();
+  const idx = sondages.findIndex(s => s.id === id);
+  if (idx < 0) return res.status(404).json({ error: "Sondage non trouvé" });
+  const { isActive, title, description, endsAt } = req.body || {};
+  if (isActive !== undefined) sondages[idx].isActive = !!isActive;
+  if (title !== undefined) sondages[idx].title = String(title).substring(0,200);
+  if (description !== undefined) sondages[idx].description = String(description).substring(0,500);
+  if (endsAt !== undefined) sondages[idx].endsAt = endsAt || null;
+  await writeSondages(sondages);
+  res.json({ ok: true, sondage: sondages[idx] });
+});
+app.delete("/admin/sondages/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  await writeSondages((await readSondages()).filter(s => s.id !== id));
+  res.json({ ok: true });
+});
+app.get("/admin/sondages/:id/results", adminAuth, async (req, res) => {
+  res.json({ results: await readSondageResults(parseInt(req.params.id,10)) });
 });
 
 app.listen(PORT, async () => {
