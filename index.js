@@ -174,6 +174,8 @@ async function writeSeenPosts(d)        { await redisSet("mat:seen_posts", d); }
 async function readMelCache()           { return (await redisGet("mat:mel:cache")) || {}; }
 async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
 async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
+async function readTempDocs()            { return (await redisGet("mat:docs:temp")) || []; }
+async function writeTempDocs(d)          { await redisSet("mat:docs:temp", d); }
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
 
 async function readMelTreeConfig() {
@@ -3858,6 +3860,35 @@ app.get("/bus", (req, res) => res.json({
 
 // ── Démarrage ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
+
+// ── Documents temporaires ────────────────────────────────
+app.get("/docs/temp", async (req, res) => {
+  const docs = await readTempDocs();
+  res.json({ docs });
+});
+
+app.post("/admin/docs/temp", adminAuth, async (req, res) => {
+  const { title, description, url } = req.body || {};
+  if (!title || !url) return res.status(400).json({ error: "title et url requis" });
+  const docs = await readTempDocs();
+  docs.push({
+    id: Date.now(),
+    title: String(title).substring(0, 200),
+    description: description ? String(description).substring(0, 300) : "",
+    url: String(url).substring(0, 500),
+    addedAt: new Date().toISOString()
+  });
+  await writeTempDocs(docs);
+  res.json({ ok: true, docs });
+});
+
+app.delete("/admin/docs/temp/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const docs = (await readTempDocs()).filter(d => d.id !== id);
+  await writeTempDocs(docs);
+  res.json({ ok: true, docs });
+});
+
 app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
