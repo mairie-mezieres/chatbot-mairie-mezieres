@@ -1975,7 +1975,7 @@ app.patch("/admin/ideas/:id", adminAuth, async (req, res) => {
   const idx = ideas.findIndex(i => i.id === id);
   if (idx < 0) return res.status(404).json({ error: "Idée non trouvée" });
   if (status !== undefined) ideas[idx].status = status || null;
-  if (adminComment !== undefined) ideas[idx].adminComment = String(adminComment).substring(0, 500);
+  if (adminComment !== undefined) ideas[idx].adminComment = (adminComment == null) ? '' : String(adminComment).substring(0, 500);
   await writeIdeas(ideas);
   res.json({ ok: true, idea: ideas[idx] });
 });
