@@ -1,4 +1,3 @@
-// ════════════════════════════════════════════════════════════
 // MAT — Mézières Avec Toi · Serveur Render v6.5
 // Mistral principal + cache + réponses directes + fallback Claude
 // Facebook feed only (plus de MEL sur Messenger)
@@ -175,6 +174,8 @@ async function writeSeenPosts(d)        { await redisSet("mat:seen_posts", d); }
 async function readMelCache()           { return (await redisGet("mat:mel:cache")) || {}; }
 async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
 async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
+async function readTempDocs()            { return (await redisGet("mat:docs:temp")) || []; }
+async function writeTempDocs(d)          { await redisSet("mat:docs:temp", d); }
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
 
 async function readMelTreeConfig() {
@@ -1962,6 +1963,23 @@ app.delete("/admin/ideas/:id", adminAuth, async (req, res) => {
   if (filtered.length === ideas.length) return res.status(404).json({ error: "Idée non trouvée" });
   await writeIdeas(filtered);
   res.json({ ok: true, deleted: id });
+});
+
+// ── Mettre à jour statut + commentaire d'une idée ────────────
+app.patch("/admin/ideas/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { status, adminComment } = req.body || {};
+  const validStatuses = [null, "", "studying", "accepted", "rejected"];
+  if (status !== undefined && !validStatuses.includes(status)) {
+    return res.status(400).json({ error: "Statut invalide" });
+  }
+  const ideas = await readIdeas();
+  const idx = ideas.findIndex(i => i.id === id);
+  if (idx < 0) return res.status(404).json({ error: "Idée non trouvée" });
+  if (status !== undefined) ideas[idx].status = status || null;
+  if (adminComment !== undefined) ideas[idx].adminComment = (adminComment == null) ? '' : String(adminComment).substring(0, 500);
+  await writeIdeas(ideas);
+  res.json({ ok: true, idea: ideas[idx] });
 });
 
 // ── Liste notifications/actus (admin) ─────────────────────────
@@ -3842,6 +3860,35 @@ app.get("/bus", (req, res) => res.json({
 
 // ── Démarrage ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
+
+// ── Documents temporaires ────────────────────────────────
+app.get("/docs/temp", async (req, res) => {
+  const docs = await readTempDocs();
+  res.json({ docs });
+});
+
+app.post("/admin/docs/temp", adminAuth, async (req, res) => {
+  const { title, description, url } = req.body || {};
+  if (!title || !url) return res.status(400).json({ error: "title et url requis" });
+  const docs = await readTempDocs();
+  docs.push({
+    id: Date.now(),
+    title: String(title).substring(0, 200),
+    description: description ? String(description).substring(0, 300) : "",
+    url: String(url).substring(0, 500),
+    addedAt: new Date().toISOString()
+  });
+  await writeTempDocs(docs);
+  res.json({ ok: true, docs });
+});
+
+app.delete("/admin/docs/temp/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const docs = (await readTempDocs()).filter(d => d.id !== id);
+  await writeTempDocs(docs);
+  res.json({ ok: true, docs });
+});
+
 app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
