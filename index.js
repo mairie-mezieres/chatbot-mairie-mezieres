@@ -3946,8 +3946,21 @@ app.post("/sondages/:id/vote", async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const all = await readSondages();
   const s = all.find(x => x.id === id);
-  if (!s || s.active === false) return res.status(400).json({ error: "Sondage non disponible" });
+  // Reject if inactive or past endsAt
+  if (!s || s.active === false || (s.endsAt && new Date(s.endsAt).getTime() <= Date.now())) {
+    return res.status(400).json({ error: "Sondage non disponible" });
+  }
   const { reponse } = req.body || {};
+  // Validate input before writing
+  if (s.type === 'choix_unique') {
+    if (!s.options || !s.options.includes(String(reponse))) return res.status(400).json({ error: "Option invalide" });
+  } else if (s.type === 'choix_multiple') {
+    const opts = Array.isArray(reponse) ? reponse : [reponse];
+    if (!opts.length || opts.some(k => !s.options || !s.options.includes(String(k)))) return res.status(400).json({ error: "Option invalide" });
+  } else if (s.type === 'notation_etoiles') {
+    const n = parseInt(reponse, 10);
+    if (!(n >= 1 && n <= 5)) return res.status(400).json({ error: "Note invalide (1-5)" });
+  }
   const results = await readSondageResults(id);
   results.total = (results.total || 0) + 1;
   if (s.type === 'texte_libre') {
