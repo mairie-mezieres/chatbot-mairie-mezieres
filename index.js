@@ -3929,6 +3929,19 @@ app.get("/sondages/:id", async (req, res) => {
   if (!s) return res.status(404).json({ error: "Sondage non trouvé" });
   res.json({ sondage: s });
 });
+app.get("/sondages/:id/results", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const s = (await readSondages()).find(x => x.id === id);
+  if (!s) return res.status(404).json({ error: "Sondage non trouvé" });
+  const results = await readSondageResults(id);
+  res.json({
+    total: results.total || 0,
+    reponses: results.reponses || [],
+    counts: results.counts || {},
+    distribution: results.distribution || {},
+    average: results.average || null
+  });
+});
 app.post("/sondages/:id/vote", async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const all = await readSondages();
