@@ -312,7 +312,7 @@ function compactSeenMap(mapObj = {}, keepKeys = []) {
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin",  "*");
 res.header("Access-Control-Allow-Headers", "Content-Type, x-admin-token, x-device-id");
-  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   next();
 });
 app.options("*", (req, res) => res.sendStatus(200));
@@ -925,6 +925,11 @@ RÈGLES ABSOLUES :
 - Si la conversation contient des messages précédents, tiens-en compte pour répondre dans la continuité.
 - Quand tu mentionnes un élu (maire, adjoint, conseiller), donne ses informations disponibles (rôle, pôle) et indique que l'utilisateur peut contacter la mairie au 02 38 45 61 76 pour le joindre. Utilise le mot-clé magique [SHOW_ELUS] à la fin de ta réponse si la question porte sur un ou plusieurs élus nommément, pour que l'interface propose le trombinoscope.
 
+RÈGLE ABSOLUE — URBANISME :
+Pour toute réponse sur l'urbanisme, le PLU, les zones, les permis ou les déclarations, ajoute TOUJOURS cette mention à la fin (sur une ligne séparée) :
+"⚠️ Ces informations sont indicatives — vérifiez votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+
 URBANISME — PLU DE MÉZIÈRES-LEZ-CLÉRY (approuvé 30/01/2013) :
 Pour identifier sa zone : geoportail-urbanisme.gouv.fr (cliquer sur la parcelle → zone affichée à gauche).
 Lien direct : geoportail-urbanisme.gouv.fr/map/#tile=1&lon=1.8048&lat=47.8181&zoom=15
@@ -1109,62 +1114,98 @@ const DIRECT_RULES = [
   {
     name: "plu_geoportail",
     test: (q) => /geoportail|géoportail|ma.zone|quelle.zone|trouver.zone|connaitre.zone|connaître.zone|ma.parcelle|numero.parcelle|numéro.parcelle|secteur.habitation|quelle.est.ma.zone/.test(q),
-    answer: "🗺️ Pour connaître votre zone PLU à Mézières-lez-Cléry : rendez-vous sur geoportail-urbanisme.gouv.fr, entrez votre adresse, zoomez sur votre parcelle et cliquez dessus — la zone (Ua, Ub, A, N…) et le numéro de parcelle apparaissent dans le panneau de gauche. Lien direct centré sur Mézières : geoportail-urbanisme.gouv.fr/map/#tile=1&lon=1.8048&lat=47.8181&zoom=15 — Posez-moi ensuite votre zone pour que je vous explique les règles !"
+    answer: "🗺️ Pour connaître votre zone PLU à Mézières-lez-Cléry : rendez-vous sur geoportail-urbanisme.gouv.fr, entrez votre adresse, zoomez sur votre parcelle et cliquez dessus — la zone (Ua, Ub, A, N…) et le numéro de parcelle apparaissent dans le panneau de gauche. Lien direct centré sur Mézières : geoportail-urbanisme.gouv.fr/map/#tile=1&lon=1.8048&lat=47.8181&zoom=15 — Posez-moi ensuite votre zone pour que je vous explique les règles !
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_zone_ua",
     test: (q) => /ua|zone.ua|bourg.ancien|hameau.ancien|vieux.bourg/.test(q),
-    answer: "🏗️ La zone Ua correspond aux secteurs bâtis les plus anciens du bourg et hameaux de Mézières. Vocation principale : habitat. Commerces et artisanat compatibles acceptés. Règles clés : hauteur max 6 m à l'égout, emprise au sol max 50 %, toiture 2 pentes ≥ 35° en ardoises ou tuiles plates, implantation à l'alignement ou recul ≥ 2 m, limite séparative : contiguïté ou retrait ≥ 3 m. Pour identifier votre zone : geoportail-urbanisme.gouv.fr ou mairie au 02 38 45 61 76."
+    answer: "🏗️ La zone Ua correspond aux secteurs bâtis les plus anciens du bourg et hameaux de Mézières. Vocation principale : habitat. Commerces et artisanat compatibles acceptés. Règles clés : hauteur max 6 m à l'égout, emprise au sol max 50 %, toiture 2 pentes ≥ 35° en ardoises ou tuiles plates, implantation à l'alignement ou recul ≥ 2 m, limite séparative : contiguïté ou retrait ≥ 3 m. Pour identifier votre zone : geoportail-urbanisme.gouv.fr ou mairie au 02 38 45 61 76.
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_zone_ub",
     test: (q) => /ub|zone.ub|zone.ub1|lotissement|manthelon|clos.de.manthelon|zone.residentielle|zone.résidentielle/.test(q),
-    answer: "🏗️ La zone Ub est la zone résidentielle de Mézières (constructions de la 2e moitié du XXe siècle). Règles clés : hauteur max 4 m à l'égout, emprise max 30 %, recul ≥ 5 m de la voie, 30 % du terrain en espaces verts, toiture 2 pentes ≥ 35° en ardoises/tuiles plates, murs sans blanc pur ni couleur vive. Secteur Ub1 (Clos de Manthelon) : hauteur max 8 m, tuiles terre cuite 40-45°, sens du faîtage imposé selon le plan parcellaire. Pour localiser votre parcelle : geoportail-urbanisme.gouv.fr"
+    answer: "🏗️ La zone Ub est la zone résidentielle de Mézières (constructions de la 2e moitié du XXe siècle). Règles clés : hauteur max 4 m à l'égout, emprise max 30 %, recul ≥ 5 m de la voie, 30 % du terrain en espaces verts, toiture 2 pentes ≥ 35° en ardoises/tuiles plates, murs sans blanc pur ni couleur vive. Secteur Ub1 (Clos de Manthelon) : hauteur max 8 m, tuiles terre cuite 40-45°, sens du faîtage imposé selon le plan parcellaire. Pour localiser votre parcelle : geoportail-urbanisme.gouv.fr
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_zone_agricole",
     test: (q) => /zone.a|zone.ah|zone.agricole|terrain.agricole|secteur.agricole/.test(q),
-    answer: "🌾 La zone A est la zone agricole de Mézières : seuls les bâtiments nécessaires à l'exploitation agricole sont autorisés. Le secteur Ah (hameaux non agricoles) permet des extensions mesurées (max 20 % de la surface existante, emprise max 50 m²) et des changements de destination vers habitat, bureaux, commerce ou tourisme. Hauteur max habitation : 5 m. Recul ≥ 8 m des voies (sauf A71 : 100 m). Toiture en ardoises ou tuiles plates ≥ 35°. Mairie : 02 38 45 61 76."
+    answer: "🌾 La zone A est la zone agricole de Mézières : seuls les bâtiments nécessaires à l'exploitation agricole sont autorisés. Le secteur Ah (hameaux non agricoles) permet des extensions mesurées (max 20 % de la surface existante, emprise max 50 m²) et des changements de destination vers habitat, bureaux, commerce ou tourisme. Hauteur max habitation : 5 m. Recul ≥ 8 m des voies (sauf A71 : 100 m). Toiture en ardoises ou tuiles plates ≥ 35°.
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_zone_naturelle",
     test: (q) => /zone.n|zone.nh|zone.nj|zone.nl|zone.np|zone.ndc|zone.naturelle|zone.forestière|zone.foret|zone.forêt/.test(q),
-    answer: "🌿 La zone N est la zone naturelle et forestière de Mézières (vallée, coteaux, forêt). Constructibilité quasi nulle. Secteur Nh (hameaux naturels) : extensions max 20 % + annexes max 50 m², hauteur max 5 m. Secteur Nj (jardins) : abris et annexes max 20 m², hauteur max 2,5 m. Secteur Nl : aménagements de loisirs collectifs uniquement. Secteur Np : équipements photovoltaïques. Pour tout projet en zone N, contactez la mairie : 02 38 45 61 76."
+    answer: "🌿 La zone N est la zone naturelle et forestière de Mézières (vallée, coteaux, forêt). Constructibilité quasi nulle. Secteur Nh (hameaux naturels) : extensions max 20 % + annexes max 50 m², hauteur max 5 m. Secteur Nj (jardins) : abris et annexes max 20 m², hauteur max 2,5 m. Secteur Nl : aménagements de loisirs collectifs uniquement. Secteur Np : équipements photovoltaïques. Pour tout projet en zone N, contactez la mairie : 02 38 45 61 76.
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_extension_maison",
     test: (q) => /(extension|agrandissement|agrandir).*(maison|habitation|logement|bâtiment|construction)/.test(q) || /(maison|habitation|logement).*(extension|agrandissement|agrandir)/.test(q),
-    answer: "🏗️ Pour une extension de maison à Mézières-lez-Cléry : < 20 m² accolée = déclaration préalable (DP) ; ≥ 20 m² = permis de construire (PC). Si après travaux la surface totale dépasse 150 m², un architecte est obligatoire. Les règles de hauteur, recul et emprise de votre zone PLU (Ua, Ub…) s'appliquent. Déposez le dossier en mairie (02 38 45 61 76) ou via le GNAU sur le site de la CCTVL. Délai : 1 mois pour DP, 2 mois pour PC. Validité : 3 ans."
+    answer: "🏗️ Pour une extension de maison à Mézières-lez-Cléry : < 20 m² accolée = déclaration préalable (DP) ; ≥ 20 m² = permis de construire (PC). Si après travaux la surface totale dépasse 150 m², un architecte est obligatoire. Les règles de hauteur, recul et emprise de votre zone PLU (Ua, Ub…) s'appliquent. Déposez le dossier en mairie (02 38 45 61 76) ou via le GNAU sur le site de la CCTVL. Délai : 1 mois pour DP, 2 mois pour PC. Validité : 3 ans.
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_veranda_terrasse",
     test: (q) => /veranda|véranda|terrasse|pergola|pool.house|poolhouse/.test(q),
-    answer: "🏗️ Véranda et terrasse couverte : < 5 m² = libre ; < 40 m² = déclaration préalable ; ≥ 40 m² = permis de construire. Terrasse non couverte de plain-pied (béton ou bois, sans surélévation) : libre quelle que soit la surface. Terrasse surélevée : < 5 m² libre ; entre 5 et 40 m² = DP ; ≥ 40 m² = PC. Véranda en zone Ua : autorisée si elle ne dénature pas la construction. Mairie : 02 38 45 61 76."
+    answer: "🏗️ Véranda et terrasse couverte : < 5 m² = libre ; < 40 m² = déclaration préalable ; ≥ 40 m² = permis de construire. Terrasse non couverte de plain-pied (béton ou bois, sans surélévation) : libre quelle que soit la surface. Terrasse surélevée : < 5 m² libre ; entre 5 et 40 m² = DP ; ≥ 40 m² = PC. Véranda en zone Ua : autorisée si elle ne dénature pas la construction.
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_toiture_lucarne_facade",
     test: (q) => /toiture|tuile|ardoise|lucarne|velux|fenetre.de.toit|fenêtre.de.toit|pente.toit|couverture|ravalement|bardage|facade|façade/.test(q) && /règle|autorisé|autorisée|interdit|peut.on|peut-on/.test(q),
-    answer: "🏗️ À Mézières, les toitures principales (zones Ua, Ub, 1AU) : ≥ 2 pentes à 35° minimum, en ardoises ou tuiles plates. Extensions > 30 m² : pente ≥ 25°. Les lucarnes doivent être rectangulaires, plus hautes que larges, leur largeur cumulée ≤ 2/3 de la façade ; pas de lucarnes rampantes. Fenêtre de toit (Velux) = déclaration préalable. Ravalement de façade = DP si changement d'aspect. Blanc pur et couleurs vives interdits en Ub. Mairie : 02 38 45 61 76."
+    answer: "🏗️ À Mézières, les toitures principales (zones Ua, Ub, 1AU) : ≥ 2 pentes à 35° minimum, en ardoises ou tuiles plates. Extensions > 30 m² : pente ≥ 25°. Les lucarnes doivent être rectangulaires, plus hautes que larges, leur largeur cumulée ≤ 2/3 de la façade ; pas de lucarnes rampantes. Fenêtre de toit (Velux) = déclaration préalable. Ravalement de façade = DP si changement d'aspect. Blanc pur et couleurs vives interdits en Ub.
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_cloture_details",
     test: (q) => /(cloture|clôture|mur|portail|grillage).*(hauteur|haut|metre|mètre|maximum|règle|matériau|autorisation)/.test(q) || /(hauteur|règle).*(cloture|clôture|portail|mur)/.test(q),
-    answer: "🏗️ Clôtures PLU Mézières-lez-Cléry — Zone Ua : sur voie max 1,50 m (mur ou claire-voie) ; en limite séparative max 1,80 m (mur pierre/brique ou grillage + haie). Zone Ub : sur voie max 1,50 m claire-voie ; en limite séparative max 1,80 m (mur ou grillage + haie d'essences locales). Au droit des carrefours : max 1,20 m sur 20 m de part et d'autre. Zone 1AU : sur voie max 1,20 m, en limite séparative max 1,50 m (grillage sombre + haie). Toute clôture est soumise à déclaration préalable (délibération 01/03/2012). Mairie : 02 38 45 61 76."
+    answer: "🏗️ Clôtures PLU Mézières-lez-Cléry — Zone Ua : sur voie max 1,50 m (mur ou claire-voie) ; en limite séparative max 1,80 m (mur pierre/brique ou grillage + haie). Zone Ub : sur voie max 1,50 m claire-voie ; en limite séparative max 1,80 m (mur ou grillage + haie d'essences locales). Au droit des carrefours : max 1,20 m sur 20 m de part et d'autre. Zone 1AU : sur voie max 1,20 m, en limite séparative max 1,50 m (grillage sombre + haie). Toute clôture est soumise à déclaration préalable (délibération 01/03/2012).
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_piscine_details",
     test: (q) => /piscine|bassin.piscine|jacuzzi/.test(q) && /règle|autorisation|permis|déclaration|m2|metre/.test(q),
-    answer: "🏗️ Piscine à Mézières-lez-Cléry : bassin non couvert < 100 m² restant moins de 3 mois = aucune formalité. Bassin non couvert < 100 m² = déclaration préalable. Bassin ≥ 100 m² ou couvert (couverture > 1,80 m) = permis de construire. Vérifiez que votre zone PLU autorise les piscines (zones Ua, Ub : oui en général). Pensez à la taxe d'aménagement à déclarer en mairie. Mairie : 02 38 45 61 76."
+    answer: "🏗️ Piscine à Mézières-lez-Cléry : bassin non couvert < 100 m² restant moins de 3 mois = aucune formalité. Bassin non couvert < 100 m² = déclaration préalable. Bassin ≥ 100 m² ou couvert (couverture > 1,80 m) = permis de construire. Vérifiez que votre zone PLU autorise les piscines (zones Ua, Ub : oui en général). Pensez à la taxe d'aménagement à déclarer en mairie.
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_permis_construire_depot",
     test: (q) => /deposer|déposer|dossier|comment.faire.un.permis|comment.obtenir.un.permis|permis.de.construire|pc |gnau|guichet.numerique/.test(q),
-    answer: "🏗️ Pour déposer un permis de construire ou une déclaration préalable à Mézières-lez-Cléry : 1) Téléchargez le cerfa (PC = n°13406, DP = n°13703) sur service-public.fr. 2) Si surface > 150 m² : architecte obligatoire. 3) Déposez en mairie (02 38 45 61 76) ou via le GNAU (guichet numérique) sur le site de la CCTVL. Délais : 1 mois pour DP, 2 mois pour PC. Validité : 3 ans. Pensez à afficher l'arrêté sur le terrain et à déclarer début (DOC) et achèvement (DAACT) des travaux."
+    answer: "🏗️ Pour déposer un permis de construire ou une déclaration préalable à Mézières-lez-Cléry : 1) Téléchargez le cerfa (PC = n°13406, DP = n°13703) sur service-public.fr. 2) Si surface > 150 m² : architecte obligatoire. 3) Déposez en mairie (02 38 45 61 76) ou via le GNAU (guichet numérique) sur le site de la CCTVL. Délais : 1 mois pour DP, 2 mois pour PC. Validité : 3 ans. Pensez à afficher l'arrêté sur le terrain et à déclarer début (DOC) et achèvement (DAACT) des travaux.
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_stationnement_regles",
     test: (q) => /stationnement.*(règle|obligation|nombre|place|créer|aménager|construire)|place.de.stationnement.*(règle|obligation)/.test(q),
-    answer: "🏗️ Le PLU de Mézières impose : 2 places de stationnement minimum par logement en zones Ua, Ub et 1AU (garages compris). Pour bureaux et artisanat : 1 place par tranche de 25 m² de surface de plancher. Le stationnement doit être assuré sur le terrain, hors voie publique. Surface à prévoir : 25 m² par place accès compris. Mairie : 02 38 45 61 76."
+    answer: "🏗️ Le PLU de Mézières impose : 2 places de stationnement minimum par logement en zones Ua, Ub et 1AU (garages compris). Pour bureaux et artisanat : 1 place par tranche de 25 m² de surface de plancher. Le stationnement doit être assuré sur le terrain, hors voie publique. Surface à prévoir : 25 m² par place accès compris.
+
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   }
 ];
 
@@ -3946,8 +3987,21 @@ app.post("/sondages/:id/vote", async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const all = await readSondages();
   const s = all.find(x => x.id === id);
-  if (!s || s.active === false) return res.status(400).json({ error: "Sondage non disponible" });
+  // Reject if inactive or past endsAt
+  if (!s || s.active === false || (s.endsAt && new Date(s.endsAt).getTime() <= Date.now())) {
+    return res.status(400).json({ error: "Sondage non disponible" });
+  }
   const { reponse } = req.body || {};
+  // Validate input before writing
+  if (s.type === 'choix_unique') {
+    if (!s.options || !s.options.includes(String(reponse))) return res.status(400).json({ error: "Option invalide" });
+  } else if (s.type === 'choix_multiple') {
+    const opts = Array.isArray(reponse) ? reponse : [reponse];
+    if (!opts.length || opts.some(k => !s.options || !s.options.includes(String(k)))) return res.status(400).json({ error: "Option invalide" });
+  } else if (s.type === 'notation_etoiles') {
+    const n = parseInt(reponse, 10);
+    if (!(n >= 1 && n <= 5)) return res.status(400).json({ error: "Note invalide (1-5)" });
+  }
   const results = await readSondageResults(id);
   results.total = (results.total || 0) + 1;
   if (s.type === 'texte_libre') {
