@@ -2644,18 +2644,23 @@ async function upsertGoogleCalendarEvent(title, description, eventDate, eventLoc
 
   // Créer le nouvel événement
   const hasTime = /T\d{2}:\d{2}/.test(eventDate);
-  const endDt = new Date(eventDt.getTime() + 60 * 60 * 1000); // +1h par défaut
+  // Pass Paris-local datetime strings without UTC conversion.
+  // When dateTime has no offset (no Z), Google Calendar uses the timeZone field
+  // to interpret it as local Paris time — avoids the +2h UTC shift on UTC servers.
+  const startStr = hasTime
+    ? eventDate.replace(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})$/, '$1:00')
+    : eventDate.slice(0, 10);
+  const endStr = hasTime ? (() => {
+    const h = parseInt(startStr.slice(11, 13));
+    return startStr.slice(0, 11) + String((h + 1) % 24).padStart(2, '0') + startStr.slice(13);
+  })() : startStr;
 
   const eventBody = {
     summary: title,
     description: description || "",
     location: eventLocation || undefined,
-    start: hasTime
-      ? { dateTime: eventDt.toISOString(), timeZone: "Europe/Paris" }
-      : { date: eventDt.toISOString().slice(0, 10) },
-    end: hasTime
-      ? { dateTime: endDt.toISOString(), timeZone: "Europe/Paris" }
-      : { date: eventDt.toISOString().slice(0, 10) }
+    start: hasTime ? { dateTime: startStr, timeZone: "Europe/Paris" } : { date: startStr },
+    end:   hasTime ? { dateTime: endStr,   timeZone: "Europe/Paris" } : { date: endStr }
   };
 
   const created = await calendar.events.insert({ calendarId, requestBody: eventBody });
