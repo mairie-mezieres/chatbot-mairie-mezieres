@@ -2650,10 +2650,10 @@ async function upsertGoogleCalendarEvent(title, description, eventDate, eventLoc
   const startStr = hasTime
     ? eventDate.replace(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})$/, '$1:00')
     : eventDate.slice(0, 10);
-  const endStr = hasTime ? (() => {
-    const h = parseInt(startStr.slice(11, 13));
-    return startStr.slice(0, 11) + String((h + 1) % 24).padStart(2, '0') + startStr.slice(13);
-  })() : startStr;
+  // +Z treats startStr as UTC for arithmetic only; toISOString gives correct day rollover
+  const endStr = hasTime
+    ? (() => { const d = new Date(startStr + 'Z'); d.setTime(d.getTime() + 3600000); return d.toISOString().slice(0, 19); })()
+    : startStr;
 
   const eventBody = {
     summary: title,
