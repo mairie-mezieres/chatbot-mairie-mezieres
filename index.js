@@ -8,6 +8,10 @@ const axios     = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
 const webpush   = require("web-push");
 const cloudinary = require("cloudinary").v2;
+const rateLimit = require("express-rate-limit");
+
+// Timeout global sur tous les appels axios sortants (8 s)
+axios.defaults.timeout = 8000;
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -70,7 +74,10 @@ const UPSTASH_EMAIL         = process.env.UPSTASH_EMAIL || "";
 const UPSTASH_API_KEY       = process.env.UPSTASH_API_KEY || "";
 const UPSTASH_REDIS_DB_ID   = process.env.UPSTASH_REDIS_DB_ID || "";
 
-const ADMIN_PASSWORD        = process.env.ADMIN_PASSWORD || "mat-admin-2024";
+const ADMIN_PASSWORD        = process.env.ADMIN_PASSWORD || "";
+if (!ADMIN_PASSWORD) {
+  console.warn("⚠️  ADMIN_PASSWORD non défini : tous les endpoints /admin seront refusés (401).");
+}
 const MISTRAL_BILLING_URL   = "https://api.mistral.ai/v1/usage";
 // Tarifs Mistral Small (€/1M tokens) — à ajuster si changement
 const MISTRAL_PRICE_IN      = 0.10;  // €/1M input tokens
@@ -309,9 +316,24 @@ function compactSeenMap(mapObj = {}, keepKeys = []) {
 }
 
 // ─── CORS ─────────────────────────────────────────────────────
+const ADMIN_ALLOWED_ORIGINS = new Set([
+  "https://mairie-mezieres.github.io",
+  "http://localhost:8080",
+  "http://localhost:3000",
+  "http://127.0.0.1:8080"
+]);
+
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin",  "*");
-res.header("Access-Control-Allow-Headers", "Content-Type, x-admin-token, x-device-id");
+  const origin = req.headers.origin || "";
+  if (req.path.startsWith("/admin")) {
+    if (ADMIN_ALLOWED_ORIGINS.has(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Vary", "Origin");
+    }
+  } else {
+    res.header("Access-Control-Allow-Origin", "*");
+  }
+  res.header("Access-Control-Allow-Headers", "Content-Type, x-admin-token, x-device-id");
   res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   next();
 });
@@ -1294,16 +1316,22 @@ async function callMistral(messages, systemPrompt) {
 async function callClaude(messages, systemPrompt) {
   if (!anthropic) throw new Error("ANTHROPIC_API_KEY manquante");
 
+  // Prompt caching ephemeral : le SYSTEM_PROMPT MEL est gros et stable
+  // → -90 % sur les tokens d'entrée et latence réduite (cache de 5 min côté Anthropic)
+  const systemBlocks = typeof systemPrompt === "string" && systemPrompt.length > 1024
+    ? [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }]
+    : systemPrompt;
+
   const response = await anthropic.messages.create({
     model:"claude-haiku-4-5-20251001",
     max_tokens:350,
-    system: systemPrompt,
+    system: systemBlocks,
     messages: messages
   });
 
   const txt = response.content?.[0]?.text;
   if (!txt) throw new Error("Réponse Claude vide");
-  // Tracker les tokens
+  // Tracker les tokens (incluant les hits de cache)
   const usage = response.usage || {};
   trackIaTokens("claude", usage.input_tokens || 0, usage.output_tokens || 0).catch(()=>{});
   return txt;
@@ -1698,12 +1726,42 @@ function normalizeMelTree(tree = {}) {
 
 // ── Middleware auth admin ─────────────────────────────────────
 function adminAuth(req, res, next) {
+  if (!ADMIN_PASSWORD) {
+    return res.status(401).json({ error: "Admin désactivé (ADMIN_PASSWORD manquant)" });
+  }
   const token = req.headers["x-admin-token"] || req.query.token;
   if (!token || token !== ADMIN_PASSWORD) {
     return res.status(401).json({ error: "Non autorisé" });
   }
   next();
 }
+
+// ── Rate limiting sur les endpoints publics sensibles ────────
+const melLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 30,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: "Trop de requêtes, réessayez dans une minute." }
+});
+const signalLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 10,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: "Trop de signalements, patientez avant de réessayer." }
+});
+const subscribeLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 5,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: "Trop de tentatives d'abonnement." }
+});
+const logsLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 60,
+  standardHeaders: true, legacyHeaders: false,
+  skip: () => false
+});
+const adminLoginLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, max: 8,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: "Trop de tentatives de connexion. Patientez 5 minutes." }
+});
 
 // ═══════════════════════════════════════════════════════════════
 // ROUTES
@@ -1719,7 +1777,13 @@ const LOG_KEY     = "mat:error_logs";
 const LOG_MAX     = 200;
 const _logRateMap = new Map();
 
-app.post("/logs/error", async (req, res) => {
+// Purge automatique des entrées rate-map > 5 min, toutes les heures
+setInterval(() => {
+  const cutoff = Date.now() - 5 * 60 * 1000;
+  for (const [k, ts] of _logRateMap) if (ts < cutoff) _logRateMap.delete(k);
+}, 60 * 60 * 1000).unref?.();
+
+app.post("/logs/error", logsLimiter, async (req, res) => {
   res.sendStatus(204);
   try {
     const batch = Array.isArray(req.body) ? req.body : [req.body];
@@ -1768,9 +1832,9 @@ app.delete("/admin/logs", adminAuth, async (req, res) => {
 });
 
 // ── Login admin ───────────────────────────────────────────────
-app.post("/admin/login", (req, res) => {
+app.post("/admin/login", adminLoginLimiter, (req, res) => {
   const { password } = req.body || {};
-  if (password === ADMIN_PASSWORD) {
+  if (ADMIN_PASSWORD && password === ADMIN_PASSWORD) {
     res.json({ ok: true, token: ADMIN_PASSWORD });
   } else {
     res.status(401).json({ ok: false, error: "Mot de passe incorrect" });
@@ -2721,7 +2785,7 @@ async function upsertGoogleCalendarEvent(title, description, eventDate, eventLoc
 }
 
 // ── Proxy MEL pour la PWA ─────────────────────────────────────
-app.post("/mel", async (req, res) => {
+app.post("/mel", melLimiter, async (req, res) => {
   const { messages, category, extraCtx } = req.body || {};
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error:"messages[] requis" });
@@ -2921,7 +2985,7 @@ Les waypoints doivent former une boucle réaliste de ~${distance} km au départ 
   }
 });
 // ── Signalement citoyen → Redis + Trello ─────────────────────
-app.post("/signal", async (req, res) => {
+app.post("/signal", signalLimiter, async (req, res) => {
   const { cat, desc, lat, lon, photoB64, type } = req.body || {};
 
   const mapsLink = (lat && lon)
@@ -3120,7 +3184,7 @@ app.get("/meteo/alertes/check", async (req, res) => {
 });
 
 // ── Abonnement push ───────────────────────────────────────────
-app.post("/push/subscribe", async (req, res) => {
+app.post("/push/subscribe", subscribeLimiter, async (req, res) => {
   const sub = req.body;
   if (!sub || !sub.endpoint) return res.status(400).json({ error:"Subscription invalide" });
 
@@ -3148,7 +3212,7 @@ app.post("/push/unsubscribe", async (req, res) => {
 async function readDechetsSubs() { return (await redisGet('mat:subs:dechets')) || []; }
 async function writeDechetsSubs(d) { await redisSet('mat:subs:dechets', d); }
 
-app.post('/push/subscribe/dechets', async (req, res) => {
+app.post('/push/subscribe/dechets', subscribeLimiter, async (req, res) => {
   const sub = req.body;
   if (!sub || !sub.endpoint) return res.status(400).json({ error: 'Subscription invalide' });
   const subs = await readDechetsSubs();
