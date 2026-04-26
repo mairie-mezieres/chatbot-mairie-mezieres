@@ -1331,9 +1331,9 @@ async function callClaude(messages, systemPrompt) {
 
   const txt = response.content?.[0]?.text;
   if (!txt) throw new Error("Réponse Claude vide");
-  // Tracker les tokens (incluant les hits de cache)
   const usage = response.usage || {};
-  trackIaTokens("claude", usage.input_tokens || 0, usage.output_tokens || 0).catch(()=>{});
+  const totalInput = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+  trackIaTokens("claude", totalInput, usage.output_tokens || 0).catch(()=>{});
   return txt;
 }
 
@@ -1542,29 +1542,7 @@ async function createTrelloCard(type, name, desc, photoB64) {
   const card = cardRes.data;
   console.log(`✅ Trello carte créée: ${card.id} — ${card.shortUrl}`);
 
-  // 2. Ajouter un commentaire avec @mentions
-  if (cfg.usernames.length) {
-    try {
-      const mentions = cfg.usernames.map(u => `@${u}`).join(" ");
-      await axios.post(
-        `https://api.trello.com/1/cards/${card.id}/actions/comments`,
-        null,
-        {
-          params: {
-            key: TRELLO_KEY,
-            token: TRELLO_TOKEN,
-            text: `${mentions}\nNouvelle carte MAT de type : ${type}`
-          },
-          timeout: 10000,
-        }
-      );
-      console.log(`🔔 Mentions Trello ajoutées sur ${card.id}`);
-    } catch (commentErr) {
-      console.warn("⚠️ Échec commentaire Trello:", commentErr.message);
-    }
-  }
-
-  // 3. Attacher la photo si présente
+  // 2. Attacher la photo si présente
   if (photoB64 && photoB64.startsWith("data:image")) {
     try {
       const matches = photoB64.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);

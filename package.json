@@ -1,6 +1,6 @@
 {
   "name": "chatbot-mairie-mezieres",
-  "version": "6.7.0",
+  "version": "6.8.0",
   "description": "MAT — Mézières Avec Toi · Serveur Render",
   "main": "index.js",
   "scripts": {
