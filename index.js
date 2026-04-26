@@ -4198,14 +4198,14 @@ async function _sendDechetsReminder() {
   console.log(`🗑️ Rappel déchets (${type}) → ${subs.length} abonnés`);
 }
 
-let _dechetsLastSentDate = '';
 setInterval(async () => {
   try {
     const pNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
-    if (pNow.getHours() !== 18 || pNow.getMinutes() > 10) return;
+    if (pNow.getHours() !== 18) return;
     const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
-    if (_dechetsLastSentDate === today) return;
-    _dechetsLastSentDate = today;
+    const lastSent = await redisGet('mat:dechets:lastSent');
+    if (lastSent === today) return;
+    await redisSet('mat:dechets:lastSent', today);
     await _sendDechetsReminder();
   } catch(e) { console.warn('Dechets reminder:', e.message); }
 }, 5 * 60 * 1000);
