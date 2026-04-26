@@ -1331,9 +1331,9 @@ async function callClaude(messages, systemPrompt) {
 
   const txt = response.content?.[0]?.text;
   if (!txt) throw new Error("Réponse Claude vide");
-  // Tracker les tokens (incluant les hits de cache)
   const usage = response.usage || {};
-  trackIaTokens("claude", usage.input_tokens || 0, usage.output_tokens || 0).catch(()=>{});
+  const totalInput = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+  trackIaTokens("claude", totalInput, usage.output_tokens || 0).catch(()=>{});
   return txt;
 }
 
