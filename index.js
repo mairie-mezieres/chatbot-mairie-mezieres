@@ -145,6 +145,61 @@ async function redisSet(key, value) {
     console.warn(`Redis SET ${key}:`, e.message);
   }
 }
+
+async function redisSetex(key, ttlSeconds, value) {
+  if (!REDIS_URL) return;
+  try {
+    const encoded = encodeURIComponent(key);
+    await axios.post(
+      `${REDIS_URL}/setex/${encoded}/${ttlSeconds}`,
+      JSON.stringify(value),
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
+    );
+  } catch(e) {
+    console.warn(`Redis SETEX ${key}:`, e.message);
+  }
+}
+
+async function redisDel(key) {
+  if (!REDIS_URL) return false;
+  try {
+    const r = await axios.get(
+      `${REDIS_URL}/del/${encodeURIComponent(key)}`,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 8000 }
+    );
+    return (r.data?.result || 0) > 0;
+  } catch(e) {
+    console.warn(`Redis DEL ${key}:`, e.message);
+    return false;
+  }
+}
+
+async function redisPipeline(commands) {
+  if (!REDIS_URL) return;
+  try {
+    await axios.post(
+      `${REDIS_URL}/pipeline`,
+      commands,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
+    );
+  } catch(e) {
+    console.warn("Redis pipeline:", e.message);
+  }
+}
+
+async function redisLRange(key, start, stop) {
+  if (!REDIS_URL) return [];
+  try {
+    const r = await axios.get(
+      `${REDIS_URL}/lrange/${encodeURIComponent(key)}/${start}/${stop}`,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 8000 }
+    );
+    return (r.data?.result || []).map(item => { try { return JSON.parse(item); } catch { return null; } }).filter(Boolean);
+  } catch(e) {
+    console.warn(`Redis LRANGE ${key}:`, e.message);
+    return [];
+  }
+}
 async function getUpstashRedisStats() {
   if (!UPSTASH_EMAIL || !UPSTASH_API_KEY || !UPSTASH_REDIS_DB_ID) return null;
 
@@ -201,9 +256,10 @@ async function writeMelTreeConfig(data) {
 
 function getDefaultAdminSettings() {
   return {
-    detailedStatsEnabled: true, // météo, contact, actualités, signalement, idées, app_resume...
-    melUsageStatsEnabled: true, // usage MEL + catégories IA
-    appOpenStatsEnabled: true   // nombre d'ouvertures d'application
+    detailedStatsEnabled: true,    // météo, contact, actualités, signalement, idées, app_resume...
+    melUsageStatsEnabled: true,    // usage MEL + catégories IA
+    appOpenStatsEnabled: true,     // nombre d'ouvertures d'application
+    melQuestionLogEnabled: false   // stockage anonyme des questions chat libre (RGPD: désactivé par défaut)
   };
 }
 
@@ -1453,6 +1509,32 @@ async function trackMelStats(userText) {
   await writeStats(stats);
 }
 
+// ── trackMelQuestion : stockage RGPD-friendly des questions chat libre ────────
+// Désactivé par défaut — activable dans les réglages admin.
+// Stocke : texte de la question (tronqué à 500 car.) + catégorie + jour.
+// Aucun identifiant utilisateur, aucune IP, aucune heure précise.
+// Expiration automatique via TTL Redis (90 jours).
+// Stockage atomique via pipeline RPUSH + EXPIRE + LTRIM (pas de race condition).
+const MEL_ALLOWED_CATS = new Set(['urbanisme','enfance','administratif','dechets','numerique','autre']);
+
+async function trackMelQuestion(questionText, category) {
+  const settings = await readAdminSettings();
+  if (!settings.melQuestionLogEnabled) return;
+  if (!questionText || !questionText.trim()) return;
+
+  const safeCat = MEL_ALLOWED_CATS.has(category) ? category : "autre";
+  const today = new Date().toISOString().slice(0, 10);
+  const key = `mat:mel:questions:${today}`;
+  const TTL_SECONDS = 90 * 24 * 60 * 60;
+  const entry = JSON.stringify({ q: String(questionText).trim().slice(0, 500), cat: safeCat });
+
+  await redisPipeline([
+    ["RPUSH", key, entry],
+    ["EXPIRE", key, String(TTL_SECONDS)],
+    ["LTRIM", key, "-500", "-1"]
+  ]);
+}
+
 async function resolveFacebookPageId() {
   if (FACEBOOK_PAGE_ID) return FACEBOOK_PAGE_ID;
   if (!PAGE_ACCESS_TOKEN) return null;
@@ -2016,12 +2098,25 @@ app.post("/admin/settings", adminAuth, async (req, res) => {
     const current = await readAdminSettings();
     const next = {
       ...current,
-      detailedStatsEnabled: req.body?.detailedStatsEnabled === true,
-      melUsageStatsEnabled: req.body?.melUsageStatsEnabled === true,
-      appOpenStatsEnabled: req.body?.appOpenStatsEnabled === true
+      detailedStatsEnabled:  req.body?.detailedStatsEnabled === true,
+      melUsageStatsEnabled:  req.body?.melUsageStatsEnabled === true,
+      appOpenStatsEnabled:   req.body?.appOpenStatsEnabled === true,
+      melQuestionLogEnabled: req.body?.melQuestionLogEnabled === true
     };
     await writeAdminSettings(next);
     res.json({ ok: true, settings: next });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── Route : consultation des questions MEL stockées anonymement ───────────────
+// Retourne les questions du jour (ou d'une date donnée via ?date=YYYY-MM-DD).
+app.get("/admin/mel-questions", adminAuth, async (req, res) => {
+  try {
+    const date = (req.query.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+    const questions = await redisLRange(`mat:mel:questions:${date}`, 0, -1);
+    res.json({ ok: true, date, questions, count: questions.length });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -2407,6 +2502,24 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
       await writeStats(stats);
       await writeIaStats(ia);
 
+      // Purge des questions MEL anonymes (clés journalières Redis list)
+      const cutoff = new Date(beforeDate);
+      const oldest = new Date(cutoff);
+      oldest.setDate(oldest.getDate() - 90);
+      for (let d = new Date(oldest); d < cutoff; d.setDate(d.getDate() + 1)) {
+        const dayKey = `mat:mel:questions:${d.toISOString().slice(0, 10)}`;
+        if (await redisDel(dayKey)) deleted++;
+      }
+
+    } else if (type === "mel_questions") {
+      const cutoff = new Date(beforeDate);
+      const oldest = new Date(cutoff);
+      oldest.setDate(oldest.getDate() - 90);
+      for (let d = new Date(oldest); d < cutoff; d.setDate(d.getDate() + 1)) {
+        const dayKey = `mat:mel:questions:${d.toISOString().slice(0, 10)}`;
+        if (await redisDel(dayKey)) deleted++;
+      }
+
     } else {
       return res.status(400).json({ error: "type inconnu" });
     }
@@ -2776,6 +2889,7 @@ app.post("/mel", melLimiter, async (req, res) => {
     }));
     const lastUser = history.filter(m => m.role === "user").slice(-1)[0]?.content || "";
     await trackMelStats(lastUser);
+    await trackMelQuestion(lastUser, category);
     const result = await generateMelReply(lastUser, history, category || "autre", extraCtx || "");
     console.log(`📱 PWA MEL [${category||"autre"}] via ${result.provider}`);
     const showElus = (result.reply || "").includes("[SHOW_ELUS]");
