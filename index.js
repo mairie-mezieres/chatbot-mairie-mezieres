@@ -161,14 +161,43 @@ async function redisSetex(key, ttlSeconds, value) {
 }
 
 async function redisDel(key) {
-  if (!REDIS_URL) return;
+  if (!REDIS_URL) return false;
   try {
-    await axios.get(
+    const r = await axios.get(
       `${REDIS_URL}/del/${encodeURIComponent(key)}`,
       { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 8000 }
     );
+    return (r.data?.result || 0) > 0;
   } catch(e) {
     console.warn(`Redis DEL ${key}:`, e.message);
+    return false;
+  }
+}
+
+async function redisPipeline(commands) {
+  if (!REDIS_URL) return;
+  try {
+    await axios.post(
+      `${REDIS_URL}/pipeline`,
+      commands,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
+    );
+  } catch(e) {
+    console.warn("Redis pipeline:", e.message);
+  }
+}
+
+async function redisLRange(key, start, stop) {
+  if (!REDIS_URL) return [];
+  try {
+    const r = await axios.get(
+      `${REDIS_URL}/lrange/${encodeURIComponent(key)}/${start}/${stop}`,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 8000 }
+    );
+    return (r.data?.result || []).map(item => { try { return JSON.parse(item); } catch { return null; } }).filter(Boolean);
+  } catch(e) {
+    console.warn(`Redis LRANGE ${key}:`, e.message);
+    return [];
   }
 }
 async function getUpstashRedisStats() {
@@ -1485,20 +1514,25 @@ async function trackMelStats(userText) {
 // Stocke : texte de la question (tronqué à 500 car.) + catégorie + jour.
 // Aucun identifiant utilisateur, aucune IP, aucune heure précise.
 // Expiration automatique via TTL Redis (90 jours).
+// Stockage atomique via pipeline RPUSH + EXPIRE + LTRIM (pas de race condition).
+const MEL_ALLOWED_CATS = new Set(['urbanisme','enfance','administratif','dechets','numerique','autre']);
+
 async function trackMelQuestion(questionText, category) {
   const settings = await readAdminSettings();
   if (!settings.melQuestionLogEnabled) return;
   if (!questionText || !questionText.trim()) return;
 
+  const safeCat = MEL_ALLOWED_CATS.has(category) ? category : "autre";
   const today = new Date().toISOString().slice(0, 10);
   const key = `mat:mel:questions:${today}`;
   const TTL_SECONDS = 90 * 24 * 60 * 60;
+  const entry = JSON.stringify({ q: String(questionText).trim().slice(0, 500), cat: safeCat });
 
-  const existing = (await redisGet(key)) || [];
-  const entry = { q: String(questionText).trim().slice(0, 500), cat: category || "autre" };
-  const updated = [...existing, entry].slice(-500);
-
-  await redisSetex(key, TTL_SECONDS, updated);
+  await redisPipeline([
+    ["RPUSH", key, entry],
+    ["EXPIRE", key, String(TTL_SECONDS)],
+    ["LTRIM", key, "-500", "-1"]
+  ]);
 }
 
 async function resolveFacebookPageId() {
@@ -2081,7 +2115,7 @@ app.post("/admin/settings", adminAuth, async (req, res) => {
 app.get("/admin/mel-questions", adminAuth, async (req, res) => {
   try {
     const date = (req.query.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
-    const questions = (await redisGet(`mat:mel:questions:${date}`)) || [];
+    const questions = await redisLRange(`mat:mel:questions:${date}`, 0, -1);
     res.json({ ok: true, date, questions, count: questions.length });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -2468,14 +2502,13 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
       await writeStats(stats);
       await writeIaStats(ia);
 
-      // Purge des questions MEL anonymes (clés journalières avec TTL)
+      // Purge des questions MEL anonymes (clés journalières Redis list)
       const cutoff = new Date(beforeDate);
       const oldest = new Date(cutoff);
       oldest.setDate(oldest.getDate() - 90);
       for (let d = new Date(oldest); d < cutoff; d.setDate(d.getDate() + 1)) {
         const dayKey = `mat:mel:questions:${d.toISOString().slice(0, 10)}`;
-        const existing = await redisGet(dayKey);
-        if (existing) { await redisDel(dayKey); deleted++; }
+        if (await redisDel(dayKey)) deleted++;
       }
 
     } else if (type === "mel_questions") {
@@ -2484,8 +2517,7 @@ app.post("/admin/purge", adminAuth, async (req, res) => {
       oldest.setDate(oldest.getDate() - 90);
       for (let d = new Date(oldest); d < cutoff; d.setDate(d.getDate() + 1)) {
         const dayKey = `mat:mel:questions:${d.toISOString().slice(0, 10)}`;
-        const existing = await redisGet(dayKey);
-        if (existing) { await redisDel(dayKey); deleted++; }
+        if (await redisDel(dayKey)) deleted++;
       }
 
     } else {
