@@ -1,8 +1,3 @@
-// MAT — Mézières Avec Toi · Serveur Render v6.5
-// Mistral principal + cache + réponses directes + fallback Claude
-// Facebook feed only (plus de MEL sur Messenger)
-// ════════════════════════════════════════════════════════════
-
 const express   = require("express");
 const axios     = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
@@ -244,6 +239,8 @@ async function readSondageResults(id)    { return (await redisGet("mat:sondage:r
 async function writeSondageResults(id,d) { await redisSet("mat:sondage:results:" + id, d); }
 async function readFeaturedDoc()         { return await redisGet("mat:docs:featured"); }
 async function writeFeaturedDoc(d)       { await redisSet("mat:docs:featured", d); }
+async function readEntreprises()         { return (await redisGet("mat:entreprises")) || []; }
+async function writeEntreprises(d)       { await redisSet("mat:entreprises", d); }
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
 
 async function readMelTreeConfig() {
@@ -4240,6 +4237,63 @@ app.delete("/admin/sondages/:id", adminAuth, async (req, res) => {
 });
 app.get("/admin/sondages/:id/results", adminAuth, async (req, res) => {
   res.json({ results: await readSondageResults(parseInt(req.params.id,10)) });
+});
+
+
+// ── Annuaire entreprises ─────────────────────────────────────
+app.get("/entreprises", async (req, res) => {
+  const list = await readEntreprises();
+  res.json({ entreprises: list });
+});
+
+app.get("/admin/entreprises", adminAuth, async (req, res) => {
+  res.json({ entreprises: await readEntreprises() });
+});
+
+app.post("/admin/entreprises", adminAuth, async (req, res) => {
+  const { nom, activite, description, siteWeb, telephone, email, gerant, logo } = req.body || {};
+  if (!nom) return res.status(400).json({ error: "nom requis" });
+  const list = await readEntreprises();
+  list.push({
+    id: Date.now(),
+    nom:         String(nom).substring(0, 200),
+    activite:    activite    ? String(activite).substring(0, 200)    : "",
+    description: description ? String(description).substring(0, 1000) : "",
+    siteWeb:     siteWeb     ? String(siteWeb).substring(0, 500)     : "",
+    telephone:   telephone   ? String(telephone).substring(0, 50)    : "",
+    email:       email       ? String(email).substring(0, 200)       : "",
+    gerant:      gerant      ? String(gerant).substring(0, 200)      : "",
+    logo:        logo        ? String(logo).substring(0, 500)        : "",
+    addedAt:     new Date().toISOString()
+  });
+  await writeEntreprises(list);
+  res.json({ ok: true, entreprises: list });
+});
+
+app.put("/admin/entreprises/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const list = await readEntreprises();
+  const idx = list.findIndex(e => e.id === id);
+  if (idx < 0) return res.status(404).json({ error: "Entreprise non trouvée" });
+  const { nom, activite, description, siteWeb, telephone, email, gerant, logo } = req.body || {};
+  function _norm(v, max) { return v == null ? '' : String(v).substring(0, max); }
+  if (nom         !== undefined) list[idx].nom         = _norm(nom, 200);
+  if (activite    !== undefined) list[idx].activite    = _norm(activite, 200);
+  if (description !== undefined) list[idx].description = _norm(description, 1000);
+  if (siteWeb     !== undefined) list[idx].siteWeb     = _norm(siteWeb, 500);
+  if (telephone   !== undefined) list[idx].telephone   = _norm(telephone, 50);
+  if (email       !== undefined) list[idx].email       = _norm(email, 200);
+  if (gerant      !== undefined) list[idx].gerant      = _norm(gerant, 200);
+  if (logo        !== undefined) list[idx].logo        = _norm(logo, 500);
+  await writeEntreprises(list);
+  res.json({ ok: true, entreprises: list });
+});
+
+app.delete("/admin/entreprises/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const list = (await readEntreprises()).filter(e => e.id !== id);
+  await writeEntreprises(list);
+  res.json({ ok: true, entreprises: list });
 });
 
 
