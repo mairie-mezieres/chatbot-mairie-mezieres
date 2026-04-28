@@ -241,6 +241,23 @@ async function readFeaturedDoc()         { return await redisGet("mat:docs:featu
 async function writeFeaturedDoc(d)       { await redisSet("mat:docs:featured", d); }
 async function readEntreprises()         { return (await redisGet("mat:entreprises")) || []; }
 async function writeEntreprises(d)       { await redisSet("mat:entreprises", d); }
+
+const _STATIC_ENTREPRISES = [
+  { id:1,  nom:'Chai Amandine et Quentin',       activite:'Viticulture & dégustation',       description:'Chai viticole proposant dégustation et vente de vins. Amandine et Quentin vous accueillent dans leur domaine pour découvrir leurs productions.', siteWeb:'https://www.chaiamandineetquentin.fr/', gerant:'Amandine et Quentin', telephone:'', email:'', logo:'' },
+  { id:2,  nom:'EMAN Coach',                     activite:'Coaching & développement personnel', description:'Accompagnement individuel et professionnel : coaching de vie, développement personnel et bilan de compétences.', siteWeb:'https://eman-coach.fr/',                  gerant:'', telephone:'', email:'', logo:'' },
+  { id:3,  nom:'Horticulteur Gatelier',           activite:'Horticulture',                    description:'Exploitation horticole familiale à Mézières-lez-Cléry : plants, fleurs, légumes et produits horticoles de qualité.',                           siteWeb:'https://www.horticulteur-gatelier.fr/',  gerant:'Famille Gatelier', telephone:'', email:'', logo:'' },
+  { id:4,  nom:'Hypnoser',                        activite:'Hypnothérapie',                   description:'Cabinet d\'hypnothérapie : accompagnement pour l\'arrêt du tabac, gestion du stress, phobies, confiance en soi et développement personnel.',    siteWeb:'https://www.hypnoser.fr/',              gerant:'', telephone:'', email:'', logo:'' },
+  { id:5,  nom:'Les Fruits de la Masure',         activite:'Production fruitière & dégustation', description:'Producteur de fruits locaux à Mézières-lez-Cléry. Vente directe à la ferme et dégustation de produits du terroir.',                          siteWeb:'',                                      gerant:'', telephone:'', email:'', logo:'' },
+  { id:6,  nom:'Novo Assainissement',             activite:'Assainissement & Plomberie',      description:'Spécialiste de l\'assainissement non collectif, débouchage, travaux de plomberie et entretien de fosses septiques.',                            siteWeb:'https://www.novo-assainissement.com/',   gerant:'', telephone:'', email:'', logo:'' },
+  { id:7,  nom:'Pascal Foulon Photographies',     activite:'Photographie',                    description:'Photographe professionnel basé à Mézières-lez-Cléry. Reportages, portraits, paysages et événements.',                                          siteWeb:'https://www.pascalfoulon-photographies.com/', gerant:'Pascal Foulon', telephone:'', email:'', logo:'' },
+];
+async function initEntreprisesIfEmpty() {
+  const raw = await redisGet("mat:entreprises");
+  if (raw === null) {
+    await writeEntreprises(_STATIC_ENTREPRISES);
+    console.log(`🏪 Entreprises initialisées (${_STATIC_ENTREPRISES.length} entrées)`);
+  }
+}
 async function writeIaStats(d)          { await redisSet("mat:ia:stats", d); }
 
 async function readMelTreeConfig() {
@@ -4305,6 +4322,9 @@ app.listen(PORT, async () => {
   console.log(`🔔 Push       : /push/subscribe`);
   console.log(`🌦️ Météo      : /meteo/commune`);
   console.log(`⚠️ Vigilance  : /meteo/vigilance`);
+
+  // Initialisation des données par défaut
+  initEntreprisesIfEmpty().catch(e => console.warn("Entreprises init:", e.message));
 
   // Délai de 20s avant les init réseau pour laisser le DNS Render se stabiliser
   setTimeout(() => {
