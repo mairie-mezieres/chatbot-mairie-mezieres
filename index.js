@@ -4276,14 +4276,15 @@ app.put("/admin/entreprises/:id", adminAuth, async (req, res) => {
   const idx = list.findIndex(e => e.id === id);
   if (idx < 0) return res.status(404).json({ error: "Entreprise non trouvée" });
   const { nom, activite, description, siteWeb, telephone, email, gerant, logo } = req.body || {};
-  if (nom         !== undefined) list[idx].nom         = String(nom).substring(0, 200);
-  if (activite    !== undefined) list[idx].activite    = String(activite).substring(0, 200);
-  if (description !== undefined) list[idx].description = String(description).substring(0, 1000);
-  if (siteWeb     !== undefined) list[idx].siteWeb     = String(siteWeb).substring(0, 500);
-  if (telephone   !== undefined) list[idx].telephone   = String(telephone).substring(0, 50);
-  if (email       !== undefined) list[idx].email       = String(email).substring(0, 200);
-  if (gerant      !== undefined) list[idx].gerant      = String(gerant).substring(0, 200);
-  if (logo        !== undefined) list[idx].logo        = String(logo).substring(0, 500);
+  function _norm(v, max) { return v == null ? '' : String(v).substring(0, max); }
+  if (nom         !== undefined) list[idx].nom         = _norm(nom, 200);
+  if (activite    !== undefined) list[idx].activite    = _norm(activite, 200);
+  if (description !== undefined) list[idx].description = _norm(description, 1000);
+  if (siteWeb     !== undefined) list[idx].siteWeb     = _norm(siteWeb, 500);
+  if (telephone   !== undefined) list[idx].telephone   = _norm(telephone, 50);
+  if (email       !== undefined) list[idx].email       = _norm(email, 200);
+  if (gerant      !== undefined) list[idx].gerant      = _norm(gerant, 200);
+  if (logo        !== undefined) list[idx].logo        = _norm(logo, 500);
   await writeEntreprises(list);
   res.json({ ok: true, entreprises: list });
 });
