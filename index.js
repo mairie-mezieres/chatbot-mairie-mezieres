@@ -2913,11 +2913,100 @@ async function upsertGoogleCalendarEvent(title, description, eventDate, eventLoc
   return { ok: true, event_id: created.data.id, html_link: created.data.htmlLink, deleted_duplicates: deletedCount };
 }
 
+// ─── Garde-fous MEL : détection injection + quota journalier ──────────────────
+
+const MEL_INJECTION_PATTERNS = [
+  /ignore\s+(all\s+)?(?:your\s+)?previous\s+instructions?/i,
+  /forget\s+(all\s+)?(?:your\s+)?previous\s+instructions?/i,
+  /disregard\s+(all\s+)?(?:your\s+)?previous\s+instructions?/i,
+  /output\s+(your\s+)?(?:system\s+prompt|instructions?|prompt)/i,
+  /reveal\s+(your\s+)?(?:system\s+prompt|instructions?|prompt)/i,
+  /(?:show|print|give\s+me)\s+(your\s+)?system\s+prompt/i,
+  /what\s+(?:are\s+)?(?:your\s+)?(?:instructions?|system\s+prompt)/i,
+  /(?:model|ai)\s+signature/i,
+  /\bDAN\s*(?:mode)?\b/i,
+  /jailbreak/i,
+  /act\s+as\s+(?:an?\s+)?(?:unrestricted|unfiltered|uncensored)/i,
+  /bypass\s+(?:your\s+)?(?:restrictions?|filters?|guidelines?)/i,
+  /what\s+tools?\s+do\s+you\s+have\s+access\s+to/i,
+];
+
+const MEL_DAILY_LIMIT = 5;
+
+// { deviceId -> { day: 'YYYY-MM-DD', count: int, blocked: bool } }
+let _melQuotas = null;
+let _melQuotasDay = null;
+let _melQuotasDirty = false;
+
+async function _loadMelQuotas() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (_melQuotas !== null && _melQuotasDay === today) return;
+  const saved = (await redisGet("mat:mel:quotas")) || {};
+  _melQuotas = {};
+  for (const [id, v] of Object.entries(saved)) {
+    if (v.day === today) _melQuotas[id] = v;
+  }
+  _melQuotasDay = today;
+}
+
+setInterval(async () => {
+  if (!_melQuotasDirty || _melQuotas === null) return;
+  try { await redisSet("mat:mel:quotas", _melQuotas); _melQuotasDirty = false; }
+  catch(e) { console.warn("mel:quotas flush:", e.message); }
+}, 2 * 60 * 1000);
+
+function _melDeviceId(req) {
+  return (req.headers["x-device-id"] || "").slice(0, 80) || req.ip || "unknown";
+}
+
+function _detectInjection(text) {
+  return MEL_INJECTION_PATTERNS.some(p => p.test(text));
+}
+
+async function _checkMelAccess(deviceId) {
+  await _loadMelQuotas();
+  const r = _melQuotas[deviceId];
+  if (!r) return { ok: true, count: 0 };
+  if (r.blocked) return { ok: false, reason: "blocked" };
+  if (r.count >= MEL_DAILY_LIMIT) return { ok: false, reason: "quota" };
+  return { ok: true, count: r.count };
+}
+
+async function _recordMelUse(deviceId) {
+  await _loadMelQuotas();
+  const today = new Date().toISOString().slice(0, 10);
+  if (!_melQuotas[deviceId] || _melQuotas[deviceId].day !== today)
+    _melQuotas[deviceId] = { day: today, count: 0, blocked: false };
+  _melQuotas[deviceId].count++;
+  _melQuotasDirty = true;
+}
+
+async function _blockMelDevice(deviceId, reason) {
+  await _loadMelQuotas();
+  const today = new Date().toISOString().slice(0, 10);
+  if (!_melQuotas[deviceId] || _melQuotas[deviceId].day !== today)
+    _melQuotas[deviceId] = { day: today, count: 0, blocked: false };
+  _melQuotas[deviceId].blocked = true;
+  _melQuotasDirty = true;
+  console.warn(`🚫 MEL bloqué [${reason}] device=${deviceId}`);
+}
+
 // ── Proxy MEL pour la PWA ─────────────────────────────────────
 app.post("/mel", melLimiter, async (req, res) => {
   const { messages, category, extraCtx } = req.body || {};
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error:"messages[] requis" });
+  }
+
+  const deviceId = _melDeviceId(req);
+
+  // Vérification quota + blocage
+  const access = await _checkMelAccess(deviceId);
+  if (!access.ok) {
+    if (access.reason === "blocked")
+      return res.status(403).json({ error:"blocked", reply:"Votre accès au chat a été suspendu pour utilisation abusive. Contactez la mairie si nécessaire : 02 38 45 61 76 😊" });
+    if (access.reason === "quota")
+      return res.status(429).json({ error:"quota", reply:`Vous avez atteint la limite de ${MEL_DAILY_LIMIT} questions par jour. Revenez demain ! 😊` });
   }
 
   try {
@@ -2926,6 +3015,15 @@ app.post("/mel", melLimiter, async (req, res) => {
       content: typeof m.content === "string" ? m.content : String(m.content || "")
     }));
     const lastUser = history.filter(m => m.role === "user").slice(-1)[0]?.content || "";
+
+    // Détection prompt injection
+    if (_detectInjection(lastUser)) {
+      await _blockMelDevice(deviceId, "injection");
+      console.warn(`🚨 Injection MEL [${deviceId}]: "${lastUser.substring(0, 120)}"`);
+      return res.status(403).json({ error:"blocked", reply:"Votre accès au chat a été suspendu. Contactez la mairie si nécessaire : 02 38 45 61 76 😊" });
+    }
+
+    await _recordMelUse(deviceId);
     await trackMelStats(lastUser);
     await trackMelQuestion(lastUser, category);
     const result = await generateMelReply(lastUser, history, category || "autre", extraCtx || "");
