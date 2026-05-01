@@ -212,12 +212,27 @@ async function getUpstashRedisStats() {
     return { error: e.message };
   }
 }
+// ─── Cache mémoire serveur ─────────────────────────────────────
+// Évite un aller-retour Redis pour les clés lues fréquemment mais rarement écrites.
+// Pattern identique au cache stats/iaStats déjà en place.
+const MEM_TTL_SHORT = 60_000;       // 60 s — actus, idées, docs, sondages, info-banner
+const MEM_TTL_LONG  = 5 * 60_000;  // 5 min — admin settings, réponses MEL mises en cache
+
+const _mem = {};
+function memGet(key) {
+  const e = _mem[key];
+  if (!e || Date.now() > e.exp) { delete _mem[key]; return undefined; }
+  return e.val;
+}
+function memSet(key, val, ttl) { _mem[key] = { val, exp: Date.now() + ttl }; }
+function memDel(key)           { delete _mem[key]; }
+
 async function readSubs()               { return (await redisGet("mat:subs")) || []; }
 async function writeSubs(d)             { await redisSet("mat:subs", d); }
-async function readNews()               { return (await redisGet("mat:actus")) || []; }
-async function writeNews(d)             { await redisSet("mat:actus", d); }
-async function readIdeas()              { return (await redisGet("mat:idees")) || []; }
-async function writeIdeas(d)            { await redisSet("mat:idees", d); }
+async function readNews()  { const c=memGet("mat:actus");        if(c!==undefined)return c; const v=(await redisGet("mat:actus"))||[];        memSet("mat:actus",v,MEM_TTL_SHORT);        return v; }
+async function writeNews(d){ memSet("mat:actus",d,MEM_TTL_SHORT);        await redisSet("mat:actus",d); }
+async function readIdeas() { const c=memGet("mat:idees");        if(c!==undefined)return c; const v=(await redisGet("mat:idees"))||[];        memSet("mat:idees",v,MEM_TTL_SHORT);        return v; }
+async function writeIdeas(d){ memSet("mat:idees",d,MEM_TTL_SHORT);       await redisSet("mat:idees",d); }
 async function readStats()              { return (await redisGet("mat:stats")) || {}; }
 async function writeStats(d)            { await redisSet("mat:stats", d); }
 async function readSignals()            { return (await redisGet("mat:signals")) || []; }
@@ -228,17 +243,17 @@ async function readMeteoCache()       { return await redisGet("mat:meteo:cache")
 async function writeMeteoCache(data)  { await redisSet("mat:meteo:cache", data); }
 async function readSeenPosts()          { return (await redisGet("mat:seen_posts")) || {}; }
 async function writeSeenPosts(d)        { await redisSet("mat:seen_posts", d); }
-async function readMelCache()           { return (await redisGet("mat:mel:cache")) || {}; }
-async function writeMelCache(d)         { await redisSet("mat:mel:cache", d); }
+async function readMelCache()  { const c=memGet("mat:mel:cache");   if(c!==undefined)return c; const v=(await redisGet("mat:mel:cache"))||{}; memSet("mat:mel:cache",v,MEM_TTL_LONG);     return v; }
+async function writeMelCache(d){ memSet("mat:mel:cache",d,MEM_TTL_LONG);      await redisSet("mat:mel:cache",d); }
 async function readIaStats()            { return (await redisGet("mat:ia:stats")) || {}; }
-async function readTempDocs()            { return (await redisGet("mat:docs:temp")) || []; }
-async function writeTempDocs(d)          { await redisSet("mat:docs:temp", d); }
-async function readSondages()            { return (await redisGet("mat:sondages")) || []; }
-async function writeSondages(d)          { await redisSet("mat:sondages", d); }
+async function readTempDocs()  { const c=memGet("mat:docs:temp");   if(c!==undefined)return c; const v=(await redisGet("mat:docs:temp"))||[];  memSet("mat:docs:temp",v,MEM_TTL_SHORT);    return v; }
+async function writeTempDocs(d){ memSet("mat:docs:temp",d,MEM_TTL_SHORT);    await redisSet("mat:docs:temp",d); }
+async function readSondages()  { const c=memGet("mat:sondages");    if(c!==undefined)return c; const v=(await redisGet("mat:sondages"))||[];   memSet("mat:sondages",v,MEM_TTL_SHORT);     return v; }
+async function writeSondages(d){ memSet("mat:sondages",d,MEM_TTL_SHORT);     await redisSet("mat:sondages",d); }
 async function readSondageResults(id)    { return (await redisGet("mat:sondage:results:" + id)) || {total:0,answers:{}}; }
 async function writeSondageResults(id,d) { await redisSet("mat:sondage:results:" + id, d); }
-async function readFeaturedDoc()         { return await redisGet("mat:docs:featured"); }
-async function writeFeaturedDoc(d)       { await redisSet("mat:docs:featured", d); }
+async function readFeaturedDoc()  { const c=memGet("mat:docs:featured"); if(c!==undefined)return c; const v=await redisGet("mat:docs:featured");   memSet("mat:docs:featured",v,MEM_TTL_SHORT); return v; }
+async function writeFeaturedDoc(d){ memSet("mat:docs:featured",d,MEM_TTL_SHORT); await redisSet("mat:docs:featured",d); }
 async function readEntreprises()         { return (await redisGet("mat:entreprises")) || []; }
 async function writeEntreprises(d)       { await redisSet("mat:entreprises", d); }
 
@@ -278,15 +293,18 @@ function getDefaultAdminSettings() {
 }
 
 async function readAdminSettings() {
+  const c = memGet("mat:admin:settings");
+  if (c !== undefined) return c;
   const saved = (await redisGet("mat:admin:settings")) || {};
-  return { ...getDefaultAdminSettings(), ...saved };
+  const merged = { ...getDefaultAdminSettings(), ...saved };
+  memSet("mat:admin:settings", merged, MEM_TTL_LONG);
+  return merged;
 }
 
 async function writeAdminSettings(settings) {
-  await redisSet("mat:admin:settings", {
-    ...getDefaultAdminSettings(),
-    ...(settings || {})
-  });
+  const merged = { ...getDefaultAdminSettings(), ...(settings || {}) };
+  memSet("mat:admin:settings", merged, MEM_TTL_LONG);
+  await redisSet("mat:admin:settings", merged);
 }
 
 function shouldTrackService(service, settings) {
@@ -2242,7 +2260,11 @@ app.delete("/admin/signals/:id", adminAuth, async (req, res) => {
 
 // ── Encart info/alerte (public) ─────────────────────────────
 app.get("/info-banner", async (req, res) => {
-  const d = (await redisGet("mat:info_banner")) || { active: false };
+  let d = memGet("mat:info_banner");
+  if (d === undefined) {
+    d = (await redisGet("mat:info_banner")) || { active: false };
+    memSet("mat:info_banner", d, MEM_TTL_SHORT);
+  }
   res.json(d);
 });
 
@@ -2250,13 +2272,15 @@ app.get("/info-banner", async (req, res) => {
 app.post("/admin/info-banner", adminAuth, async (req, res) => {
   const { active, title, text, icon } = req.body || {};
   const id = Date.now().toString();
-  await redisSet("mat:info_banner", {
+  const data = {
     active: !!active,
     title: (title || "").substring(0, 100),
     text: (text || "").substring(0, 300),
     icon: icon || "ℹ️",
     id
-  });
+  };
+  memSet("mat:info_banner", data, MEM_TTL_SHORT);
+  await redisSet("mat:info_banner", data);
   res.json({ ok: true, id });
 });
 
@@ -4386,13 +4410,17 @@ async function _sendDechetsReminder() {
   console.log(`🗑️ Rappel déchets (${type}) → ${subs.length} abonnés`);
 }
 
+let _dechetsLastSent = null; // évite les Redis GETs répétés pendant l'heure 18h
+
 setInterval(async () => {
   try {
     const pNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
     if (pNow.getHours() !== 18) return;
     const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
+    if (_dechetsLastSent === today) return; // court-circuit en mémoire
     const lastSent = await redisGet('mat:dechets:lastSent');
-    if (lastSent === today) return;
+    if (lastSent === today) { _dechetsLastSent = today; return; }
+    _dechetsLastSent = today;
     await redisSet('mat:dechets:lastSent', today);
     await _sendDechetsReminder();
   } catch(e) { console.warn('Dechets reminder:', e.message); }
