@@ -4604,6 +4604,7 @@ async function sendDailyStatsEmail() {
   const accessYest   = Object.values((parJour[yesterday] || {})).reduce((a, b) => a + Number(b || 0), 0);
   const accessToday  = Object.values((parJour[today]     || {})).reduce((a, b) => a + Number(b || 0), 0);
   const uYest        = (uniqueU.byDay || {})[yesterday]?.length || ov.uniqueYesterday || 0;
+  const uToday       = (uniqueU.byDay || {})[today]?.length     || 0;
   const uMonth       = (uniqueU.byMonth || {})[month]?.length  || ov.uniqueMonth     || 0;
 
   // Coût IA du mois
@@ -4621,7 +4622,7 @@ async function sendDailyStatsEmail() {
   const redisDayLimit = 10000;
   const redisPctDay   = typeof redisCmdDay   === 'number' ? Math.round(redisCmdDay   / redisDayLimit   * 100) : '—';
 
-  const dateLabel = new Date(yesterday + 'T12:00:00Z').toLocaleDateString('fr-FR', {
+  const dateLabel = new Date(today + 'T12:00:00Z').toLocaleDateString('fr-FR', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
   });
 
@@ -4647,9 +4648,9 @@ async function sendDailyStatsEmail() {
 <div class="card">
   <h2>👤 Fréquentation</h2>
   <div class="grid">
-    <div class="stat"><div class="stat-val">${uYest}</div><div class="stat-lbl">Visiteurs uniques hier</div></div>
+    <div class="stat"><div class="stat-val">${uToday}</div><div class="stat-lbl">Visiteurs uniques aujourd'hui</div></div>
     <div class="stat"><div class="stat-val">${uMonth}</div><div class="stat-lbl">Visiteurs uniques ce mois</div></div>
-    <div class="stat"><div class="stat-val">${accessYest}</div><div class="stat-lbl">Accès appli hier</div></div>
+    <div class="stat"><div class="stat-val">${accessToday}</div><div class="stat-lbl">Accès appli aujourd'hui</div></div>
     <div class="stat"><div class="stat-val">${subs.length}</div><div class="stat-lbl">Abonnés push</div></div>
   </div>
 </div>
@@ -4659,7 +4660,7 @@ async function sendDailyStatsEmail() {
   <div class="grid">
     <div class="stat ${typeof redisPctDay === 'number' && redisPctDay >= 80 ? 'danger' : typeof redisPctDay === 'number' && redisPctDay >= 60 ? 'warn' : ''}">
       <div class="stat-val">${redisCmdDay}</div>
-      <div class="stat-lbl">Commandes hier${typeof redisPctDay === 'number' ? ' (' + redisPctDay + '%)' : ''}</div>
+      <div class="stat-lbl">Commandes aujourd'hui${typeof redisPctDay === 'number' ? ' (' + redisPctDay + '%)' : ''}</div>
     </div>
     <div class="stat"><div class="stat-val">${redisCmdMonth}</div><div class="stat-lbl">Commandes ce mois</div></div>
     <div class="stat"><div class="stat-val">${decSubs.length}</div><div class="stat-lbl">Abonnés rappels déchets</div></div>
@@ -4673,7 +4674,7 @@ async function sendDailyStatsEmail() {
   await axios.post('https://api.resend.com/emails', {
     from: 'MAT Stats <stats@mezieres-lez-clery.fr>',
     to:   [DAILY_STATS_EMAIL],
-    subject: `📊 MAT — Stats du ${yesterday}`,
+    subject: `📊 MAT — Stats du ${today}`,
     html
   }, {
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
@@ -4683,13 +4684,13 @@ async function sendDailyStatsEmail() {
   console.log(`📧 Email stats quotidien envoyé à ${DAILY_STATS_EMAIL}`);
 }
 
-// Envoi quotidien à 7h heure de Paris (vérification toutes les 5 min)
+// Envoi quotidien à 22h heure de Paris (vérification toutes les 5 min)
 let _dailyStatsSentToday = null;
 setInterval(async () => {
   try {
     if (!RESEND_API_KEY || !DAILY_STATS_EMAIL) return;
     const pNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
-    if (pNow.getHours() !== 7 || pNow.getMinutes() >= 10) return;
+    if (pNow.getHours() !== 22 || pNow.getMinutes() >= 10) return;
     const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
     if (_dailyStatsSentToday === today) return;
     const lastSent = await redisGet('mat:daily:stats:sent');
