@@ -668,10 +668,7 @@ function cleanMarkdown(text) {
     .replace(/#{1,6}\s/g, "")          // titres
     .replace(/`{1,3}(.*?)`{1,3}/g, "$1") // code
     .replace(/^\s*[-•]\s/gm, "• ")    // listes
-    .replace(/\
-{3,}/g, "\
-\
-")        // sauts multiples
+    .replace(/\n{3,}/g, "\n\n") // sauts multiples
     .trim();
 }
 
@@ -4700,9 +4697,9 @@ setInterval(async () => {
     if (_dailyStatsSentToday === today) return;
     const lastSent = await redisGet('mat:daily:stats:sent');
     if (lastSent === today) { _dailyStatsSentToday = today; return; }
+    await sendDailyStatsEmail();
     _dailyStatsSentToday = today;
     await redisSet('mat:daily:stats:sent', today);
-    await sendDailyStatsEmail();
   } catch(e) { console.warn('Daily stats email:', e.message); }
 }, 5 * 60 * 1000);
 
