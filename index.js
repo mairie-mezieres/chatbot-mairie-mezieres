@@ -86,6 +86,9 @@ const METEOFRANCE_VIGILANCE_URL = process.env.METEOFRANCE_VIGILANCE_URL || proce
 const METEOFRANCE_API_TOKEN     = process.env.METEOFRANCE_API_TOKEN;
 const AUTO_POST_WEATHER_ALERTS  = process.env.AUTO_POST_WEATHER_ALERTS === "true";
 const AUTO_POST_MIN_LEVEL       = Number(process.env.AUTO_POST_MIN_LEVEL || 3);
+const AUTO_PUSH_WEATHER_MIN_LEVEL = Number(process.env.AUTO_PUSH_WEATHER_MIN_LEVEL || 2);
+const RESEND_API_KEY            = process.env.RESEND_API_KEY || "";
+const DAILY_STATS_EMAIL         = process.env.DAILY_STATS_EMAIL || "Fabrice.auffret45@gmail.com";
 const FACEBOOK_PAGE_ID          = process.env.FACEBOOK_PAGE_ID;
 const OPEN_METEO_LAT            = Number(process.env.OPEN_METEO_LAT || 47.822);
 const OPEN_METEO_LON            = Number(process.env.OPEN_METEO_LON || 1.808);
@@ -122,6 +125,7 @@ async function redisGet(key) {
     if (val === null || val === undefined) return null;
     return JSON.parse(val);
   } catch(e) {
+    if (e.response?.status === 429) _handleRedis429();
     console.warn(`Redis GET ${key}:`, e.message);
     return null;
   }
@@ -137,6 +141,7 @@ async function redisSet(key, value) {
       { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
     );
   } catch(e) {
+    if (e.response?.status === 429) _handleRedis429();
     console.warn(`Redis SET ${key}:`, e.message);
   }
 }
@@ -179,6 +184,29 @@ async function redisPipeline(commands) {
     );
   } catch(e) {
     console.warn("Redis pipeline:", e.message);
+  }
+}
+
+let _redis429Count = 0;
+let _redis429LastLog = 0;
+
+function _handleRedis429() {
+  _redis429Count++;
+  const now = Date.now();
+  if (now - _redis429LastLog > 10 * 60 * 1000) {
+    _redis429LastLog = now;
+    console.error(`🔴 Redis quota dépassé : ${_redis429Count} erreur(s) 429`);
+    const record = JSON.stringify({
+      ts: new Date().toISOString(),
+      module: 'Redis',
+      msg: `Quota Upstash dépassé — ${_redis429Count} commande(s) rejetée(s) (HTTP 429). Application en mode dégradé.`,
+      extra: 'HTTP 429'
+    });
+    if (REDIS_URL) {
+      axios.post(`${REDIS_URL}/lpush/${LOG_KEY}`, record,
+        { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' }, timeout: 4000 })
+        .catch(() => {});
+    }
   }
 }
 
@@ -623,7 +651,9 @@ function cleanHtml(html) {
     .replace(/<footer[\s\S]*?<\/footer>/gi,"")
     .replace(/<header[\s\S]*?<\/header>/gi,"")
     .replace(/<[^>]+>/g," ")
-    .replace(/\s{3,}/g,"\n\n")
+    .replace(/\s{3,}/g,"\
+\
+")
     .replace(/&[a-z]+;/g," ")
     .trim()
     .substring(0,2500);
@@ -638,7 +668,7 @@ function cleanMarkdown(text) {
     .replace(/#{1,6}\s/g, "")          // titres
     .replace(/`{1,3}(.*?)`{1,3}/g, "$1") // code
     .replace(/^\s*[-•]\s/gm, "• ")    // listes
-    .replace(/\n{3,}/g, "\n\n")        // sauts multiples
+    .replace(/\n{3,}/g, "\n\n") // sauts multiples
     .trim();
 }
 
@@ -675,7 +705,8 @@ async function refreshRemiCache() {
         { type:"text", text:"Extrais UNIQUEMENT les horaires des arrêts MAIRIE et LE BRÉAU à Mézières-lez-Cléry. Pour chaque arrêt : direction Orléans et Saint-Laurent-Nouan, période scolaire et vacances. Texte structuré sans markdown." }
       ]}]
     });
-    remiCache.content = `=== HORAIRES BUS LIGNE 8 RÉMI ===\n${resp.content[0].text}`;
+    remiCache.content = `=== HORAIRES BUS LIGNE 8 RÉMI ===\
+${resp.content[0].text}`;
     remiCache.lastUpdate = new Date();
   } catch(e) {
     remiCache.content = "[Horaires Rémi : erreur]";
@@ -698,7 +729,8 @@ function parseIcal(icsText) {
     const rawStart = get("DTSTART");
     const summary = get("SUMMARY");
     const location = get("LOCATION");
-    const desc = get("DESCRIPTION").replace(/\\n/g," ").substring(0,150);
+    const desc = get("DESCRIPTION").replace(/\\
+/g," ").substring(0,150);
 
     if (!rawStart || !summary) continue;
 
@@ -716,13 +748,16 @@ function parseIcal(icsText) {
 
     let line = `📅 ${summary} — ${dateStr}${timeStr}`;
     if (location) line += ` 📍 ${location}`;
-    if (desc) line += `\n   ${desc}`;
+    if (desc) line += `\
+   ${desc}`;
 
     events.push({dt,line});
   }
 
   events.sort((a,b)=>a.dt-b.dt);
-  return events.map(e=>e.line).join("\n\n");
+  return events.map(e=>e.line).join("\
+\
+");
 }
 
 async function refreshCalendarCache() {
@@ -730,7 +765,8 @@ async function refreshCalendarCache() {
   try {
     const res = await axios.get(GOOGLE_CALENDAR_ICAL,{timeout:10000});
     const parsed = parseIcal(res.data);
-    calendarCache.content = parsed ? `=== AGENDA (3 prochains mois) ===\n${parsed}` : "=== AGENDA === Aucun événement.";
+    calendarCache.content = parsed ? `=== AGENDA (3 prochains mois) ===\
+${parsed}` : "=== AGENDA === Aucun événement.";
     calendarCache.lastUpdate = new Date();
   } catch(e) {
     calendarCache.content = "[Agenda : non accessible]";
@@ -746,10 +782,13 @@ async function getTopicContent(topic) {
   const parts = [];
   for (const url of (SOURCES[topic] || [])) {
     const { text } = await fetchUrl(url);
-    if (text) parts.push(`--- ${url} ---\n${text}`);
+    if (text) parts.push(`--- ${url} ---\
+${text}`);
   }
 
-  const content = parts.join("\n\n");
+  const content = parts.join("\
+\
+");
   topicCache[topic] = { content, lastUpdate: new Date() };
   return content;
 }
@@ -777,11 +816,16 @@ async function buildContext(userText, explicitTopic = null) {
       // déjà inclus
     } else if (SOURCES[topic]) {
       const c = await getTopicContent(topic);
-      if (c) parts.push(`=== ${topic.toUpperCase()} ===\n${c}`);
+      if (c) parts.push(`=== ${topic.toUpperCase()} ===\
+${c}`);
     }
   }
 
-  return parts.join("\n\n─────────────────────────────\n\n");
+  return parts.join("\
+\
+─────────────────────────────\
+\
+");
 }
 
 // ── Météo / Vigilance ─────────────────────────────────────────
@@ -1224,62 +1268,98 @@ const DIRECT_RULES = [
   {
     name: "plu_geoportail",
     test: (q) => /geoportail|géoportail|ma.zone|quelle.zone|trouver.zone|connaitre.zone|connaître.zone|ma.parcelle|numero.parcelle|numéro.parcelle|secteur.habitation|quelle.est.ma.zone/.test(q),
-    answer: "🗺️ Pour connaître votre zone PLU à Mézières-lez-Cléry : rendez-vous sur geoportail-urbanisme.gouv.fr, entrez votre adresse, zoomez sur votre parcelle et cliquez dessus — la zone (Ua, Ub, A, N…) et le numéro de parcelle apparaissent dans le panneau de gauche. Lien direct centré sur Mézières : geoportail-urbanisme.gouv.fr/map/#tile=1&lon=1.8048&lat=47.8181&zoom=15 — Posez-moi ensuite votre zone pour que je vous explique les règles !\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    answer: "🗺️ Pour connaître votre zone PLU à Mézières-lez-Cléry : rendez-vous sur geoportail-urbanisme.gouv.fr, entrez votre adresse, zoomez sur votre parcelle et cliquez dessus — la zone (Ua, Ub, A, N…) et le numéro de parcelle apparaissent dans le panneau de gauche. Lien direct centré sur Mézières : geoportail-urbanisme.gouv.fr/map/#tile=1&lon=1.8048&lat=47.8181&zoom=15 — Posez-moi ensuite votre zone pour que je vous explique les règles !\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_zone_ua",
-    test: (q) => /ua|zone.ua|bourg.ancien|hameau.ancien|vieux.bourg/.test(q),
-    answer: "🏗️ La zone Ua correspond aux secteurs bâtis les plus anciens du bourg et hameaux de Mézières. Vocation principale : habitat. Commerces et artisanat compatibles acceptés. Règles clés : hauteur max 6 m à l'égout, emprise au sol max 50 %, toiture 2 pentes ≥ 35° en ardoises ou tuiles plates, implantation à l'alignement ou recul ≥ 2 m, limite séparative : contiguïté ou retrait ≥ 3 m. Pour identifier votre zone : geoportail-urbanisme.gouv.fr ou mairie au 02 38 45 61 76.\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    test: (q) => /\bua\b|zone.ua|bourg.ancien|hameau.ancien|vieux.bourg/.test(q),
+    answer: "🏗️ La zone Ua correspond aux secteurs bâtis les plus anciens du bourg et hameaux de Mézières. Vocation principale : habitat. Commerces et artisanat compatibles acceptés. Règles clés : hauteur max 6 m à l'égout, emprise au sol max 50 %, toiture 2 pentes ≥ 35° en ardoises ou tuiles plates, implantation à l'alignement ou recul ≥ 2 m, limite séparative : contiguïté ou retrait ≥ 3 m. Pour identifier votre zone : geoportail-urbanisme.gouv.fr ou mairie au 02 38 45 61 76.\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_zone_ub",
-    test: (q) => /ub|zone.ub|zone.ub1|lotissement|manthelon|clos.de.manthelon|zone.residentielle|zone.résidentielle/.test(q),
-    answer: "🏗️ La zone Ub est la zone résidentielle de Mézières (constructions de la 2e moitié du XXe siècle). Règles clés : hauteur max 4 m à l'égout, emprise max 30 %, recul ≥ 5 m de la voie, 30 % du terrain en espaces verts, toiture 2 pentes ≥ 35° en ardoises/tuiles plates, murs sans blanc pur ni couleur vive. Secteur Ub1 (Clos de Manthelon) : hauteur max 8 m, tuiles terre cuite 40-45°, sens du faîtage imposé selon le plan parcellaire. Pour localiser votre parcelle : geoportail-urbanisme.gouv.fr\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    test: (q) => /\bub\b|zone.ub|zone.ub1|lotissement|manthelon|clos.de.manthelon|zone.residentielle|zone.résidentielle/.test(q),
+    answer: "🏗️ La zone Ub est la zone résidentielle de Mézières (constructions de la 2e moitié du XXe siècle). Règles clés : hauteur max 4 m à l'égout, emprise max 30 %, recul ≥ 5 m de la voie, 30 % du terrain en espaces verts, toiture 2 pentes ≥ 35° en ardoises/tuiles plates, murs sans blanc pur ni couleur vive. Secteur Ub1 (Clos de Manthelon) : hauteur max 8 m, tuiles terre cuite 40-45°, sens du faîtage imposé selon le plan parcellaire. Pour localiser votre parcelle : geoportail-urbanisme.gouv.fr\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_zone_agricole",
-    test: (q) => /zone.a|zone.ah|zone.agricole|terrain.agricole|secteur.agricole/.test(q),
-    answer: "🌾 La zone A est la zone agricole de Mézières : seuls les bâtiments nécessaires à l'exploitation agricole sont autorisés. Le secteur Ah (hameaux non agricoles) permet des extensions mesurées (max 20 % de la surface existante, emprise max 50 m²) et des changements de destination vers habitat, bureaux, commerce ou tourisme. Hauteur max habitation : 5 m. Recul ≥ 8 m des voies (sauf A71 : 100 m). Toiture en ardoises ou tuiles plates ≥ 35°.\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    test: (q) => /\bzone.a\b|\bzone.ah\b|zone.agricole|terrain.agricole|secteur.agricole/.test(q),
+    answer: "🌾 La zone A est la zone agricole de Mézières : seuls les bâtiments nécessaires à l'exploitation agricole sont autorisés. Le secteur Ah (hameaux non agricoles) permet des extensions mesurées (max 20 % de la surface existante, emprise max 50 m²) et des changements de destination vers habitat, bureaux, commerce ou tourisme. Hauteur max habitation : 5 m. Recul ≥ 8 m des voies (sauf A71 : 100 m). Toiture en ardoises ou tuiles plates ≥ 35°.\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_zone_naturelle",
-    test: (q) => /zone.n|zone.nh|zone.nj|zone.nl|zone.np|zone.ndc|zone.naturelle|zone.forestière|zone.foret|zone.forêt/.test(q),
-    answer: "🌿 La zone N est la zone naturelle et forestière de Mézières (vallée, coteaux, forêt). Constructibilité quasi nulle. Secteur Nh (hameaux naturels) : extensions max 20 % + annexes max 50 m², hauteur max 5 m. Secteur Nj (jardins) : abris et annexes max 20 m², hauteur max 2,5 m. Secteur Nl : aménagements de loisirs collectifs uniquement. Secteur Np : équipements photovoltaïques. Pour tout projet en zone N, contactez la mairie : 02 38 45 61 76.\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    test: (q) => /\bzone.n\b|zone.nh|zone.nj|zone.nl|zone.np|zone.ndc|zone.naturelle|zone.forestière|zone.foret|zone.forêt/.test(q),
+    answer: "🌿 La zone N est la zone naturelle et forestière de Mézières (vallée, coteaux, forêt). Constructibilité quasi nulle. Secteur Nh (hameaux naturels) : extensions max 20 % + annexes max 50 m², hauteur max 5 m. Secteur Nj (jardins) : abris et annexes max 20 m², hauteur max 2,5 m. Secteur Nl : aménagements de loisirs collectifs uniquement. Secteur Np : équipements photovoltaïques. Pour tout projet en zone N, contactez la mairie : 02 38 45 61 76.\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_extension_maison",
     test: (q) => /(extension|agrandissement|agrandir).*(maison|habitation|logement|bâtiment|construction)/.test(q) || /(maison|habitation|logement).*(extension|agrandissement|agrandir)/.test(q),
-    answer: "🏗️ Pour une extension de maison à Mézières-lez-Cléry : < 20 m² accolée = déclaration préalable (DP) ; ≥ 20 m² = permis de construire (PC). Si après travaux la surface totale dépasse 150 m², un architecte est obligatoire. Les règles de hauteur, recul et emprise de votre zone PLU (Ua, Ub…) s'appliquent. Déposez le dossier en mairie (02 38 45 61 76) ou via le GNAU sur le site de la CCTVL. Délai : 1 mois pour DP, 2 mois pour PC. Validité : 3 ans.\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    answer: "🏗️ Pour une extension de maison à Mézières-lez-Cléry : < 20 m² accolée = déclaration préalable (DP) ; ≥ 20 m² = permis de construire (PC). Si après travaux la surface totale dépasse 150 m², un architecte est obligatoire. Les règles de hauteur, recul et emprise de votre zone PLU (Ua, Ub…) s'appliquent. Déposez le dossier en mairie (02 38 45 61 76) ou via le GNAU sur le site de la CCTVL. Délai : 1 mois pour DP, 2 mois pour PC. Validité : 3 ans.\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_veranda_terrasse",
     test: (q) => /veranda|véranda|terrasse|pergola|pool.house|poolhouse/.test(q),
-    answer: "🏗️ Véranda et terrasse couverte : < 5 m² = libre ; < 40 m² = déclaration préalable ; ≥ 40 m² = permis de construire. Terrasse non couverte de plain-pied (béton ou bois, sans surélévation) : libre quelle que soit la surface. Terrasse surélevée : < 5 m² libre ; entre 5 et 40 m² = DP ; ≥ 40 m² = PC. Véranda en zone Ua : autorisée si elle ne dénature pas la construction.\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    answer: "🏗️ Véranda et terrasse couverte : < 5 m² = libre ; < 40 m² = déclaration préalable ; ≥ 40 m² = permis de construire. Terrasse non couverte de plain-pied (béton ou bois, sans surélévation) : libre quelle que soit la surface. Terrasse surélevée : < 5 m² libre ; entre 5 et 40 m² = DP ; ≥ 40 m² = PC. Véranda en zone Ua : autorisée si elle ne dénature pas la construction.\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_toiture_lucarne_facade",
     test: (q) => /toiture|tuile|ardoise|lucarne|velux|fenetre.de.toit|fenêtre.de.toit|pente.toit|couverture|ravalement|bardage|facade|façade/.test(q) && /règle|autorisé|autorisée|interdit|peut.on|peut-on/.test(q),
-    answer: "🏗️ À Mézières, les toitures principales (zones Ua, Ub, 1AU) : ≥ 2 pentes à 35° minimum, en ardoises ou tuiles plates. Extensions > 30 m² : pente ≥ 25°. Les lucarnes doivent être rectangulaires, plus hautes que larges, leur largeur cumulée ≤ 2/3 de la façade ; pas de lucarnes rampantes. Fenêtre de toit (Velux) = déclaration préalable. Ravalement de façade = DP si changement d'aspect. Blanc pur et couleurs vives interdits en Ub.\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    answer: "🏗️ À Mézières, les toitures principales (zones Ua, Ub, 1AU) : ≥ 2 pentes à 35° minimum, en ardoises ou tuiles plates. Extensions > 30 m² : pente ≥ 25°. Les lucarnes doivent être rectangulaires, plus hautes que larges, leur largeur cumulée ≤ 2/3 de la façade ; pas de lucarnes rampantes. Fenêtre de toit (Velux) = déclaration préalable. Ravalement de façade = DP si changement d'aspect. Blanc pur et couleurs vives interdits en Ub.\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_cloture_details",
     test: (q) => /(cloture|clôture|mur|portail|grillage).*(hauteur|haut|metre|mètre|maximum|règle|matériau|autorisation)/.test(q) || /(hauteur|règle).*(cloture|clôture|portail|mur)/.test(q),
-    answer: "🏗️ Clôtures PLU Mézières-lez-Cléry — Zone Ua : sur voie max 1,50 m (mur ou claire-voie) ; en limite séparative max 1,80 m (mur pierre/brique ou grillage + haie). Zone Ub : sur voie max 1,50 m claire-voie ; en limite séparative max 1,80 m (mur ou grillage + haie d'essences locales). Au droit des carrefours : max 1,20 m sur 20 m de part et d'autre. Zone 1AU : sur voie max 1,20 m, en limite séparative max 1,50 m (grillage sombre + haie). Toute clôture est soumise à déclaration préalable (délibération 01/03/2012).\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    answer: "🏗️ Clôtures PLU Mézières-lez-Cléry — Zone Ua : sur voie max 1,50 m (mur ou claire-voie) ; en limite séparative max 1,80 m (mur pierre/brique ou grillage + haie). Zone Ub : sur voie max 1,50 m claire-voie ; en limite séparative max 1,80 m (mur ou grillage + haie d'essences locales). Au droit des carrefours : max 1,20 m sur 20 m de part et d'autre. Zone 1AU : sur voie max 1,20 m, en limite séparative max 1,50 m (grillage sombre + haie). Toute clôture est soumise à déclaration préalable (délibération 01/03/2012).\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_piscine_details",
     test: (q) => /piscine|bassin.piscine|jacuzzi/.test(q) && /règle|autorisation|permis|déclaration|m2|metre/.test(q),
-    answer: "🏗️ Piscine à Mézières-lez-Cléry : bassin non couvert < 100 m² restant moins de 3 mois = aucune formalité. Bassin non couvert < 100 m² = déclaration préalable. Bassin ≥ 100 m² ou couvert (couverture > 1,80 m) = permis de construire. Vérifiez que votre zone PLU autorise les piscines (zones Ua, Ub : oui en général). Pensez à la taxe d'aménagement à déclarer en mairie.\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    answer: "🏗️ Piscine à Mézières-lez-Cléry : bassin non couvert < 100 m² restant moins de 3 mois = aucune formalité. Bassin non couvert < 100 m² = déclaration préalable. Bassin ≥ 100 m² ou couvert (couverture > 1,80 m) = permis de construire. Vérifiez que votre zone PLU autorise les piscines (zones Ua, Ub : oui en général). Pensez à la taxe d'aménagement à déclarer en mairie.\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_permis_construire_depot",
     test: (q) => /deposer|déposer|dossier|comment.faire.un.permis|comment.obtenir.un.permis|permis.de.construire|pc |gnau|guichet.numerique/.test(q),
-    answer: "🏗️ Pour déposer un permis de construire ou une déclaration préalable à Mézières-lez-Cléry : 1) Téléchargez le cerfa (PC = n°13406, DP = n°13703) sur service-public.fr. 2) Si surface > 150 m² : architecte obligatoire. 3) Déposez en mairie (02 38 45 61 76) ou via le GNAU (guichet numérique) sur le site de la CCTVL. Délais : 1 mois pour DP, 2 mois pour PC. Validité : 3 ans. Pensez à afficher l'arrêté sur le terrain et à déclarer début (DOC) et achèvement (DAACT) des travaux.\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    answer: "🏗️ Pour déposer un permis de construire ou une déclaration préalable à Mézières-lez-Cléry : 1) Téléchargez le cerfa (PC = n°13406, DP = n°13703) sur service-public.fr. 2) Si surface > 150 m² : architecte obligatoire. 3) Déposez en mairie (02 38 45 61 76) ou via le GNAU (guichet numérique) sur le site de la CCTVL. Délais : 1 mois pour DP, 2 mois pour PC. Validité : 3 ans. Pensez à afficher l'arrêté sur le terrain et à déclarer début (DOC) et achèvement (DAACT) des travaux.\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   },
   {
     name: "plu_stationnement_regles",
     test: (q) => /stationnement.*(règle|obligation|nombre|place|créer|aménager|construire)|place.de.stationnement.*(règle|obligation)/.test(q),
-    answer: "🏗️ Le PLU de Mézières impose : 2 places de stationnement minimum par logement en zones Ua, Ub et 1AU (garages compris). Pour bureaux et artisanat : 1 place par tranche de 25 m² de surface de plancher. Le stationnement doit être assuré sur le terrain, hors voie publique. Surface à prévoir : 25 m² par place accès compris.\n\n⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\n📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
+    answer: "🏗️ Le PLU de Mézières impose : 2 places de stationnement minimum par logement en zones Ua, Ub et 1AU (garages compris). Pour bureaux et artisanat : 1 place par tranche de 25 m² de surface de plancher. Le stationnement doit être assuré sur le terrain, hors voie publique. Surface à prévoir : 25 m² par place accès compris.\
+\
+⚠️ Ces informations sont indicatives — vérifiez impérativement votre projet auprès de la mairie avant tout dépôt de dossier.\
+📞 02 38 45 61 76 | ✉️ urbanisme@mezieres-lez-clery.fr"
   }
 ];
 
@@ -1436,7 +1516,8 @@ function buildCategoryPrompt(category, extraCtx) {
     autre: `Tu réponds librement dans le cadre de la vie communale de Mézières-lez-Cléry. Si la question sort du cadre municipal ou des services publics, explique poliment que tu es spécialisée sur la commune.`,
   };
   const block = blocks[category] || blocks["autre"];
-  const ctxLine = extraCtx ? `\nCONTEXTE UTILISATEUR : ${extraCtx}` : "";
+  const ctxLine = extraCtx ? `\
+CONTEXTE UTILISATEUR : ${extraCtx}` : "";
   return block + ctxLine;
 }
 
@@ -1444,7 +1525,13 @@ async function generateMelReply(userText, history, category = "autre", extraCtx 
   // 🎭 Easter egg
   const _eq=(userText||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
   if(/damien[\s\-_]*bougre/.test(_eq)){
-    return{reply:"Oh là là là... DAMIEN BOUGRÉ ?! 😍🤩💫\n\nMEL ne sait pas rester pro. Damien Bougré, 2ème adjoint, Pôle Vie Scolaire... l'élu le plus 🔥 du conseil ! 💪✨\n\nMEL assume totalement 💕🌟\n\nPour une vraie question : mairie au 02 38 45 61 76 😅",provider:"mel-fangirl-mode"};
+    return{reply:"Oh là là là... DAMIEN BOUGRÉ ?! 😍🤩💫\
+\
+MEL ne sait pas rester pro. Damien Bougré, 2ème adjoint, Pôle Vie Scolaire... l'élu le plus 🔥 du conseil ! 💪✨\
+\
+MEL assume totalement 💕🌟\
+\
+Pour une vraie question : mairie au 02 38 45 61 76 😅",provider:"mel-fangirl-mode"};
   }
 
   const normalized = normalizeQuestion(userText);
@@ -1580,6 +1667,37 @@ async function resolveFacebookPageId() {
     console.warn("Résolution page Facebook impossible:", e.message);
     return null;
   }
+}
+
+async function sendWeatherPush(vigilance) {
+  const subs = await readSubs();
+  if (!subs.length) return { sent: 0, total: 0 };
+  const LEVEL_ICONS  = { 2: '🟡', 3: '🟠', 4: '🔴' };
+  const level  = Number(vigilance.level || 2);
+  const color  = vigilance.color_label || 'météo';
+  const icon   = LEVEL_ICONS[level] || '⚠️';
+  const phenom = vigilance.phenomenon_label || 'Alerte météo';
+  const endTxt = vigilance.end ? formatAlertDateFr(vigilance.end) : '';
+  const payload = JSON.stringify({
+    title: `${icon} Vigilance ${color} — Loiret`,
+    body:  endTxt ? `${phenom} · Fin ${endTxt}` : phenom,
+    icon:  './icon-192.png',
+    badge: './icon-192.png',
+    data:  { url: './', open: 'meteo' }
+  });
+  const dead = [];
+  let sent = 0;
+  for (const sub of subs) {
+    try {
+      await webpush.sendNotification(sub, payload);
+      sent++;
+    } catch (e) {
+      if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
+    }
+  }
+  if (dead.length) await writeSubs(subs.filter(s => !dead.includes(s.endpoint)));
+  console.log(`🌩️ Météo push (vigilance ${color}) → ${sent}/${subs.length} abonnés`);
+  return { sent, total: subs.length };
 }
 
 async function publishWeatherAlertToFacebook(vigilance) {
@@ -2622,9 +2740,11 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   const fullText = (msg || "").replace(/#app-mezieres/gi, "").trim();
 
   // Découpage propre : 1ère ligne (non vide) = titre, reste = description
-  const lines = fullText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  const lines = fullText.split(/\r?\
+/).map(l => l.trim()).filter(l => l.length > 0);
   const title = (lines[0] || "Actualité").substring(0, 150);
-  const description = lines.length > 1 ? lines.slice(1).join("\n").substring(0, 3000) : null;
+  const description = lines.length > 1 ? lines.slice(1).join("\
+").substring(0, 3000) : null;
 
   const actus = await readNews();
 
@@ -2716,10 +2836,13 @@ async function publishActuToFacebook(title, description, imageBase64, eventDate,
   if (description) {
     const cleaned = String(description)
       .replace(/\r/g, '')
-      .split('\n')
+      .split('\
+')
       .map(l => l.trim())
       .filter(Boolean)
-      .join('\n\n')
+      .join('\
+\
+')
       .substring(0, 2200);
     if (cleaned) lines.push(cleaned);
   }
@@ -2731,7 +2854,9 @@ async function publishActuToFacebook(title, description, imageBase64, eventDate,
     lines.push(`📅 ${dateStr}${timeStr}`);
     if (eventLocation) lines.push(`📍 ${String(eventLocation).trim()}`);
   }
-  const message = lines.join("\n\n").substring(0, 2800);
+  const message = lines.join("\
+\
+").substring(0, 2800);
 
   const postTextOnly = async () => {
     const r = await axios.post(`https://graph.facebook.com/v19.0/${pageId}/feed`, {
@@ -3251,14 +3376,20 @@ app.post("/signal", signalLimiter, async (req, res) => {
     if (signalType === "bug") {
       cardName = `[BUG] ${String(cat || "").replace("[BUG]", "").trim() || "Non précisé"}`;
     } else if (signalType === "demande") {
-      cardName = `[Demande] ${String(desc || "").split("\n")[0].substring(0, 80) || "Contact mairie"}`;
+      cardName = `[Demande] ${String(desc || "").split("\
+")[0].substring(0, 80) || "Contact mairie"}`;
     } else {
       cardName = `[Signalement] ${cat || "Non précisé"}`;
     }
 
-    const mapsLine = mapsLink ? `\n\n📍 Voir sur la carte : ${mapsLink}` : "";
-    const dateLine = `\n\n📅 ${new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" })}`;
-    const typeLine = `\n🏷️ Type : ${signalType}`;
+    const mapsLine = mapsLink ? `\
+\
+📍 Voir sur la carte : ${mapsLink}` : "";
+    const dateLine = `\
+\
+📅 ${new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" })}`;
+    const typeLine = `\
+🏷️ Type : ${signalType}`;
     const cardDesc = `${desc || "Aucune description."}${typeLine}${mapsLine}${dateLine}`;
 
     await createTrelloCard(signalType, cardName, cardDesc, photoB64 || null);
@@ -3365,13 +3496,28 @@ app.get("/meteo/alertes/check", async (req, res) => {
       return res.json({ status: "no-alert" });
     }
 
+    // Notification push pour niveau >= AUTO_PUSH_WEATHER_MIN_LEVEL (2 = jaune par défaut)
+    let pushResult = null;
+    if (Number(vigilance.level) >= AUTO_PUSH_WEATHER_MIN_LEVEL) {
+      const lastPush = await redisGet("mat:weather:last:push");
+      if (force || !isSameWeatherAlert(lastPush, vigilance)) {
+        try {
+          pushResult = await sendWeatherPush(vigilance);
+          await redisSet("mat:weather:last:push", vigilance);
+        } catch (pe) {
+          console.warn("Weather push error:", pe.message);
+        }
+      }
+    }
+
+    // Post Facebook pour niveau >= AUTO_POST_MIN_LEVEL (3 = orange par défaut)
     if (Number(vigilance.level) < AUTO_POST_MIN_LEVEL) {
-      return res.json({ status: "below-threshold", vigilance });
+      return res.json({ status: "below-threshold", vigilance, push: pushResult });
     }
 
     const last = await readLastWeatherAlert();
     if (!force && isSameWeatherAlert(last, vigilance)) {
-      return res.json({ status: "duplicate", vigilance });
+      return res.json({ status: "duplicate", vigilance, push: pushResult });
     }
 
     let published = false;
@@ -3388,6 +3534,7 @@ app.get("/meteo/alertes/check", async (req, res) => {
       status: published ? "published" : "stored",
       vigilance,
       message,
+      push: pushResult,
     });
   } catch (e) {
     console.error("ALERTE METEO ERROR =", {
@@ -4435,6 +4582,126 @@ app.delete("/admin/entreprises/:id", adminAuth, async (req, res) => {
   res.json({ ok: true, entreprises: list });
 });
 
+
+// ═══════════════════════════════════════════════════════════════
+// EMAIL STATISTIQUES QUOTIDIENNES (Resend API)
+// Variables : RESEND_API_KEY, DAILY_STATS_EMAIL
+// ═══════════════════════════════════════════════════════════════
+
+async function sendDailyStatsEmail() {
+  if (!RESEND_API_KEY || !DAILY_STATS_EMAIL) return;
+
+  const stats    = await readStats();
+  const iaStats  = await readIaStats();
+  const subs     = await readSubs();
+  const decSubs  = await readDechetsSubs();
+
+  const today     = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const month     = today.slice(0, 7);
+
+  const ov        = (stats.app || stats).overview || {};
+  const parJour   = (stats.app || stats).parJour  || stats.parJour || {};
+  const uniqueU   = (stats.app || stats).uniqueUsers || stats.uniqueUsers || {};
+
+  const accessYest   = Object.values((parJour[yesterday] || {})).reduce((a, b) => a + Number(b || 0), 0);
+  const accessToday  = Object.values((parJour[today]     || {})).reduce((a, b) => a + Number(b || 0), 0);
+  const uYest        = (uniqueU.byDay || {})[yesterday]?.length || ov.uniqueYesterday || 0;
+  const uMonth       = (uniqueU.byMonth || {})[month]?.length  || ov.uniqueMonth     || 0;
+
+  // Coût IA du mois
+  const monthIa = (iaStats.monthly || {})[month] || {};
+  let iaEurMonth = 0;
+  for (const [prov, d] of Object.entries(monthIa)) {
+    if (prov !== '_total') iaEurMonth += d.costEur || 0;
+  }
+
+  // Redis stats (via Upstash Management API)
+  let redisInfo = null;
+  try { redisInfo = await getUpstashRedisStats(); } catch (_) {}
+  const redisCmdDay   = redisInfo?.daily_request_count   ?? '—';
+  const redisCmdMonth = redisInfo?.monthly_request_count ?? '—';
+  const redisDayLimit = 10000;
+  const redisPctDay   = typeof redisCmdDay   === 'number' ? Math.round(redisCmdDay   / redisDayLimit   * 100) : '—';
+
+  const dateLabel = new Date(yesterday + 'T12:00:00Z').toLocaleDateString('fr-FR', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+  });
+
+  const html = `<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="UTF-8"><style>
+  body{font-family:system-ui,sans-serif;background:#f4f0ea;margin:0;padding:20px}
+  .card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #e2ddd8}
+  h1{color:#1a3d2b;font-size:1.4rem;margin:0 0 4px}
+  .sub{color:#5a7065;font-size:0.85rem;margin-bottom:20px}
+  h2{color:#2d6a4f;font-size:1rem;margin:0 0 12px}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .stat{background:#d8f3dc;border-radius:8px;padding:12px;text-align:center}
+  .stat-val{font-size:1.6rem;font-weight:900;color:#1a3d2b}
+  .stat-lbl{font-size:0.72rem;color:#2d6a4f;margin-top:2px}
+  .warn{background:#fef3c7}.danger{background:#fee2e2}
+  .foot{color:#5a7065;font-size:0.75rem;text-align:center;margin-top:16px}
+</style></head>
+<body>
+<h1>📊 MAT — Statistiques</h1>
+<div class="sub">${dateLabel}</div>
+
+<div class="card">
+  <h2>👤 Fréquentation</h2>
+  <div class="grid">
+    <div class="stat"><div class="stat-val">${uYest}</div><div class="stat-lbl">Visiteurs uniques hier</div></div>
+    <div class="stat"><div class="stat-val">${uMonth}</div><div class="stat-lbl">Visiteurs uniques ce mois</div></div>
+    <div class="stat"><div class="stat-val">${accessYest}</div><div class="stat-lbl">Accès appli hier</div></div>
+    <div class="stat"><div class="stat-val">${subs.length}</div><div class="stat-lbl">Abonnés push</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>⚡ Redis Upstash</h2>
+  <div class="grid">
+    <div class="stat ${typeof redisPctDay === 'number' && redisPctDay >= 80 ? 'danger' : typeof redisPctDay === 'number' && redisPctDay >= 60 ? 'warn' : ''}">
+      <div class="stat-val">${redisCmdDay}</div>
+      <div class="stat-lbl">Commandes hier${typeof redisPctDay === 'number' ? ' (' + redisPctDay + '%)' : ''}</div>
+    </div>
+    <div class="stat"><div class="stat-val">${redisCmdMonth}</div><div class="stat-lbl">Commandes ce mois</div></div>
+    <div class="stat"><div class="stat-val">${decSubs.length}</div><div class="stat-lbl">Abonnés rappels déchets</div></div>
+    <div class="stat"><div class="stat-val">€${iaEurMonth.toFixed(2)}</div><div class="stat-lbl">Coût IA ce mois</div></div>
+  </div>
+</div>
+
+<div class="foot">MAT · Mézières-lez-Cléry · ${new Date().toLocaleDateString('fr-FR')}</div>
+</body></html>`;
+
+  await axios.post('https://api.resend.com/emails', {
+    from: 'MAT Stats <stats@mezieres-lez-clery.fr>',
+    to:   [DAILY_STATS_EMAIL],
+    subject: `📊 MAT — Stats du ${yesterday}`,
+    html
+  }, {
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    timeout: 15000
+  });
+
+  console.log(`📧 Email stats quotidien envoyé à ${DAILY_STATS_EMAIL}`);
+}
+
+// Envoi quotidien à 7h heure de Paris (vérification toutes les 5 min)
+let _dailyStatsSentToday = null;
+setInterval(async () => {
+  try {
+    if (!RESEND_API_KEY || !DAILY_STATS_EMAIL) return;
+    const pNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+    if (pNow.getHours() !== 7 || pNow.getMinutes() >= 10) return;
+    const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
+    if (_dailyStatsSentToday === today) return;
+    const lastSent = await redisGet('mat:daily:stats:sent');
+    if (lastSent === today) { _dailyStatsSentToday = today; return; }
+    await sendDailyStatsEmail();
+    _dailyStatsSentToday = today;
+    await redisSet('mat:daily:stats:sent', today);
+  } catch(e) { console.warn('Daily stats email:', e.message); }
+}, 5 * 60 * 1000);
 
 app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
