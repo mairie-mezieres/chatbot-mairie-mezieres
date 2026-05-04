@@ -729,8 +729,7 @@ function parseIcal(icsText) {
     const rawStart = get("DTSTART");
     const summary = get("SUMMARY");
     const location = get("LOCATION");
-    const desc = get("DESCRIPTION").replace(/\\
-/g," ").substring(0,150);
+    const desc = get("DESCRIPTION").replace(/\\n/g, " ").substring(0, 150);
 
     if (!rawStart || !summary) continue;
 
@@ -2740,11 +2739,9 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   const fullText = (msg || "").replace(/#app-mezieres/gi, "").trim();
 
   // Découpage propre : 1ère ligne (non vide) = titre, reste = description
-  const lines = fullText.split(/\r?\
-/).map(l => l.trim()).filter(l => l.length > 0);
+  const lines = fullText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
   const title = (lines[0] || "Actualité").substring(0, 150);
-  const description = lines.length > 1 ? lines.slice(1).join("\
-").substring(0, 3000) : null;
+  const description = lines.length > 1 ? lines.slice(1).join("\n").substring(0, 3000) : null;
 
   const actus = await readNews();
 
