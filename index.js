@@ -4588,43 +4588,80 @@ app.delete("/admin/entreprises/:id", adminAuth, async (req, res) => {
 async function sendDailyStatsEmail() {
   if (!RESEND_API_KEY || !DAILY_STATS_EMAIL) return;
 
-  const stats    = await readStats();
-  const iaStats  = await readIaStats();
-  const subs     = await readSubs();
-  const decSubs  = await readDechetsSubs();
+  const [stats, iaStats, subs, decSubs, signals, ideas, settings] = await Promise.all([
+    readStats(), readIaStats(), readSubs(), readDechetsSubs(),
+    readSignals(), readIdeas(), readAdminSettings()
+  ]);
 
-  const today     = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  const month     = today.slice(0, 7);
+  const todayParis = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
+  const today      = todayParis;
+  const yesterday  = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date(Date.now() - 86400000));
+  const month      = today.slice(0, 7);
+  const prevMonth  = (() => { const d = new Date(today + 'T12:00:00Z'); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7); })();
 
-  const ov        = (stats.app || stats).overview || {};
-  const parJour   = (stats.app || stats).parJour  || stats.parJour || {};
-  const uniqueU   = (stats.app || stats).uniqueUsers || stats.uniqueUsers || {};
+  const parJour  = stats.parJour  || {};
+  const uniqueU  = stats.uniqueUsers || {};
+  const services = stats.services || {};
 
-  const accessYest   = Object.values((parJour[yesterday] || {})).reduce((a, b) => a + Number(b || 0), 0);
-  const accessToday  = Object.values((parJour[today]     || {})).reduce((a, b) => a + Number(b || 0), 0);
-  const uYest        = (uniqueU.byDay || {})[yesterday]?.length || ov.uniqueYesterday || 0;
-  const uToday       = (uniqueU.byDay || {})[today]?.length     || 0;
-  const uMonth       = (uniqueU.byMonth || {})[month]?.length  || ov.uniqueMonth     || 0;
+  // Fréquentation
+  const uToday   = (uniqueU.byDay   || {})[today]?.length   || 0;
+  const uYest    = (uniqueU.byDay   || {})[yesterday]?.length || 0;
+  const uMonth   = (uniqueU.byMonth || {})[month]?.length    || 0;
+  const uPrevM   = (uniqueU.byMonth || {})[prevMonth]?.length || 0;
+  const accessToday  = Object.values(parJour[today]     || {}).reduce((a,b) => a + Number(b||0), 0);
+  const accessYest   = Object.values(parJour[yesterday] || {}).reduce((a,b) => a + Number(b||0), 0);
+  const accessMonth  = Object.entries(parJour).filter(([d]) => d.startsWith(month)).reduce((s,[,v]) => s + Object.values(v||{}).reduce((a,b)=>a+Number(b||0),0), 0);
+  const trend = (a, b) => b > 0 ? (a >= b ? `+${Math.round((a-b)/b*100)}%` : `-${Math.round((b-a)/b*100)}%`) : '';
+
+  // MEL questions
+  const melToday   = parJour[today]?.mel   || 0;
+  const melYest    = parJour[yesterday]?.mel || 0;
+  const melTotal   = services.mel || 0;
+  const melLogs    = settings.melQuestionLogEnabled
+    ? await redisLRange(`mat:mel:questions:${today}`, 0, 49).catch(() => [])
+    : [];
+
+  // IA catégories aujourd'hui
+  const iaCatsToday = (stats.iaCategories?.parJour || {})[today] || {};
+  const IA_LABELS   = { urbanisme:'🏗️ Urbanisme', dechets:'🗑️ Déchets', meteo:'🌦️ Météo', transport:'🚌 Transport', contact:'📞 Contact', autre:'❓ Autre' };
 
   // Coût IA du mois
   const monthIa = (iaStats.monthly || {})[month] || {};
   let iaEurMonth = 0;
-  for (const [prov, d] of Object.entries(monthIa)) {
-    if (prov !== '_total') iaEurMonth += d.costEur || 0;
-  }
+  for (const [p, d] of Object.entries(monthIa)) { if (p !== '_total') iaEurMonth += d.costEur || 0; }
 
-  // Redis stats (via Upstash Management API)
+  // Redis
   let redisInfo = null;
   try { redisInfo = await getUpstashRedisStats(); } catch (_) {}
-  const redisCmdDay   = redisInfo?.daily_request_count   ?? '—';
-  const redisCmdMonth = redisInfo?.monthly_request_count ?? '—';
-  const redisDayLimit = 10000;
-  const redisPctDay   = typeof redisCmdDay   === 'number' ? Math.round(redisCmdDay   / redisDayLimit   * 100) : '—';
+  const redisCmdDay   = redisInfo?.daily_request_count   ?? null;
+  const redisCmdMonth = redisInfo?.monthly_request_count ?? null;
+  const redisPctDay   = redisCmdDay !== null ? Math.round(redisCmdDay / 10000 * 100) : null;
 
-  const dateLabel = new Date(today + 'T12:00:00Z').toLocaleDateString('fr-FR', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-  });
+  // Signalements / idées en attente
+  const pendingSignals = signals.filter(s => !s.status || s.status === 'pending' || s.status === 'new');
+  const pendingIdeas   = ideas.filter(i => !i.status || i.status === 'pending' || i.status === 'new');
+
+  // Installations PWA
+  const installTotal = services.installation || 0;
+  const installToday = parJour[today]?.installation || 0;
+
+  // Services actifs aujourd'hui (hors mel, installation, app_open traités séparément)
+  const SVC_LABELS = {
+    meteo:'🌦️ Météo', actus:'📰 Actualités', calendrier:'📅 Agenda',
+    signal:'🚨 Signalement', dechets:'🗑️ Déchets', transport:'🚌 Transport',
+    urbanisme:'🏗️ Urbanisme', contact:'📞 Contact mairie', service_public:'🏛️ Service public',
+    meteoalert:'⚠️ Alerte météo', sondage:'📊 Sondage', idee:'💡 Idée citoyenne'
+  };
+  const svcRows = Object.entries(parJour[today] || {})
+    .filter(([k, v]) => v > 0 && k !== 'mel' && k !== 'installation' && k !== 'app_open')
+    .sort(([,a],[,b]) => b - a)
+    .map(([k, v]) => `<tr><td style="padding:4px 8px">${SVC_LABELS[k] || k}</td><td style="padding:4px 8px;font-weight:700;text-align:right">${v}</td></tr>`)
+    .join('');
+
+  const dateLabel = new Date(today + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+  const stat = (val, lbl, cls='') =>
+    `<div class="stat${cls ? ' '+cls : ''}"><div class="stat-val">${val}</div><div class="stat-lbl">${lbl}</div></div>`;
+  const redisCls = redisPctDay !== null && redisPctDay >= 80 ? 'danger' : redisPctDay !== null && redisPctDay >= 60 ? 'warn' : '';
 
   const html = `<!DOCTYPE html>
 <html lang="fr">
@@ -4635,11 +4672,16 @@ async function sendDailyStatsEmail() {
   .sub{color:#5a7065;font-size:0.85rem;margin-bottom:20px}
   h2{color:#2d6a4f;font-size:1rem;margin:0 0 12px}
   .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
   .stat{background:#d8f3dc;border-radius:8px;padding:12px;text-align:center}
-  .stat-val{font-size:1.6rem;font-weight:900;color:#1a3d2b}
-  .stat-lbl{font-size:0.72rem;color:#2d6a4f;margin-top:2px}
+  .stat-val{font-size:1.5rem;font-weight:900;color:#1a3d2b}
+  .stat-lbl{font-size:0.70rem;color:#2d6a4f;margin-top:2px}
+  .trend{font-size:0.65rem;color:#5a7065}
   .warn{background:#fef3c7}.danger{background:#fee2e2}
+  table{width:100%;border-collapse:collapse;font-size:0.85rem}
+  tr:nth-child(even){background:#f4f0ea}
   .foot{color:#5a7065;font-size:0.75rem;text-align:center;margin-top:16px}
+  .q{background:#f4f0ea;border-radius:6px;padding:6px 10px;margin:4px 0;font-size:0.82rem;color:#2d2d2d}
 </style></head>
 <body>
 <h1>📊 MAT — Statistiques</h1>
@@ -4648,27 +4690,59 @@ async function sendDailyStatsEmail() {
 <div class="card">
   <h2>👤 Fréquentation</h2>
   <div class="grid">
-    <div class="stat"><div class="stat-val">${uToday}</div><div class="stat-lbl">Visiteurs uniques aujourd'hui</div></div>
-    <div class="stat"><div class="stat-val">${uMonth}</div><div class="stat-lbl">Visiteurs uniques ce mois</div></div>
-    <div class="stat"><div class="stat-val">${accessToday}</div><div class="stat-lbl">Accès appli aujourd'hui</div></div>
-    <div class="stat"><div class="stat-val">${subs.length}</div><div class="stat-lbl">Abonnés push</div></div>
+    ${stat(uToday, `Visiteurs uniques aujourd'hui${uYest > 0 ? '<br><span class="trend">'+trend(uToday,uYest)+' vs hier</span>' : ''}`)}
+    ${stat(uMonth, `Visiteurs uniques ce mois${uPrevM > 0 ? '<br><span class="trend">'+trend(uMonth,uPrevM)+' vs mois préc.</span>' : ''}`)}
+    ${stat(accessToday, `Accès app aujourd'hui${accessYest > 0 ? '<br><span class="trend">'+trend(accessToday,accessYest)+' vs hier</span>' : ''}`)}
+    ${stat(accessMonth, 'Accès app ce mois')}
+  </div>
+</div>
+
+${settings.melUsageStatsEnabled !== false ? `<div class="card">
+  <h2>💬 MEL — Chat IA</h2>
+  <div class="grid3">
+    ${stat(melToday, `Questions aujourd'hui${melYest > 0 ? '<br><span class="trend">'+trend(melToday,melYest)+' vs hier</span>' : ''}`)}
+    ${stat(melTotal, 'Total depuis le début')}
+    ${stat(iaEurMonth > 0 ? '€'+iaEurMonth.toFixed(2) : '—', 'Coût IA ce mois')}
+  </div>
+  ${Object.keys(iaCatsToday).length > 0 ? `<div style="margin-top:12px"><strong style="font-size:0.8rem;color:#2d6a4f">Catégories aujourd'hui :</strong><br><table style="margin-top:6px">${
+    Object.entries(iaCatsToday).sort(([,a],[,b])=>b-a).map(([k,v])=>`<tr><td style="padding:3px 8px">${IA_LABELS[k]||k}</td><td style="padding:3px 8px;font-weight:700;text-align:right">${v}</td></tr>`).join('')
+  }</table></div>` : ''}
+  ${melLogs.length > 0 ? `<div style="margin-top:12px"><strong style="font-size:0.8rem;color:#2d6a4f">Questions du jour (${melLogs.length}) :</strong><div style="margin-top:6px;max-height:200px;overflow:auto">${
+    melLogs.map(q => { try { const o = JSON.parse(q); return `<div class="q">${o.q || q}</div>`; } catch(e){ return `<div class="q">${q}</div>`; } }).join('')
+  }</div></div>` : ''}
+</div>` : ''}
+
+${svcRows ? `<div class="card">
+  <h2>🛠️ Services utilisés aujourd'hui</h2>
+  <table>${svcRows}</table>
+</div>` : ''}
+
+<div class="card">
+  <h2>🔔 Abonnements push</h2>
+  <div class="grid">
+    ${stat(subs.length, 'Abonnés notifications')}
+    ${decSubs.length > 0 ? stat(decSubs.length, 'Abonnés rappels déchets') : ''}
+    ${stat(installToday > 0 ? `${installToday} / ${installTotal}` : installTotal, installToday > 0 ? "Installations aujourd'hui / total" : 'Installations PWA (total)')}
   </div>
 </div>
 
 <div class="card">
   <h2>⚡ Redis Upstash</h2>
   <div class="grid">
-    <div class="stat ${typeof redisPctDay === 'number' && redisPctDay >= 80 ? 'danger' : typeof redisPctDay === 'number' && redisPctDay >= 60 ? 'warn' : ''}">
-      <div class="stat-val">${redisCmdDay}</div>
-      <div class="stat-lbl">Commandes aujourd'hui${typeof redisPctDay === 'number' ? ' (' + redisPctDay + '%)' : ''}</div>
-    </div>
-    <div class="stat"><div class="stat-val">${redisCmdMonth}</div><div class="stat-lbl">Commandes ce mois</div></div>
-    <div class="stat"><div class="stat-val">${decSubs.length}</div><div class="stat-lbl">Abonnés rappels déchets</div></div>
-    <div class="stat"><div class="stat-val">€${iaEurMonth.toFixed(2)}</div><div class="stat-lbl">Coût IA ce mois</div></div>
+    ${stat(redisCmdDay !== null ? redisCmdDay : '—', `Commandes aujourd'hui${redisPctDay !== null ? ' ('+redisPctDay+'% du quota)' : ''}`, redisCls)}
+    ${stat(redisCmdMonth !== null ? redisCmdMonth : '—', 'Commandes ce mois')}
   </div>
 </div>
 
-<div class="foot">MAT · Mézières-lez-Cléry · ${new Date().toLocaleDateString('fr-FR')}</div>
+${pendingSignals.length > 0 || pendingIdeas.length > 0 ? `<div class="card">
+  <h2>📋 En attente de traitement</h2>
+  <div class="grid">
+    ${pendingSignals.length > 0 ? stat(pendingSignals.length, '🚨 Signalements en attente', 'warn') : ''}
+    ${pendingIdeas.length   > 0 ? stat(pendingIdeas.length,   '💡 Idées en attente', 'warn')        : ''}
+  </div>
+</div>` : ''}
+
+<div class="foot">MAT · Mézières-lez-Cléry · ${new Date().toLocaleDateString('fr-FR', { timeZone:'Europe/Paris' })}</div>
 </body></html>`;
 
   await axios.post('https://api.resend.com/emails', {
