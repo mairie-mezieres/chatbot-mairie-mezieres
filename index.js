@@ -313,10 +313,12 @@ async function writeMelTreeConfig(data) {
 
 function getDefaultAdminSettings() {
   return {
-    detailedStatsEnabled: true,    // météo, contact, actualités, signalement, idées, app_resume...
-    melUsageStatsEnabled: true,    // usage MEL + catégories IA
-    appOpenStatsEnabled: true,     // nombre d'ouvertures d'application
-    melQuestionLogEnabled: false   // stockage anonyme des questions chat libre (RGPD: désactivé par défaut)
+    detailedStatsEnabled: true,
+    melUsageStatsEnabled: true,
+    appOpenStatsEnabled: true,
+    melQuestionLogEnabled: false,
+    melEnabled: true,
+    melDisabledMessage: ""
   };
 }
 
@@ -2034,8 +2036,8 @@ app.get("/admin/logs", adminAuth, async (req, res) => {
 
 app.delete("/admin/logs", adminAuth, async (req, res) => {
   try {
-    if (REDIS_URL) await axios.post(`${REDIS_URL}/del/${LOG_KEY}`,
-      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
+    if (REDIS_URL) await axios.post(`${REDIS_URL}/del/${LOG_KEY}`, null,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 4000 });
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -2250,7 +2252,9 @@ app.post("/admin/settings", adminAuth, async (req, res) => {
       detailedStatsEnabled:  req.body?.detailedStatsEnabled === true,
       melUsageStatsEnabled:  req.body?.melUsageStatsEnabled === true,
       appOpenStatsEnabled:   req.body?.appOpenStatsEnabled === true,
-      melQuestionLogEnabled: req.body?.melQuestionLogEnabled === true
+      melQuestionLogEnabled: req.body?.melQuestionLogEnabled === true,
+      melEnabled:            req.body?.melEnabled !== false,
+      melDisabledMessage:    String(req.body?.melDisabledMessage || '').substring(0, 300)
     };
     await writeAdminSettings(next);
     res.json({ ok: true, settings: next });
@@ -2521,6 +2525,86 @@ app.post("/admin/actus/add", adminAuth, async (req, res) => {
 
   res.json(result);
 });
+
+// ── Modifier une actu (titre, desc, date, lieu + re-publication optionnelle) ──
+app.patch("/admin/actus/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { title, description, eventDate, eventLocation, publishFacebook, sendPush, createCalendar } = req.body || {};
+  const actus = await readNews();
+  const idx = actus.findIndex(a => a.id === id);
+  if (idx < 0) return res.status(404).json({ error: "Actu non trouvée" });
+  const actu = { ...actus[idx] };
+  if (title       !== undefined) actu.title         = String(title).trim().substring(0, 150);
+  if (description !== undefined) actu.description   = String(description || "").trim().substring(0, 3000) || null;
+  if (eventDate   !== undefined) actu.eventDate      = eventDate || null;
+  if (eventLocation !== undefined) actu.eventLocation = eventLocation ? String(eventLocation).substring(0, 200) : null;
+  actus[idx] = actu;
+  await writeNews(actus);
+  const result = { ok: true, actu, facebook: null, push: null, calendar: null, warnings: [] };
+  if (publishFacebook) {
+    try { result.facebook = await publishActuToFacebook(actu.title, actu.description, null, actu.eventDate, actu.eventLocation); }
+    catch (e) { result.warnings.push("Facebook: " + e.message); result.facebook = { ok: false, error: e.message }; }
+  }
+  if (sendPush) {
+    try { result.push = await sendActuPush(actu.title, actu.description, actu.photo, actu.id); }
+    catch (e) { result.warnings.push("Push: " + e.message); result.push = { ok: false, error: e.message }; }
+  }
+  if (createCalendar && actu.eventDate) {
+    try { result.calendar = await upsertGoogleCalendarEvent(actu.title, actu.description, actu.eventDate, actu.eventLocation); }
+    catch (e) { result.warnings.push("Calendar: " + e.message); result.calendar = { ok: false, error: e.message }; }
+  }
+  res.json(result);
+});
+
+// ── Notifications push programmées ──────────────────────────
+app.post("/admin/push/schedule", adminAuth, async (req, res) => {
+  const { title, body, photoUrl, scheduledAt, actuId } = req.body || {};
+  if (!title || !scheduledAt) return res.status(400).json({ error: "title et scheduledAt requis" });
+  const scheduled = (await redisGet('mat:push:scheduled')) || [];
+  const notif = {
+    id: Date.now(),
+    actuId: actuId || null,
+    title: String(title).substring(0, 150),
+    body: String(body || "").substring(0, 300),
+    photoUrl: photoUrl || null,
+    scheduledAt: new Date(scheduledAt).toISOString(),
+    sent: false,
+    sentAt: null
+  };
+  scheduled.push(notif);
+  await redisSet('mat:push:scheduled', scheduled);
+  res.json({ ok: true, notif });
+});
+
+app.delete("/admin/push/schedule/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const scheduled = (await redisGet('mat:push:scheduled')) || [];
+  await redisSet('mat:push:scheduled', scheduled.filter(n => n.id !== id));
+  res.json({ ok: true });
+});
+
+// ── Cron : envoi des notifications push programmées (toutes les minutes) ──
+setInterval(async () => {
+  try {
+    const now = Date.now();
+    const scheduled = (await redisGet('mat:push:scheduled')) || [];
+    const due = scheduled.filter(n => !n.sent && new Date(n.scheduledAt).getTime() <= now);
+    if (!due.length) return;
+    for (const notif of due) {
+      try {
+        await sendActuPush(notif.title, notif.body, notif.photoUrl, notif.actuId);
+        notif.sent = true;
+        notif.sentAt = new Date().toISOString();
+        console.log(`🔔 Push programmé envoyé : "${notif.title}"`);
+      } catch (e) {
+        console.warn('Push programmé erreur:', e.message);
+      }
+    }
+    const cutoff = now - 7 * 24 * 60 * 60 * 1000;
+    const remaining = scheduled.filter(n => !n.sent || new Date(n.scheduledAt).getTime() > cutoff);
+    await redisSet('mat:push:scheduled', remaining);
+  } catch (e) { console.warn('Cron push schedulé:', e.message); }
+}, 60 * 1000);
 
 // ── Route : lister événements calendar d'un jour donné (doublon check) ──
 app.get("/admin/calendar/day", adminAuth, async (req, res) => {
@@ -3118,6 +3202,13 @@ app.post("/mel", melLimiter, async (req, res) => {
   const { messages, category, extraCtx } = req.body || {};
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error:"messages[] requis" });
+  }
+
+  const melSettings = await readAdminSettings();
+  if (melSettings.melEnabled === false) {
+    const msg = melSettings.melDisabledMessage ||
+      "Le chat MEL est temporairement indisponible. Contactez la mairie au 02 38 45 61 76 😊";
+    return res.status(503).json({ error: "disabled", reply: msg });
   }
 
   const deviceId = _melDeviceId(req);
