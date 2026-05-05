@@ -4849,13 +4849,14 @@ ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? `<div class="card">
   console.log(`📧 Email stats quotidien envoyé à ${DAILY_STATS_EMAIL}`);
 }
 
-// Envoi quotidien à 22h heure de Paris (vérification toutes les 5 min)
+// Envoi quotidien à partir de 22h heure de Paris (vérification toutes les 5 min)
+// Fenêtre large : toute heure >= 22h, dédup Redis évite le double-envoi même si le serveur se réveille tard
 let _dailyStatsSentToday = null;
 setInterval(async () => {
   try {
     if (!RESEND_API_KEY || !DAILY_STATS_EMAIL) return;
     const pNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
-    if (pNow.getHours() !== 22 || pNow.getMinutes() >= 10) return;
+    if (pNow.getHours() < 22) return;
     const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
     if (_dailyStatsSentToday === today) return;
     const lastSent = await redisGet('mat:daily:stats:sent');
@@ -4865,6 +4866,26 @@ setInterval(async () => {
     await redisSet('mat:daily:stats:sent', today);
   } catch(e) { console.warn('Daily stats email:', e.message); }
 }, 5 * 60 * 1000);
+
+// Endpoint admin pour déclencher le mail manuellement (ou via cron externe)
+app.get("/admin/stats-email", adminAuth, async (req, res) => {
+  try {
+    if (!RESEND_API_KEY || !DAILY_STATS_EMAIL)
+      return res.status(400).json({ error: 'RESEND_API_KEY ou DAILY_STATS_EMAIL non configuré' });
+    const force = req.query.force === '1';
+    if (!force) {
+      const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
+      const lastSent = await redisGet('mat:daily:stats:sent');
+      if (lastSent === today)
+        return res.json({ ok: true, skipped: true, reason: 'Déjà envoyé aujourd\'hui (ajoutez ?force=1 pour forcer)' });
+    }
+    await sendDailyStatsEmail();
+    const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
+    _dailyStatsSentToday = today;
+    await redisSet('mat:daily:stats:sent', today);
+    res.json({ ok: true, sent: true, to: DAILY_STATS_EMAIL });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
