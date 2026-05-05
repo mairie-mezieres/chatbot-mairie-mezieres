@@ -1684,7 +1684,7 @@ async function sendWeatherPush(vigilance) {
     body:  endTxt ? `${phenom} · Fin ${endTxt}` : phenom,
     icon:  './icon-192.png',
     badge: './icon-192.png',
-    data:  { url: './', open: 'meteo' }
+    data:  { url: './#meteo', open: 'meteo' }
   });
   const dead = [];
   let sent = 0;
@@ -4948,7 +4948,7 @@ async function _sendDechetsReminder() {
     body: isNoir ? '🗑️ Pensez à sortir votre bac noir ce soir !' : '♻️ Pensez à sortir votre bac jaune ce soir !',
     icon: './icon-192.png',
     badge: './icon-192.png',
-    data: { url: './', open: 'dechets' }
+    data: { url: './#dechets', open: 'dechets' }
   });
   const dead = [];
   for (const sub of subs) {
