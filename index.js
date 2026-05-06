@@ -89,6 +89,7 @@ const AUTO_POST_MIN_LEVEL       = Number(process.env.AUTO_POST_MIN_LEVEL || 3);
 const AUTO_PUSH_WEATHER_MIN_LEVEL = Number(process.env.AUTO_PUSH_WEATHER_MIN_LEVEL || 2);
 const RESEND_API_KEY            = process.env.RESEND_API_KEY || "";
 const DAILY_STATS_EMAIL         = process.env.DAILY_STATS_EMAIL || "Fabrice.auffret45@gmail.com";
+const CRON_SECRET               = process.env.CRON_SECRET || "";
 const FACEBOOK_PAGE_ID          = process.env.FACEBOOK_PAGE_ID;
 const OPEN_METEO_LAT            = Number(process.env.OPEN_METEO_LAT || 47.822);
 const OPEN_METEO_LON            = Number(process.env.OPEN_METEO_LON || 1.808);
@@ -4867,23 +4868,37 @@ setInterval(async () => {
   } catch(e) { console.warn('Daily stats email:', e.message); }
 }, 5 * 60 * 1000);
 
-// Endpoint admin pour déclencher le mail manuellement (ou via cron externe)
+// Helper partagé : envoyer les stats (avec dédup sauf si force=true)
+async function _triggerDailyStats(force) {
+  if (!RESEND_API_KEY)  throw new Error('RESEND_API_KEY non configuré sur Render');
+  if (!DAILY_STATS_EMAIL) throw new Error('DAILY_STATS_EMAIL non configuré');
+  const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
+  if (!force) {
+    const lastSent = await redisGet('mat:daily:stats:sent');
+    if (lastSent === today) return { skipped: true, reason: 'Déjà envoyé aujourd\'hui' };
+  }
+  await sendDailyStatsEmail();
+  _dailyStatsSentToday = today;
+  await redisSet('mat:daily:stats:sent', today);
+  return { sent: true, to: DAILY_STATS_EMAIL };
+}
+
+// Endpoint admin (panel admin)
 app.get("/admin/stats-email", adminAuth, async (req, res) => {
   try {
-    if (!RESEND_API_KEY || !DAILY_STATS_EMAIL)
-      return res.status(400).json({ error: 'RESEND_API_KEY ou DAILY_STATS_EMAIL non configuré' });
-    const force = req.query.force === '1';
-    if (!force) {
-      const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
-      const lastSent = await redisGet('mat:daily:stats:sent');
-      if (lastSent === today)
-        return res.json({ ok: true, skipped: true, reason: 'Déjà envoyé aujourd\'hui (ajoutez ?force=1 pour forcer)' });
-    }
-    await sendDailyStatsEmail();
-    const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
-    _dailyStatsSentToday = today;
-    await redisSet('mat:daily:stats:sent', today);
-    res.json({ ok: true, sent: true, to: DAILY_STATS_EMAIL });
+    const result = await _triggerDailyStats(req.query.force === '1');
+    res.json({ ok: true, ...result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Endpoint cron — accessible avec ?key=CRON_SECRET (pour cron-job.org)
+// Configurer CRON_SECRET dans les variables d'env Render
+app.get("/cron/stats", async (req, res) => {
+  if (!CRON_SECRET || req.query.key !== CRON_SECRET)
+    return res.status(401).json({ error: 'Clé cron invalide' });
+  try {
+    const result = await _triggerDailyStats(req.query.force === '1');
+    res.json({ ok: true, ...result });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
