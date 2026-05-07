@@ -4838,7 +4838,7 @@ ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? `<div class="card">
 </body></html>`;
 
   await axios.post('https://api.resend.com/emails', {
-    from: 'MAT Stats <stats@mezieres-lez-clery.fr>',
+    from: process.env.RESEND_FROM || 'MAT Stats <onboarding@resend.dev>',
     to:   [DAILY_STATS_EMAIL],
     subject: `📊 MAT — Stats du ${today}`,
     html
