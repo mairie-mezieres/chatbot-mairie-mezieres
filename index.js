@@ -4837,15 +4837,21 @@ ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? `<div class="card">
 <div class="foot">MAT · Mézières-lez-Cléry · ${new Date().toLocaleDateString('fr-FR', { timeZone:'Europe/Paris' })}</div>
 </body></html>`;
 
-  await axios.post('https://api.resend.com/emails', {
-    from: process.env.RESEND_FROM || 'MAT Stats <onboarding@resend.dev>',
-    to:   [DAILY_STATS_EMAIL],
-    subject: `📊 MAT — Stats du ${today}`,
-    html
-  }, {
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    timeout: 15000
-  });
+  try {
+    await axios.post('https://api.resend.com/emails', {
+      from: process.env.RESEND_FROM || 'MAT Stats <onboarding@resend.dev>',
+      to:   [DAILY_STATS_EMAIL],
+      subject: `📊 MAT — Stats du ${today}`,
+      html
+    }, {
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      timeout: 15000
+    });
+  } catch(e) {
+    const resendMsg = e.response?.data?.message || e.response?.data?.name || JSON.stringify(e.response?.data);
+    const status = e.response?.status;
+    throw new Error(`Resend ${status}: ${resendMsg || e.message}`);
+  }
 
   console.log(`📧 Email stats quotidien envoyé à ${DAILY_STATS_EMAIL}`);
 }
