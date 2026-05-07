@@ -115,6 +115,30 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 }
 
 // ─── Stockage persistant Upstash Redis ───────────────────────
+
+// Suivi du quota journalier Upstash (10 000 req/jour)
+// Quand 429 reçu, on bascule en mode dégradé jusqu'à minuit UTC
+let _redis429Active = false;
+let _redis429ClearAt = 0;
+
+function _isRedis429() {
+  if (_redis429Active && Date.now() >= _redis429ClearAt) {
+    _redis429Active = false;
+    console.log('✅ Redis quota 429 expiré — reprise du mode normal');
+  }
+  return _redis429Active;
+}
+
+function _setRedis429() {
+  if (!_redis429Active) {
+    const now = new Date();
+    const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+    _redis429ClearAt = midnight.getTime();
+    _redis429Active = true;
+    console.warn('🔴 Redis quota journalier dépassé (429) — mode dégradé jusqu\'à minuit UTC');
+  }
+}
+
 async function redisGet(key) {
   if (!REDIS_URL) return null;
   try {
@@ -126,7 +150,7 @@ async function redisGet(key) {
     if (val === null || val === undefined) return null;
     return JSON.parse(val);
   } catch(e) {
-    if (e.response?.status === 429) _handleRedis429();
+    if (e.response?.status === 429) _setRedis429();
     console.warn(`Redis GET ${key}:`, e.message);
     return null;
   }
@@ -142,7 +166,7 @@ async function redisSet(key, value) {
       { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
     );
   } catch(e) {
-    if (e.response?.status === 429) _handleRedis429();
+    if (e.response?.status === 429) _setRedis429();
     console.warn(`Redis SET ${key}:`, e.message);
   }
 }
@@ -157,6 +181,7 @@ async function redisSetex(key, ttlSeconds, value) {
       { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
     );
   } catch(e) {
+    if (e.response?.status === 429) _setRedis429();
     console.warn(`Redis SETEX ${key}:`, e.message);
   }
 }
@@ -170,6 +195,7 @@ async function redisDel(key) {
     );
     return (r.data?.result || 0) > 0;
   } catch(e) {
+    if (e.response?.status === 429) _setRedis429();
     console.warn(`Redis DEL ${key}:`, e.message);
     return false;
   }
@@ -184,30 +210,8 @@ async function redisPipeline(commands) {
       { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
     );
   } catch(e) {
+    if (e.response?.status === 429) _setRedis429();
     console.warn("Redis pipeline:", e.message);
-  }
-}
-
-let _redis429Count = 0;
-let _redis429LastLog = 0;
-
-function _handleRedis429() {
-  _redis429Count++;
-  const now = Date.now();
-  if (now - _redis429LastLog > 10 * 60 * 1000) {
-    _redis429LastLog = now;
-    console.error(`🔴 Redis quota dépassé : ${_redis429Count} erreur(s) 429`);
-    const record = JSON.stringify({
-      ts: new Date().toISOString(),
-      module: 'Redis',
-      msg: `Quota Upstash dépassé — ${_redis429Count} commande(s) rejetée(s) (HTTP 429). Application en mode dégradé.`,
-      extra: 'HTTP 429'
-    });
-    if (REDIS_URL) {
-      axios.post(`${REDIS_URL}/lpush/${LOG_KEY}`, record,
-        { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' }, timeout: 4000 })
-        .catch(() => {});
-    }
   }
 }
 
@@ -220,6 +224,7 @@ async function redisLRange(key, start, stop) {
     );
     return (r.data?.result || []).map(item => { try { return JSON.parse(item); } catch { return null; } }).filter(Boolean);
   } catch(e) {
+    if (e.response?.status === 429) _setRedis429();
     console.warn(`Redis LRANGE ${key}:`, e.message);
     return [];
   }
@@ -3925,6 +3930,12 @@ app.get("/setup-webhook", async (req, res) => {
 
 app.get("/ping", (req, res) => {
   res.type("text/plain").send("ok");
+});
+
+app.get("/health", (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  const degraded = _isRedis429();
+  res.json({ ok: true, redis: !degraded, mode: degraded ? 'degraded' : 'normal' });
 });
 
 // ── Diagnostic Mistral (à supprimer après test) ───────────────
