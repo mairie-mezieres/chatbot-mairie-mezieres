@@ -4932,6 +4932,13 @@ app.get("/admin/email-config", adminAuth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get("/admin/upstash-raw", adminAuth, async (req, res) => {
+  try {
+    const raw = await getUpstashRedisStats();
+    res.json({ ok: true, raw });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Endpoint cron — accessible avec ?key=CRON_SECRET (pour cron-job.org)
 // Configurer CRON_SECRET dans les variables d'env Render
 app.get("/cron/stats", async (req, res) => {
