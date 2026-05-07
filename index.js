@@ -4725,8 +4725,9 @@ async function sendDailyStatsEmail() {
   // Redis
   let redisInfo = null;
   try { redisInfo = await getUpstashRedisStats(); } catch (_) {}
-  const redisCmdDay   = redisInfo?.daily_net_commands     ?? redisInfo?.daily_request_count   ?? null;
-  const redisCmdMonth = redisInfo?.total_monthly_requests ?? redisInfo?.monthly_request_count ?? null;
+  if (redisInfo) console.log('[email] Upstash stats keys:', Object.keys(redisInfo).join(', '), '| values sample:', JSON.stringify(Object.fromEntries(Object.entries(redisInfo).filter(([,v])=>typeof v==='number').slice(0,8))));
+  const redisCmdDay   = redisInfo?.dailyrequests          ?? redisInfo?.daily_net_commands     ?? redisInfo?.daily_request_count   ?? redisInfo?.total_daily_requests   ?? null;
+  const redisCmdMonth = redisInfo?.monthlyrequests        ?? redisInfo?.total_monthly_requests ?? redisInfo?.monthly_request_count ?? redisInfo?.total_monthly_requests  ?? null;
   const redisPctDay   = redisCmdDay !== null ? Math.round(redisCmdDay / 10000 * 100) : null;
 
   // Questions MEL du jour
