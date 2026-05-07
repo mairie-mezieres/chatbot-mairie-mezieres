@@ -88,7 +88,7 @@ const AUTO_POST_WEATHER_ALERTS  = process.env.AUTO_POST_WEATHER_ALERTS === "true
 const AUTO_POST_MIN_LEVEL       = Number(process.env.AUTO_POST_MIN_LEVEL || 3);
 const AUTO_PUSH_WEATHER_MIN_LEVEL = Number(process.env.AUTO_PUSH_WEATHER_MIN_LEVEL || 2);
 const RESEND_API_KEY            = process.env.RESEND_API_KEY || "";
-const DAILY_STATS_EMAIL         = process.env.DAILY_STATS_EMAIL || "Fabrice.auffret45@gmail.com";
+const DAILY_STATS_EMAIL         = process.env.DAILY_STATS_EMAIL || "fabrice.auffret45@gmail.com";
 const CRON_SECRET               = process.env.CRON_SECRET || "";
 const FACEBOOK_PAGE_ID          = process.env.FACEBOOK_PAGE_ID;
 const OPEN_METEO_LAT            = Number(process.env.OPEN_METEO_LAT || 47.822);
@@ -4736,9 +4736,14 @@ async function sendDailyStatsEmail() {
   // Redis
   let redisInfo = null;
   try { redisInfo = await getUpstashRedisStats(); } catch (_) {}
-  const redisCmdDay   = redisInfo?.daily_request_count   ?? null;
-  const redisCmdMonth = redisInfo?.monthly_request_count ?? null;
+  if (redisInfo) console.log('[email] Upstash stats keys:', Object.keys(redisInfo).join(', '), '| values sample:', JSON.stringify(Object.fromEntries(Object.entries(redisInfo).filter(([,v])=>typeof v==='number').slice(0,8))));
+  const redisCmdDay   = redisInfo?.dailyrequests          ?? redisInfo?.daily_net_commands     ?? redisInfo?.daily_request_count   ?? redisInfo?.total_daily_requests   ?? null;
+  const redisCmdMonth = redisInfo?.monthlyrequests        ?? redisInfo?.total_monthly_requests ?? redisInfo?.monthly_request_count ?? redisInfo?.total_monthly_requests  ?? null;
   const redisPctDay   = redisCmdDay !== null ? Math.round(redisCmdDay / 10000 * 100) : null;
+
+  // Questions MEL du jour
+  const melQRaw = await redisLRange(`mat:mel:questions:${today}`, 0, -1).catch(() => []);
+  const melQuestions = melQRaw.map(s => { try { return JSON.parse(s); } catch { return { q: s, cat: '' }; } });
 
   // Signalements / idées en attente
   const pendingSignals = signals.filter(s => !s.status || s.status === 'pending' || s.status === 'new');
@@ -4837,6 +4842,25 @@ ${svcRows ? `<div class="card">
   </div>
 </div>
 
+<div class="card">
+  <h2>🤖 Questions posées à MEL</h2>
+  ${melQuestions.length === 0
+    ? '<p style="color:#6b7280;font-style:italic;margin:0">Pas de question posée aujourd\'hui.</p>'
+    : `<table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+        <thead><tr style="background:#f3f4f6">
+          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb">Question</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb;white-space:nowrap">Catégorie</th>
+        </tr></thead>
+        <tbody>${melQuestions.map((q,i) => `
+          <tr style="background:${i%2===0?'#fff':'#f9fafb'}">
+            <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6">${String(q.q||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;white-space:nowrap;color:#6b7280">${String(q.cat||'').replace(/</g,'&lt;')}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`
+  }
+</div>
+
 ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? `<div class="card">
   <h2>📋 En attente de traitement</h2>
   <div class="grid">
@@ -4848,15 +4872,21 @@ ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? `<div class="card">
 <div class="foot">MAT · Mézières-lez-Cléry · ${new Date().toLocaleDateString('fr-FR', { timeZone:'Europe/Paris' })}</div>
 </body></html>`;
 
-  await axios.post('https://api.resend.com/emails', {
-    from: 'MAT Stats <stats@mezieres-lez-clery.fr>',
-    to:   [DAILY_STATS_EMAIL],
-    subject: `📊 MAT — Stats du ${today}`,
-    html
-  }, {
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    timeout: 15000
-  });
+  try {
+    await axios.post('https://api.resend.com/emails', {
+      from: process.env.RESEND_FROM || 'MAT Stats <onboarding@resend.dev>',
+      to:   [DAILY_STATS_EMAIL],
+      subject: `📊 MAT — Stats du ${today}`,
+      html
+    }, {
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      timeout: 15000
+    });
+  } catch(e) {
+    const resendMsg = e.response?.data?.message || e.response?.data?.name || JSON.stringify(e.response?.data);
+    const status = e.response?.status;
+    throw new Error(`Resend ${status}: ${resendMsg || e.message}`);
+  }
 
   console.log(`📧 Email stats quotidien envoyé à ${DAILY_STATS_EMAIL}`);
 }
@@ -4911,6 +4941,13 @@ app.get("/admin/email-config", adminAuth, async (req, res) => {
       email: DAILY_STATS_EMAIL || null,
       lastSent: lastSent || null
     });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/admin/upstash-raw", adminAuth, async (req, res) => {
+  try {
+    const raw = await getUpstashRedisStats();
+    res.json({ ok: true, raw });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
