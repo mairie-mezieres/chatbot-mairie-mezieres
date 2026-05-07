@@ -4891,6 +4891,18 @@ app.get("/admin/stats-email", adminAuth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get("/admin/email-config", adminAuth, async (req, res) => {
+  try {
+    const lastSent = await redisGet('mat:daily:stats:sent');
+    res.json({
+      resendConfigured: !!RESEND_API_KEY,
+      emailConfigured: !!DAILY_STATS_EMAIL,
+      email: DAILY_STATS_EMAIL || null,
+      lastSent: lastSent || null
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Endpoint cron — accessible avec ?key=CRON_SECRET (pour cron-job.org)
 // Configurer CRON_SECRET dans les variables d'env Render
 app.get("/cron/stats", async (req, res) => {
