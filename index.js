@@ -4725,9 +4725,13 @@ async function sendDailyStatsEmail() {
   // Redis
   let redisInfo = null;
   try { redisInfo = await getUpstashRedisStats(); } catch (_) {}
-  const redisCmdDay   = redisInfo?.daily_request_count   ?? null;
-  const redisCmdMonth = redisInfo?.monthly_request_count ?? null;
+  const redisCmdDay   = redisInfo?.daily_net_commands     ?? redisInfo?.daily_request_count   ?? null;
+  const redisCmdMonth = redisInfo?.total_monthly_requests ?? redisInfo?.monthly_request_count ?? null;
   const redisPctDay   = redisCmdDay !== null ? Math.round(redisCmdDay / 10000 * 100) : null;
+
+  // Questions MEL du jour
+  const melQRaw = await redisLRange(`mat:mel:questions:${today}`, 0, -1).catch(() => []);
+  const melQuestions = melQRaw.map(s => { try { return JSON.parse(s); } catch { return { q: s, cat: '' }; } });
 
   // Signalements / idées en attente
   const pendingSignals = signals.filter(s => !s.status || s.status === 'pending' || s.status === 'new');
@@ -4824,6 +4828,25 @@ ${svcRows ? `<div class="card">
     ${stat(redisCmdDay !== null ? redisCmdDay : '—', `Commandes aujourd'hui${redisPctDay !== null ? ' ('+redisPctDay+'% du quota)' : ''}`, redisCls)}
     ${stat(redisCmdMonth !== null ? redisCmdMonth : '—', 'Commandes ce mois')}
   </div>
+</div>
+
+<div class="card">
+  <h2>🤖 Questions posées à MEL</h2>
+  ${melQuestions.length === 0
+    ? '<p style="color:#6b7280;font-style:italic;margin:0">Pas de question posée aujourd\'hui.</p>'
+    : `<table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+        <thead><tr style="background:#f3f4f6">
+          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb">Question</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb;white-space:nowrap">Catégorie</th>
+        </tr></thead>
+        <tbody>${melQuestions.map((q,i) => `
+          <tr style="background:${i%2===0?'#fff':'#f9fafb'}">
+            <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6">${String(q.q||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;white-space:nowrap;color:#6b7280">${String(q.cat||'').replace(/</g,'&lt;')}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`
+  }
 </div>
 
 ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? `<div class="card">
