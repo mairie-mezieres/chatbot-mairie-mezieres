@@ -88,7 +88,7 @@ const AUTO_POST_WEATHER_ALERTS  = process.env.AUTO_POST_WEATHER_ALERTS === "true
 const AUTO_POST_MIN_LEVEL       = Number(process.env.AUTO_POST_MIN_LEVEL || 3);
 const AUTO_PUSH_WEATHER_MIN_LEVEL = Number(process.env.AUTO_PUSH_WEATHER_MIN_LEVEL || 2);
 const RESEND_API_KEY            = process.env.RESEND_API_KEY || "";
-const DAILY_STATS_EMAIL         = process.env.DAILY_STATS_EMAIL || "Fabrice.auffret45000@gmail.com";
+const DAILY_STATS_EMAIL         = process.env.DAILY_STATS_EMAIL || "fabrice.auffret45@gmail.com";
 const CRON_SECRET               = process.env.CRON_SECRET || "";
 const FACEBOOK_PAGE_ID          = process.env.FACEBOOK_PAGE_ID;
 const OPEN_METEO_LAT            = Number(process.env.OPEN_METEO_LAT || 47.822);
