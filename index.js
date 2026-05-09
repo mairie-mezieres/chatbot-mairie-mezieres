@@ -1643,7 +1643,7 @@ async function trackMelStats(userText) {
 // Stockage atomique via pipeline RPUSH + EXPIRE + LTRIM (pas de race condition).
 const MEL_ALLOWED_CATS = new Set(['urbanisme','enfance','administratif','dechets','numerique','autre']);
 
-async function trackMelQuestion(questionText, category) {
+async function trackMelQuestion(questionText, category, replyText) {
   const settings = await readAdminSettings();
   if (!settings.melQuestionLogEnabled) return;
   if (!questionText || !questionText.trim()) return;
@@ -1652,7 +1652,7 @@ async function trackMelQuestion(questionText, category) {
   const today = new Date().toISOString().slice(0, 10);
   const key = `mat:mel:questions:${today}`;
   const TTL_SECONDS = 90 * 24 * 60 * 60;
-  const entry = JSON.stringify({ q: String(questionText).trim().slice(0, 500), cat: safeCat });
+  const entry = JSON.stringify({ q: String(questionText).trim().slice(0, 500), a: String(replyText || '').trim().slice(0, 2000), cat: safeCat });
 
   await redisPipeline([
     ["RPUSH", key, entry],
@@ -2217,7 +2217,7 @@ app.get("/admin/dashboard", adminAuth, async (req, res) => {
             accessTrendDay: pctTrend(dayAccess, prevDayAccess),
             accessTrendMonth: pctTrend(monthAccess, prevMonthAccess)
           },
-          uniqueUsers: { total: appStats.uniqueUsers?.total || 0, today: uniqueToday, month: uniqueMonth },
+          uniqueUsers: { total: appStats.uniqueUsers?.total || 0, today: uniqueToday, month: uniqueMonth, byDay: Object.fromEntries(Object.entries(appStats.uniqueUsers?.byDay || {}).map(([d, ids]) => [d, Array.isArray(ids) ? ids.length : 0])) },
           devices: {
             today: appStats.deviceStats?.byDay?.[today] || {},
             month: appStats.deviceStats?.byMonth?.[month] || {},
@@ -3244,8 +3244,8 @@ app.post("/mel", melLimiter, async (req, res) => {
 
     await _recordMelUse(deviceId);
     await trackMelStats(lastUser);
-    await trackMelQuestion(lastUser, category);
     const result = await generateMelReply(lastUser, history, category || "autre", extraCtx || "");
+    await trackMelQuestion(lastUser, category, result.reply);
     console.log(`📱 PWA MEL [${category||"autre"}] via ${result.provider}`);
     const showElus = (result.reply || "").includes("[SHOW_ELUS]");
     const showUrbanisme = (result.reply || "").includes("[SHOW_URBANISME]");
