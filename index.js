@@ -989,61 +989,71 @@ function extractDepartmentVigilance(raw, deptCode = "45") {
 
   const periods = raw.product.periods;
   const now = Date.now();
+  const UPCOMING_WINDOW_MS = 36 * 3600 * 1000; // inclure les alertes futures ≤ 36h
 
-  let bestPeriod = periods.find(p => {
+  // Collecter toutes les périodes actives OU à venir dans les 36h
+  const candidates = periods.filter(p => {
     const begin = new Date(p.begin_validity_time).getTime();
-    const end = new Date(p.end_validity_time).getTime();
-    return !Number.isNaN(begin) && !Number.isNaN(end) && now >= begin && now <= end;
+    const end   = new Date(p.end_validity_time).getTime();
+    if (Number.isNaN(begin) || Number.isNaN(end)) return false;
+    return (now >= begin && now <= end) || (begin > now && begin <= now + UPCOMING_WINDOW_MS);
   });
+  if (!candidates.length) candidates.push(periods[0]); // repli : première période disponible
+  if (!candidates[0]) return null;
 
-  if (!bestPeriod) bestPeriod = periods[0];
-  if (!bestPeriod) return null;
-
-  const deptDomain = (bestPeriod.timelaps?.domain_ids || []).find(d => String(d.domain_id) === String(deptCode));
-  if (!deptDomain) return null;
-
-  const items = Array.isArray(deptDomain.phenomenon_items) ? deptDomain.phenomenon_items : [];
-  if (!items.length) return null;
-
-  const sorted = [...items].sort((a, b) => (Number(b.color_id || b.phenomenon_max_color_id || 0)) - (Number(a.color_id || a.phenomenon_max_color_id || 0)));
-  const main = sorted[0];
-  if (!main) return null;
-
-  const color = Number(main.phenomenon_max_color_id || main.color_id || 1);
-  const phenomenonId = Number(main.phenomenon_id || 0);
-
-  let start = null;
-  let end = null;
-
-  if (Array.isArray(main.timelaps_items) && main.timelaps_items.length) {
-    const active = main.timelaps_items
-      .filter(t => Number(t.color_id || 1) >= color)
-      .sort((a, b) => new Date(a.begin_time) - new Date(b.begin_time));
-
-    if (active.length) {
-      start = active[0].begin_time || null;
-      end = active[active.length - 1].end_time || null;
-    }
-  }
-
+  // Extraire le résultat de chaque période candidate pour le département cible
   const textBlocks = Array.isArray(raw.product.text_bloc_items) ? raw.product.text_bloc_items : [];
   const matchingTexts = textBlocks
     .filter(t => String(t.domain_id) === String(deptCode))
     .map(t => t.text)
     .filter(Boolean);
 
-  return {
-    department_code: String(deptCode),
-    level: color,
-    color_label: VIGILANCE_COLORS[color] || "vert",
-    phenomenon_id: phenomenonId,
-    phenomenon_label: VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo",
-    start,
-    end,
-    title: `${VIGILANCE_COLORS[color] || "vert"} — ${VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo"}`,
-    main_text: matchingTexts[0] || "",
-    raw_period_name: bestPeriod.echeance || null,
-  };
+  let best = null;
+
+  for (const period of candidates) {
+    const isUpcoming = new Date(period.begin_validity_time).getTime() > now;
+    const deptDomain = (period.timelaps?.domain_ids || []).find(d => String(d.domain_id) === String(deptCode));
+    if (!deptDomain) continue;
+    const items = Array.isArray(deptDomain.phenomenon_items) ? deptDomain.phenomenon_items : [];
+    if (!items.length) continue;
+
+    const sorted = [...items].sort((a, b) => (Number(b.color_id || b.phenomenon_max_color_id || 0)) - (Number(a.color_id || a.phenomenon_max_color_id || 0)));
+    const main = sorted[0];
+    if (!main) continue;
+
+    const color = Number(main.phenomenon_max_color_id || main.color_id || 1);
+    if (best && color <= best.level) continue; // on garde le niveau le plus élevé
+
+    const phenomenonId = Number(main.phenomenon_id || 0);
+    let start = null;
+    let end = null;
+
+    if (Array.isArray(main.timelaps_items) && main.timelaps_items.length) {
+      const active = main.timelaps_items
+        .filter(t => Number(t.color_id || 1) >= color)
+        .sort((a, b) => new Date(a.begin_time) - new Date(b.begin_time));
+      if (active.length) {
+        start = active[0].begin_time || null;
+        end   = active[active.length - 1].end_time || null;
+      }
+    }
+
+    best = {
+      department_code: String(deptCode),
+      level: color,
+      color_label: VIGILANCE_COLORS[color] || "vert",
+      phenomenon_id: phenomenonId,
+      phenomenon_label: VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo",
+      start,
+      end,
+      upcoming: isUpcoming,
+      title: `${VIGILANCE_COLORS[color] || "vert"} — ${VIGILANCE_PHENOMENA[phenomenonId] || "phénomène météo"}`,
+      main_text: matchingTexts[0] || "",
+      raw_period_name: period.echeance || null,
+    };
+  }
+
+  return best;
 }
 
 function formatAlertDateFr(iso) {
@@ -1643,7 +1653,7 @@ async function trackMelStats(userText) {
 // Stockage atomique via pipeline RPUSH + EXPIRE + LTRIM (pas de race condition).
 const MEL_ALLOWED_CATS = new Set(['urbanisme','enfance','administratif','dechets','numerique','autre']);
 
-async function trackMelQuestion(questionText, category) {
+async function trackMelQuestion(questionText, category, replyText) {
   const settings = await readAdminSettings();
   if (!settings.melQuestionLogEnabled) return;
   if (!questionText || !questionText.trim()) return;
@@ -1652,7 +1662,7 @@ async function trackMelQuestion(questionText, category) {
   const today = new Date().toISOString().slice(0, 10);
   const key = `mat:mel:questions:${today}`;
   const TTL_SECONDS = 90 * 24 * 60 * 60;
-  const entry = JSON.stringify({ q: String(questionText).trim().slice(0, 500), cat: safeCat });
+  const entry = JSON.stringify({ q: String(questionText).trim().slice(0, 500), a: String(replyText || '').trim().slice(0, 2000), cat: safeCat });
 
   await redisPipeline([
     ["RPUSH", key, entry],
@@ -2217,7 +2227,7 @@ app.get("/admin/dashboard", adminAuth, async (req, res) => {
             accessTrendDay: pctTrend(dayAccess, prevDayAccess),
             accessTrendMonth: pctTrend(monthAccess, prevMonthAccess)
           },
-          uniqueUsers: { total: appStats.uniqueUsers?.total || 0, today: uniqueToday, month: uniqueMonth },
+          uniqueUsers: { total: appStats.uniqueUsers?.total || 0, today: uniqueToday, month: uniqueMonth, byDay: Object.fromEntries(Object.entries(appStats.uniqueUsers?.byDay || {}).map(([d, ids]) => [d, Array.isArray(ids) ? ids.length : 0])) },
           devices: {
             today: appStats.deviceStats?.byDay?.[today] || {},
             month: appStats.deviceStats?.byMonth?.[month] || {},
@@ -3244,8 +3254,8 @@ app.post("/mel", melLimiter, async (req, res) => {
 
     await _recordMelUse(deviceId);
     await trackMelStats(lastUser);
-    await trackMelQuestion(lastUser, category);
     const result = await generateMelReply(lastUser, history, category || "autre", extraCtx || "");
+    await trackMelQuestion(lastUser, category, result.reply);
     console.log(`📱 PWA MEL [${category||"autre"}] via ${result.provider}`);
     const showElus = (result.reply || "").includes("[SHOW_ELUS]");
     const showUrbanisme = (result.reply || "").includes("[SHOW_URBANISME]");
