@@ -3687,6 +3687,34 @@ app.post("/push/unsubscribe", async (req, res) => {
   res.json({ success: true });
 });
 
+app.post("/push/test", async (req, res) => {
+  const { endpoint } = req.body || {};
+  if (!endpoint) return res.status(400).json({ error: "Endpoint requis" });
+
+  const subs = await readSubs();
+  const sub  = subs.find(s => s.endpoint === endpoint);
+  if (!sub) return res.status(404).json({ error: "Abonnement non trouvé sur le serveur — réactivez les notifications" });
+
+  const payload = JSON.stringify({
+    title: '🔔 Test notification MAT',
+    body:  'Votre appareil reçoit bien les notifications !',
+    icon:  './icon-192.png',
+    badge: './icon-192.png',
+    data:  { url: './', open: 'notifs' }
+  });
+  try {
+    await webpush.sendNotification(sub, payload);
+    console.log(`🧪 Push test → ${endpoint.slice(-20)}`);
+    res.json({ ok: true });
+  } catch(e) {
+    if (e.statusCode === 410 || e.statusCode === 404) {
+      await writeSubs(subs.filter(s => s.endpoint !== endpoint));
+      return res.status(410).json({ error: "Abonnement expiré — réactivez les notifications" });
+    }
+    res.status(500).json({ error: "Échec d'envoi: " + (e.message || 'inconnue') });
+  }
+});
+
 // ── Rappels déchets ───────────────────────────────────────────
 async function readDechetsSubs() { return (await redisGet('mat:subs:dechets')) || []; }
 async function writeDechetsSubs(d) { await redisSet('mat:subs:dechets', d); }
