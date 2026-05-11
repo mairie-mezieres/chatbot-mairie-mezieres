@@ -9,7 +9,13 @@ const rateLimit = require("express-rate-limit");
 axios.defaults.timeout = 8000;
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+app.use(express.json({ limit: "10mb", verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.set('trust proxy', true); // Render est derrière un reverse proxy
 
 // ─── Variables d'environnement ────────────────────────────────
@@ -1533,8 +1539,9 @@ function buildCategoryPrompt(category, extraCtx) {
     autre: `Tu réponds librement dans le cadre de la vie communale de Mézières-lez-Cléry. Si la question sort du cadre municipal ou des services publics, explique poliment que tu es spécialisée sur la commune.`,
   };
   const block = blocks[category] || blocks["autre"];
-  const ctxLine = extraCtx ? `\
-CONTEXTE UTILISATEUR : ${extraCtx}` : "";
+  const safeExtraCtx = extraCtx ? String(extraCtx).slice(0, 200).replace(/[<>]/g, '') : '';
+  const ctxLine = safeExtraCtx ? `
+CONTEXTE UTILISATEUR : ${safeExtraCtx}` : "";
   return block + ctxLine;
 }
 
@@ -1956,7 +1963,7 @@ function adminAuth(req, res, next) {
   if (!ADMIN_PASSWORD) {
     return res.status(401).json({ error: "Admin désactivé (ADMIN_PASSWORD manquant)" });
   }
-  const token = req.headers["x-admin-token"] || req.query.token;
+  const token = req.headers["x-admin-token"];
   if (!token || token !== ADMIN_PASSWORD) {
     return res.status(401).json({ error: "Non autorisé" });
   }
@@ -2801,6 +2808,14 @@ app.get("/webhook", (req, res) => {
 });
 
 app.post("/webhook", async (req, res) => {
+  // Vérification HMAC-SHA256 Facebook
+  const appSecret = process.env.FACEBOOK_APP_SECRET;
+  if (!appSecret) return res.sendStatus(503); // fail closed si secret manquant
+  const sig = req.headers['x-hub-signature-256'];
+  if (!sig) return res.sendStatus(403);
+  const crypto = require('crypto');
+  const expected = 'sha256=' + crypto.createHmac('sha256', appSecret).update(req.rawBody || Buffer.from('')).digest('hex');
+  if (sig !== expected) return res.sendStatus(403);
   res.status(200).send("EVENT_RECEIVED");
   const body = req.body;
 
@@ -3239,14 +3254,16 @@ app.post("/mel", melLimiter, async (req, res) => {
   }
 
   try {
+    const MAX_MSG_LENGTH = 2000;
     const history = messages.slice(-8).map(m => ({
       role: m.role,
-      content: typeof m.content === "string" ? m.content : String(m.content || "")
+      content: typeof m.content === "string" ? m.content.slice(0, MAX_MSG_LENGTH) : String(m.content || "").slice(0, MAX_MSG_LENGTH)
     }));
     const lastUser = history.filter(m => m.role === "user").slice(-1)[0]?.content || "";
 
-    // Détection prompt injection
-    if (_detectInjection(lastUser)) {
+    // Détection prompt injection (sur tout l'historique)
+    const allUserContent = history.filter(m => m.role === "user").map(m => m.content).join(' ');
+    if (_detectInjection(allUserContent)) {
       await _blockMelDevice(deviceId, "injection");
       console.warn(`🚨 Injection MEL [${deviceId}]: "${lastUser.substring(0, 120)}"`);
       return res.status(403).json({ error:"blocked", reply:"Votre accès au chat a été suspendu. Contactez la mairie si nécessaire : 02 38 45 61 76 😊" });
@@ -3355,7 +3372,7 @@ app.get("/api/chemins", async (req, res) => {
 });
 
 // ── Génération de parcours IA via Mistral ─────────────────────
-app.post("/api/parcours", async (req, res) => {
+app.post("/api/parcours", melLimiter, async (req, res) => {
   const { mode, distance, style } = req.body || {};
 
   if (!mode || !distance) {
@@ -3889,7 +3906,12 @@ app.get("/stats", async (req, res) => {
     totalInstalls: stats.services?.installation || 0,
     parService: stats.services || {},
     derniers30jours: installations,
-    uniqueUsers: stats.uniqueUsers || { total: 0, byDay: {}, byMonth: {}, allDevices: [] },
+    uniqueUsers: {
+      total: stats.uniqueUsers?.total || 0,
+      byDay: stats.uniqueUsers?.byDay || {},
+      byMonth: stats.uniqueUsers?.byMonth || {}
+      // allDevices supprimé pour RGPD
+    },
     deviceStats: stats.deviceStats || {},
     overview: {
       today, month,
@@ -3934,7 +3956,7 @@ app.get("/api/install-count", async (req, res) => {
 });
 
 // ── Route setup webhook// ── Route setup webhook (à appeler une seule fois) ───────────
-app.get("/setup-webhook", async (req, res) => {
+app.get("/setup-webhook", adminAuth, async (req, res) => {
   if (!PAGE_ACCESS_TOKEN) return res.status(500).json({ error: "PAGE_ACCESS_TOKEN manquant" });
 
   try {
@@ -3977,7 +3999,7 @@ app.get("/health", (req, res) => {
 });
 
 // ── Diagnostic Mistral (à supprimer après test) ───────────────
-app.get("/debug-mistral", async (req, res) => {
+app.get("/debug-mistral", adminAuth, async (req, res) => {
   if (!MISTRAL_API_KEY) return res.json({ error: "MISTRAL_API_KEY absente" });
   try {
     const payload = {
