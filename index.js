@@ -4972,6 +4972,42 @@ app.get("/cron/stats", async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// Cron vigilance météo — à appeler toutes les 30 min via cron-job.org
+// URL : /cron/meteo?key=CRON_SECRET
+app.get("/cron/meteo", async (req, res) => {
+  if (!CRON_SECRET || req.query.key !== CRON_SECRET)
+    return res.status(401).json({ error: 'Clé cron invalide' });
+  try {
+    const force = req.query.force === "1";
+    const raw = await fetchMeteoFranceVigilanceRaw();
+    const vigilance = extractDepartmentVigilance(raw, "45");
+
+    if (!vigilance || Number(vigilance.level) < AUTO_PUSH_WEATHER_MIN_LEVEL) {
+      return res.json({ ok: true, status: "no-alert", level: vigilance?.level ?? null });
+    }
+
+    const lastPush = await redisGet("mat:weather:last:push");
+    if (!force && isSameWeatherAlert(lastPush, vigilance)) {
+      return res.json({ ok: true, status: "duplicate", level: vigilance.level, upcoming: vigilance.upcoming ?? false });
+    }
+
+    const pushResult = await sendWeatherPush(vigilance);
+    await redisSet("mat:weather:last:push", vigilance);
+
+    res.json({
+      ok: true,
+      status: "pushed",
+      level: vigilance.level,
+      upcoming: vigilance.upcoming ?? false,
+      phenomenon: vigilance.phenomenon_label,
+      push: pushResult
+    });
+  } catch(e) {
+    console.error("❌ /cron/meteo:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
