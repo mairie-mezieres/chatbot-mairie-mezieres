@@ -4775,8 +4775,9 @@ async function sendDailyStatsEmail() {
   let redisInfo = null;
   try { redisInfo = await getUpstashRedisStats(); } catch (_) {}
   if (redisInfo) console.log('[email] Upstash stats keys:', Object.keys(redisInfo).join(', '), '| values sample:', JSON.stringify(Object.fromEntries(Object.entries(redisInfo).filter(([,v])=>typeof v==='number').slice(0,8))));
-  const redisCmdDay   = redisInfo?.dailyrequests          ?? redisInfo?.daily_net_commands     ?? redisInfo?.daily_request_count   ?? redisInfo?.total_daily_requests   ?? null;
-  const redisCmdMonth = redisInfo?.monthlyrequests        ?? redisInfo?.total_monthly_requests ?? redisInfo?.monthly_request_count ?? redisInfo?.total_monthly_requests  ?? null;
+  // dailyrequests est un tableau timeseries — utiliser les champs scalaires comme dans l'admin
+  const redisCmdDay   = typeof redisInfo?.daily_net_commands === 'number'     ? redisInfo.daily_net_commands     : null;
+  const redisCmdMonth = typeof redisInfo?.total_monthly_requests === 'number' ? redisInfo.total_monthly_requests : null;
   const redisPctDay   = redisCmdDay !== null ? Math.round(redisCmdDay / 10000 * 100) : null;
 
   // Questions MEL du jour
@@ -4887,11 +4888,13 @@ ${svcRows ? `<div class="card">
     : `<table style="width:100%;border-collapse:collapse;font-size:0.82rem">
         <thead><tr style="background:#f3f4f6">
           <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb">Question</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb">Réponse MEL</th>
           <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb;white-space:nowrap">Catégorie</th>
         </tr></thead>
         <tbody>${melQuestions.map((q,i) => `
           <tr style="background:${i%2===0?'#fff':'#f9fafb'}">
             <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6">${String(q.q||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;color:#374151">${q.a ? String(q.a).replace(/</g,'&lt;').replace(/>/g,'&gt;') : '<span style="color:#9ca3af;font-style:italic">—</span>'}</td>
             <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;white-space:nowrap;color:#6b7280">${String(q.cat||'').replace(/</g,'&lt;')}</td>
           </tr>`).join('')}
         </tbody>
