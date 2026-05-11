@@ -3687,7 +3687,7 @@ app.post("/push/unsubscribe", async (req, res) => {
   res.json({ success: true });
 });
 
-app.post("/push/test", async (req, res) => {
+app.post("/push/test", subscribeLimiter, async (req, res) => {
   const { endpoint } = req.body || {};
   if (!endpoint) return res.status(400).json({ error: "Endpoint requis" });
 
