@@ -3717,7 +3717,9 @@ app.post("/push/test", subscribeLimiter, async (req, res) => {
     body:  'Votre appareil reçoit bien les notifications !',
     icon:  './icon-192.png',
     badge: './icon-192.png',
-    data:  { url: './', open: 'notifs' }
+    tag:   'mat-test',
+    renotify: true,
+    data:  { url: './#notifs', open: 'notifs' }
   });
   try {
     await webpush.sendNotification(sub, payload);
