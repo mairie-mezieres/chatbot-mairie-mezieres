@@ -17,5 +17,3 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "10mb", verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.set('trust proxy', true); // Render est derrière un reverse proxy
-
-PLACEHOLDER_CONTENT
