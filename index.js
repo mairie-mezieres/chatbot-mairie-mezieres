@@ -3046,7 +3046,7 @@ async function sendActuPush(title, description, photoUrl, actuId) {
   const dead = [];
   for (const sub of subs) {
     try {
-      await webpush.sendNotification(sub, payload);
+      await webpush.sendNotification(sub, payload, { urgency: 'high', TTL: 86400 });
       sent++;
     } catch (e) {
       failed++;
@@ -3722,7 +3722,7 @@ app.post("/push/test", subscribeLimiter, async (req, res) => {
     data:  { url: './#notifs', open: 'notifs' }
   });
   try {
-    await webpush.sendNotification(sub, payload);
+    await webpush.sendNotification(sub, payload, { urgency: 'high', TTL: 3600 });
     console.log(`🧪 Push test → ${endpoint.slice(-20)}`);
     res.json({ ok: true });
   } catch(e) {
