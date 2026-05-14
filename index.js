@@ -5103,7 +5103,8 @@ async function fetchStationPrices(cp, brandKey) {
   const url = `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/records?where=cp%3D%22${cp}%22&limit=20`;
   const r = await axios.get(url, { timeout: 8000 });
   const records = r.data.results || [];
-  const rec = records.find(x => (x.Nom || '').toLowerCase().includes(brandKey)) || records[0];
+  const stationName = (x) => (x.nom || x.Nom || x.adresse || '').toLowerCase();
+  const rec = records.find(x => stationName(x).includes(brandKey)) || records[0];
   if (!rec) return null;
   const sp95   = rec.sp95_prix   ?? rec.e10_prix  ?? null;
   const gazole = rec.gazole_prix ?? null;
