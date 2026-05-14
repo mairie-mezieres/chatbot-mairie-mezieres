@@ -5094,9 +5094,11 @@ app.get("/cron/meteo", async (req, res) => {
 const CARBURANT_REDIS_KEY = 'mat:carburant:v1';
 const CARBURANT_TTL_S     = 3600; // 1 heure
 const CARBURANT_STATIONS  = [
-  { key: 'clery',  label: 'Intermarché Cléry-St-André', cp: '45370', brand: 'intermarch' },
-  { key: 'meung',  label: 'Super U Meung-sur-Loire',    cp: '45130', brand: 'super u' },
-  { key: 'olivet', label: 'E.Leclerc Olivet',           cp: '45160', brand: 'leclerc' },
+  { key: 'clery',      label: 'Intermarché Cléry-St-André',  cp: '45370', brand: 'intermarch' },
+  { key: 'meung',      label: 'Super U Meung-sur-Loire',     cp: '45130', brand: 'super u' },
+  { key: 'olivet',     label: 'E.Leclerc Olivet',            cp: '45160', brand: 'leclerc' },
+  { key: 'beaugency',  label: 'E.Leclerc Beaugency',         cp: '45190', brand: 'leclerc' },
+  { key: 'saintpryve', label: 'Super U Les Quinze Pierres',  cp: '45750', brand: 'super u' },
 ];
 
 async function fetchStationPrices(cp, brandKey) {
@@ -5128,6 +5130,46 @@ app.get('/carburant', async (req, res) => {
     res.json(data);
   } catch(e) {
     console.error('❌ /carburant:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Environnement local — Loire + Qualité air + Pollens ────────────────────
+const ENV_LOCAL_REDIS_KEY   = 'mat:env-local:v1';
+const ENV_LOCAL_TTL_S       = 900; // 15 min
+const INSEE_MEZIERES        = '45203';
+const HUBEAU_LOIRE_STATION  = 'K0800050'; // Beaugency
+
+app.get('/env-local', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  try {
+    const cached = await redisGet(ENV_LOCAL_REDIS_KEY);
+    if (cached && cached._ts && Date.now() - cached._ts < ENV_LOCAL_TTL_S * 1000) return res.json(cached);
+
+    const [loireRes, recoRes] = await Promise.allSettled([
+      axios.get(`https://hubeau.eaufrance.fr/api/v1/hydrometrie/observations_tr?code_entite=${HUBEAU_LOIRE_STATION}&grandeur_hydro=H&size=1&fields=date_obs,resultat_obs`, { timeout: 8000 }),
+      axios.get(`https://api.recosante.beta.gouv.fr/v1/?insee=${INSEE_MEZIERES}`, { timeout: 8000 }),
+    ]);
+
+    const data = { _ts: Date.now() };
+
+    if (loireRes.status === 'fulfilled') {
+      const obs = ((loireRes.value.data || {}).data || [])[0];
+      data.loire = obs
+        ? { hauteur: obs.resultat_obs != null ? Math.round(obs.resultat_obs * 100) / 100 : null, date: obs.date_obs }
+        : null;
+    } else { data.loire = null; }
+
+    if (recoRes.status === 'fulfilled') {
+      const r = recoRes.value.data || {};
+      data.aqi    = r.indice_atmo ? { label: r.indice_atmo.label, valeur: r.indice_atmo.valeur } : null;
+      data.pollen = r.raep        ? { label: r.raep.label, niveau: r.raep.niveau }               : null;
+    } else { data.aqi = null; data.pollen = null; }
+
+    await redisSetex(ENV_LOCAL_REDIS_KEY, ENV_LOCAL_TTL_S, data);
+    res.json(data);
+  } catch(e) {
+    console.error('❌ /env-local:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
