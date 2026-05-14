@@ -16,7 +16,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: "10mb", verify: (req, res, buf) => { req.rawBody = buf; } }));
-app.set('trust proxy', true); // Render est derrière un reverse proxy
+app.set('trust proxy', 1); // Render est derrière un reverse proxy
 
 // ─── Variables d'environnement ────────────────────────────────
 const PAGE_ACCESS_TOKEN    = process.env.PAGE_ACCESS_TOKEN;
@@ -5104,7 +5104,8 @@ async function fetchStationPrices(cp, brandKey) {
   const r = await axios.get(url, { timeout: 8000 });
   const records = r.data.results || [];
   const stationName = (x) => (x.nom || x.Nom || x.adresse || '').toLowerCase();
-  const rec = records.find(x => stationName(x).includes(brandKey)) || records[0];
+  const rec = records.find(x => stationName(x).includes(brandKey));
+  if (!rec) return null;
   if (!rec) return null;
   const sp95   = rec.sp95_prix   ?? rec.e10_prix  ?? null;
   const gazole = rec.gazole_prix ?? null;
@@ -5146,8 +5147,8 @@ app.get('/events-locaux', async (req, res) => {
     const cached = await redisGet(EVENTS_LOCAUX_KEY);
     if (cached && cached._ts && Date.now() - cached._ts < EVENTS_LOCAUX_TTL * 1000) return res.json(cached);
 
-    const now = Math.floor(Date.now() / 1000);
-    const url = `https://api.openagenda.com/v2/events?key=${OPENAGENDA_KEY}&size=20&lang=fr&sort=timingsWithFeatured&filters[geo][latitude]=${MEZIERES_LAT}&filters[geo][longitude]=${MEZIERES_LON}&filters[geo][radius]=20&filters[timings][gte]=${now}`;
+    const now = new Date().toISOString();
+    const url = `https://api.openagenda.com/v2/events?key=${OPENAGENDA_KEY}&size=20&lang=fr&filters[geo][latitude]=${MEZIERES_LAT}&filters[geo][longitude]=${MEZIERES_LON}&filters[geo][radius]=20&filters[timings][gte]=${encodeURIComponent(now)}`;
     const r = await axios.get(url, { timeout: 8000 });
     const events = (r.data.events || []).map(e => ({
       uid:     e.uid,
@@ -5155,7 +5156,7 @@ app.get('/events-locaux', async (req, res) => {
       place:   e.location?.name || '',
       city:    e.location?.city || '',
       date:    e.nextTiming?.begin ? new Date(e.nextTiming.begin).toLocaleDateString('fr-FR', { weekday:'short', day:'numeric', month:'short' }) : '',
-      url:     e.links?.[0]?.link || `https://openagenda.com/events/${e.uid}`,
+      url:     e.links?.[0]?.link || null,
       image:   e.image?.base || null,
     }));
     const result = { events, _ts: Date.now() };
