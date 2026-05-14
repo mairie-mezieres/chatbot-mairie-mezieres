@@ -5092,7 +5092,7 @@ app.get("/cron/meteo", async (req, res) => {
 });
 
 // ─── Prix carburant — 3 stations locales ─────────────────────────────────────
-const CARBURANT_REDIS_KEY = 'mat:carburant:v1';
+const CARBURANT_REDIS_KEY = 'mat:carburant:v2';
 const CARBURANT_TTL_S     = 3600; // 1 heure
 const CARBURANT_STATIONS  = [
   { key: 'clery',      label: 'Intermarché Cléry-St-André',  cp: '45370', brand: 'intermarch' },
