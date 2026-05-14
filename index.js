@@ -2017,6 +2017,38 @@ setInterval(() => {
   for (const [k, ts] of _logRateMap) if (ts < cutoff) _logRateMap.delete(k);
 }, 60 * 60 * 1000).unref?.();
 
+// Écriture directe côté serveur (sans passer par HTTP)
+async function logServerError(module, msg, extra) {
+  if (!REDIS_URL) return;
+  try {
+    const key = module + ':' + String(msg).slice(0, 60);
+    const last = _logRateMap.get(key) || 0;
+    if (Date.now() - last < 60000) return;
+    _logRateMap.set(key, Date.now());
+    const record = {
+      ts: new Date().toISOString(),
+      module: String(module || 'server').slice(0, 30),
+      msg: String(msg || '').slice(0, 200),
+      extra: extra ? String(extra).slice(0, 100) : undefined
+    };
+    await axios.post(`${REDIS_URL}/lpush/${LOG_KEY}`, JSON.stringify(record),
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' } });
+    await axios.post(`${REDIS_URL}/ltrim/${LOG_KEY}/0/${LOG_MAX - 1}`,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
+  } catch (_) {}
+}
+
+// Capture des erreurs Node.js non gérées → logs admin
+process.on('uncaughtException', (err) => {
+  console.error('💥 uncaughtException:', err.message);
+  logServerError('uncaughtException', err.message, err.stack?.slice(0, 100));
+});
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.error('💥 unhandledRejection:', msg);
+  logServerError('unhandledRejection', msg);
+});
+
 app.post("/logs/error", logsLimiter, async (req, res) => {
   res.sendStatus(204);
   try {
@@ -2948,13 +2980,10 @@ async function publishActuToFacebook(title, description, imageBase64, eventDate,
   if (description) {
     const cleaned = String(description)
       .replace(/\r/g, '')
-      .split('\
-')
+      .split('\n')
       .map(l => l.trim())
       .filter(Boolean)
-      .join('\
-\
-')
+      .join('\n\n')
       .substring(0, 2200);
     if (cleaned) lines.push(cleaned);
   }
@@ -2966,9 +2995,7 @@ async function publishActuToFacebook(title, description, imageBase64, eventDate,
     lines.push(`📅 ${dateStr}${timeStr}`);
     if (eventLocation) lines.push(`📍 ${String(eventLocation).trim()}`);
   }
-  const message = lines.join("\
-\
-").substring(0, 2800);
+  const message = lines.join('\n\n').substring(0, 2800);
 
   const postTextOnly = async () => {
     const r = await axios.post(`https://graph.facebook.com/v19.0/${pageId}/feed`, {
