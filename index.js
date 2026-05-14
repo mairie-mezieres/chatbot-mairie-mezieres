@@ -5135,11 +5135,31 @@ app.get('/carburant', async (req, res) => {
   }
 });
 
-// ─── Environnement local — Qualité air + Pollens + Loire (Hubeau server-side) ──
-const ENV_LOCAL_REDIS_KEY = 'mat:env-local:v2';
+// ─── Environnement local — Open-Meteo Air Quality + Vigicrues Loire ────────
+const ENV_LOCAL_REDIS_KEY = 'mat:env-local:v3';
 const ENV_LOCAL_TTL_S     = 900; // 15 min
-const INSEE_MEZIERES      = '45203'; // Mézières-lez-Cléry
-const relaxedAgent        = new https.Agent({ rejectUnauthorized: false }); // Recosante cert auto-signé
+const LAT_MEZIERES        = 47.79;
+const LON_MEZIERES        = 1.80;
+const LOIRE_STATION_CODE  = 'K4180010'; // Loire à Blois (station stable la plus proche)
+
+function _aqiLabel(v) {
+  if (v == null) return null;
+  if (v < 20)  return 'Bon';
+  if (v < 40)  return 'Moyen';
+  if (v < 60)  return 'Dégradé';
+  if (v < 80)  return 'Mauvais';
+  if (v < 100) return 'Très mauvais';
+  return 'Extrêmement mauvais';
+}
+
+function _pollenLabel(v) {
+  if (v == null) return null;
+  if (v < 1)   return 'Nul';
+  if (v < 10)  return 'Faible';
+  if (v < 50)  return 'Modéré';
+  if (v < 100) return 'Élevé';
+  return 'Très élevé';
+}
 
 app.get('/env-local', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -5147,36 +5167,41 @@ app.get('/env-local', async (req, res) => {
     const cached = await redisGet(ENV_LOCAL_REDIS_KEY);
     if (cached && cached._ts && Date.now() - cached._ts < ENV_LOCAL_TTL_S * 1000) return res.json(cached);
 
-    const data = { _ts: Date.now(), loire: null };
+    const data = { _ts: Date.now(), loire: null, aqi: null, pollen: null };
 
-    // Loire via Hubeau (server-side, User-Agent pour éviter le 403)
+    // Open-Meteo Air Quality — AQI européen + pollens
     try {
-      const hubeauHeaders = { 'User-Agent': 'Mozilla/5.0 (compatible; Mezieres/1.0; +https://mairie-mezieres.github.io)' };
-      const stR = await axios.get(
-        'https://hubeau.eaufrance.fr/api/v1/hydrometrie/referentiel/stations?code_commune_station=45028&format=json&fields=code_station&size=1',
-        { timeout: 8000, headers: hubeauHeaders }
+      const omRes = await axios.get(
+        `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${LAT_MEZIERES}&longitude=${LON_MEZIERES}&current=european_aqi,alder_pollen,birch_pollen,grass_pollen,olive_pollen,ragweed_pollen,mugwort_pollen&timezone=Europe%2FParis`,
+        { timeout: 8000 }
       );
-      const code = ((stR.data.data || [])[0] || {}).code_station;
-      if (code) {
-        const obR = await axios.get(
-          `https://hubeau.eaufrance.fr/api/v1/hydrometrie/observations_tr?code_entite=${code}&grandeur_hydro=H&size=1&fields=date_obs,resultat_obs`,
-          { timeout: 8000, headers: hubeauHeaders }
-        );
-        const obs = (obR.data.data || [])[0];
-        if (obs && obs.resultat_obs != null)
-          data.loire = { hauteur: Math.round(obs.resultat_obs * 100) / 100 };
+      const c = (omRes.data || {}).current || {};
+      if (c.european_aqi != null) {
+        data.aqi = { label: _aqiLabel(c.european_aqi), valeur: Math.round(c.european_aqi) };
       }
-    } catch(e) { console.error('❌ Loire Hubeau:', e.message); }
+      const pollens = ['alder_pollen','birch_pollen','grass_pollen','olive_pollen','ragweed_pollen','mugwort_pollen']
+        .map(k => c[k]).filter(v => v != null && !isNaN(v));
+      if (pollens.length) {
+        const max = Math.max.apply(null, pollens);
+        data.pollen = { label: _pollenLabel(max), niveau: Math.round(max * 10) / 10 };
+      }
+    } catch(e) { console.error('❌ Open-Meteo Air:', e.message); }
 
+    // Vigicrues — Loire à Blois (station stable)
     try {
-      const recoRes = await axios.get(`https://api.recosante.beta.gouv.fr/v1/?insee=${INSEE_MEZIERES}`, { timeout: 8000, httpsAgent: relaxedAgent });
-      const r = recoRes.data || {};
-      data.aqi    = r.indice_atmo ? { label: r.indice_atmo.label, valeur: r.indice_atmo.valeur } : null;
-      data.pollen = r.raep        ? { label: r.raep.label, niveau: r.raep.niveau }               : null;
-    } catch(e) {
-      console.error('❌ /env-local Recosante:', e.message);
-      data.aqi = null; data.pollen = null;
-    }
+      const vR = await axios.get(
+        `https://www.vigicrues.gouv.fr/services/observations.json/index.php?CdStationHydro=${LOIRE_STATION_CODE}&GrdSerie=H&NbObsHydro=1&FormatDate=iso`,
+        { timeout: 8000 }
+      );
+      const obs = ((vR.data || {}).Serie || {}).ObssHydro || [];
+      const last = obs[obs.length - 1] || obs[0];
+      let value = null;
+      if (Array.isArray(last)) value = last[1];
+      else if (last && typeof last === 'object') value = last.ResObsHydro != null ? last.ResObsHydro : last.value;
+      if (value != null && !isNaN(value)) {
+        data.loire = { hauteur: Math.round(value * 100) / 100 };
+      }
+    } catch(e) { console.error('❌ Vigicrues Loire:', e.message); }
 
     await redisSetex(ENV_LOCAL_REDIS_KEY, ENV_LOCAL_TTL_S, data);
     res.json(data);
