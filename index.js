@@ -5135,8 +5135,8 @@ app.get('/carburant', async (req, res) => {
   }
 });
 
-// ─── Environnement local — Qualité air + Pollens (Loire = client-side) ──────
-const ENV_LOCAL_REDIS_KEY = 'mat:env-local:v1';
+// ─── Environnement local — Qualité air + Pollens + Loire (Hubeau server-side) ──
+const ENV_LOCAL_REDIS_KEY = 'mat:env-local:v2';
 const ENV_LOCAL_TTL_S     = 900; // 15 min
 const INSEE_MEZIERES      = '45203'; // Mézières-lez-Cléry
 const relaxedAgent        = new https.Agent({ rejectUnauthorized: false }); // Recosante cert auto-signé
@@ -5147,8 +5147,26 @@ app.get('/env-local', async (req, res) => {
     const cached = await redisGet(ENV_LOCAL_REDIS_KEY);
     if (cached && cached._ts && Date.now() - cached._ts < ENV_LOCAL_TTL_S * 1000) return res.json(cached);
 
-    // Loire = fetchée côté navigateur (Hubeau bloque les IP Render en 403)
     const data = { _ts: Date.now(), loire: null };
+
+    // Loire via Hubeau (server-side, User-Agent pour éviter le 403)
+    try {
+      const hubeauHeaders = { 'User-Agent': 'Mozilla/5.0 (compatible; Mezieres/1.0; +https://mairie-mezieres.github.io)' };
+      const stR = await axios.get(
+        'https://hubeau.eaufrance.fr/api/v1/hydrometrie/referentiel/stations?code_commune_station=45028&format=json&fields=code_station&size=1',
+        { timeout: 8000, headers: hubeauHeaders }
+      );
+      const code = ((stR.data.data || [])[0] || {}).code_station;
+      if (code) {
+        const obR = await axios.get(
+          `https://hubeau.eaufrance.fr/api/v1/hydrometrie/observations_tr?code_entite=${code}&grandeur_hydro=H&size=1&fields=date_obs,resultat_obs`,
+          { timeout: 8000, headers: hubeauHeaders }
+        );
+        const obs = (obR.data.data || [])[0];
+        if (obs && obs.resultat_obs != null)
+          data.loire = { hauteur: Math.round(obs.resultat_obs * 100) / 100 };
+      }
+    } catch(e) { console.error('❌ Loire Hubeau:', e.message); }
 
     try {
       const recoRes = await axios.get(`https://api.recosante.beta.gouv.fr/v1/?insee=${INSEE_MEZIERES}`, { timeout: 8000, httpsAgent: relaxedAgent });
