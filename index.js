@@ -5118,12 +5118,14 @@ async function fetchStationPrices(cp, brandKey) {
     'prix-des-carburants-en-france-v2',
   ];
   for (const dataset of datasets) {
-    const url = `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/${dataset}/records?where=cp%3D%22${cp}%22&order_by=prix_maj%20DESC&limit=20`;
-    const r = await axios.get(url, { timeout: 8000 });
-    const records = r.data.results || [];
-    if (!records.length) continue;
-    const rec = records.find(x => stationName(x).includes(brandKey)) || records[0] || null;
-    if (rec) return extract(rec);
+    try {
+      const url = `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/${dataset}/records?where=cp%3D%22${cp}%22&order_by=prix_maj%20DESC&limit=20`;
+      const r = await axios.get(url, { timeout: 8000 });
+      const records = r.data.results || [];
+      if (!records.length) continue;
+      const rec = records.find(x => stationName(x).includes(brandKey)) || records[0] || null;
+      if (rec) return extract(rec);
+    } catch (_) { continue; }
   }
   return null;
 }
