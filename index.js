@@ -5104,8 +5104,7 @@ async function fetchStationPrices(cp, brandKey) {
   const r = await axios.get(url, { timeout: 8000 });
   const records = r.data.results || [];
   const stationName = (x) => (x.nom || x.Nom || x.adresse || '').toLowerCase();
-  const rec = records.find(x => stationName(x).includes(brandKey));
-  if (!rec) return null;
+  const rec = records.find(x => stationName(x).includes(brandKey)) || records[0];
   if (!rec) return null;
   const sp95   = rec.sp95_prix   ?? rec.e10_prix  ?? null;
   const gazole = rec.gazole_prix ?? null;
