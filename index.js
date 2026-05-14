@@ -5092,7 +5092,7 @@ app.get("/cron/meteo", async (req, res) => {
 });
 
 // ─── Prix carburant — 3 stations locales ─────────────────────────────────────
-const CARBURANT_REDIS_KEY = 'mat:carburant:v4';
+const CARBURANT_REDIS_KEY = 'mat:carburant:v5';
 const CARBURANT_TTL_S     = 3600; // 1 heure
 const CARBURANT_STATIONS  = [
   { key: 'clery',      label: 'Intermarché Cléry-St-André',  cp: '45370', brand: 'intermarch' },
@@ -5122,10 +5122,11 @@ async function fetchStationPrices(cp, brandKey) {
       const url = `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/${dataset}/records?where=cp%3D%22${cp}%22&order_by=prix_maj%20DESC&limit=20`;
       const r = await axios.get(url, { timeout: 8000 });
       const records = r.data.results || [];
-      if (!records.length) continue;
+      if (!records.length) { console.log(`[carburant] ${cp}/${brandKey} ${dataset}: 0 records`); continue; }
       const rec = records.find(x => stationName(x).includes(brandKey)) || records[0] || null;
+      console.log(`[carburant] ${cp}/${brandKey} ${dataset}: ${records.length} recs, matched=${!!rec}, keys=${rec ? Object.keys(rec).filter(k=>k.includes('prix')||k.includes('ensigne')||k.includes('nom')).join(',') : 'none'}, sp95=${rec&&rec.sp95_prix}, go=${rec&&rec.gazole_prix}`);
       if (rec) return extract(rec);
-    } catch (_) { continue; }
+    } catch (err) { console.error(`[carburant] ${cp}/${brandKey} ${dataset} error:`, err.message); continue; }
   }
   return null;
 }
