@@ -5133,39 +5133,15 @@ app.get('/carburant', async (req, res) => {
   }
 });
 
-// ─── Événements locaux — OpenAgenda (rayon 20 km) ────────────────────────────
-const OPENAGENDA_KEY      = process.env.OPENAGENDA_API_KEY || '';
-const EVENTS_LOCAUX_KEY   = 'mat:events-locaux:v1';
-const EVENTS_LOCAUX_TTL   = 1800; // 30 min
-const MEZIERES_LAT        = 47.78;
-const MEZIERES_LON        = 1.75;
+// ─── Événements locaux — OpenAgenda (3 agendas locaux) ───────────────────────
+const OPENAGENDA_KEY    = process.env.OPENAGENDA_API_KEY || '';
+const OA_AGENDA_UIDS    = [35710944, 6085217, 13827807]; // Orléans Métr., Val-de-Loire, Sportifs Loiret
 
 app.get('/events-locaux', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   if (!OPENAGENDA_KEY) return res.json({ events: [], nokey: true });
-  try {
-    const cached = await redisGet(EVENTS_LOCAUX_KEY);
-    if (cached && cached._ts && Date.now() - cached._ts < EVENTS_LOCAUX_TTL * 1000) return res.json(cached);
-
-    const now = new Date().toISOString();
-    const url = `https://api.openagenda.com/v2/events?key=${OPENAGENDA_KEY}&size=20&lang=fr&filters[geo][latitude]=${MEZIERES_LAT}&filters[geo][longitude]=${MEZIERES_LON}&filters[geo][radius]=20&filters[timings][gte]=${encodeURIComponent(now)}`;
-    const r = await axios.get(url, { timeout: 8000 });
-    const events = (r.data.events || []).map(e => ({
-      uid:     e.uid,
-      title:   e.title?.fr || e.title?.en || '',
-      place:   e.location?.name || '',
-      city:    e.location?.city || '',
-      date:    e.nextTiming?.begin ? new Date(e.nextTiming.begin).toLocaleDateString('fr-FR', { weekday:'short', day:'numeric', month:'short' }) : '',
-      url:     e.links?.[0]?.link || null,
-      image:   e.image?.base || null,
-    }));
-    const result = { events, _ts: Date.now() };
-    await redisSetex(EVENTS_LOCAUX_KEY, EVENTS_LOCAUX_TTL, result);
-    res.json(result);
-  } catch(e) {
-    console.error('❌ /events-locaux:', e.message);
-    res.status(500).json({ error: e.message });
-  }
+  // La clé publique OpenAgenda requiert un Origin navigateur — on guide le client
+  return res.json({ clientSide: true, key: OPENAGENDA_KEY, agendas: OA_AGENDA_UIDS });
 });
 
 app.listen(PORT, async () => {
