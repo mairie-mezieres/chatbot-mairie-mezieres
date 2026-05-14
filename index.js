@@ -5092,7 +5092,7 @@ app.get("/cron/meteo", async (req, res) => {
 });
 
 // ─── Prix carburant — 3 stations locales ─────────────────────────────────────
-const CARBURANT_REDIS_KEY = 'mat:carburant:v5';
+const CARBURANT_REDIS_KEY = 'mat:carburant:v6';
 const CARBURANT_TTL_S     = 3600; // 1 heure
 const CARBURANT_STATIONS  = [
   { key: 'clery',      label: 'Intermarché Cléry-St-André',  cp: '45370', brand: 'intermarch' },
@@ -5112,22 +5112,16 @@ async function fetchStationPrices(cp, brandKey) {
     return { sp95, gazole, maj };
   };
 
-  // Essai 1 : flux instantané (stations actives)
-  const datasets = [
-    'prix-des-carburants-en-france-flux-instantane-v2',
-    'prix-des-carburants-en-france-v2',
-  ];
-  for (const dataset of datasets) {
-    try {
-      const url = `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/${dataset}/records?where=cp%3D%22${cp}%22&order_by=prix_maj%20DESC&limit=20`;
-      const r = await axios.get(url, { timeout: 8000 });
-      const records = r.data.results || [];
-      if (!records.length) { console.log(`[carburant] ${cp}/${brandKey} ${dataset}: 0 records`); continue; }
-      const rec = records.find(x => stationName(x).includes(brandKey)) || records[0] || null;
-      console.log(`[carburant] ${cp}/${brandKey} ${dataset}: ${records.length} recs, matched=${!!rec}, keys=${rec ? Object.keys(rec).filter(k=>k.includes('prix')||k.includes('ensigne')||k.includes('nom')).join(',') : 'none'}, sp95=${rec&&rec.sp95_prix}, go=${rec&&rec.gazole_prix}`);
-      if (rec) return extract(rec);
-    } catch (err) { console.error(`[carburant] ${cp}/${brandKey} ${dataset} error:`, err.message); continue; }
-  }
+  // Filtre par CP via refine (facette Opendatasoft — pas de parsing ODSQL, évite les 400)
+  const url = `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/records?refine=cp%3A${encodeURIComponent(cp)}&order_by=prix_maj%20DESC&limit=20`;
+  try {
+    const r = await axios.get(url, { timeout: 8000 });
+    const records = r.data.results || [];
+    if (!records.length) { console.log(`[carburant] ${cp}/${brandKey}: 0 records`); return null; }
+    const rec = records.find(x => stationName(x).includes(brandKey)) || records[0] || null;
+    console.log(`[carburant] ${cp}/${brandKey}: ${records.length} recs, matched=${!!rec}, keys=${rec ? Object.keys(rec).filter(k=>k.includes('prix')||k.includes('ensigne')||k.includes('nom')).join(',') : 'none'}, sp95=${rec&&rec.sp95_prix}, go=${rec&&rec.gazole_prix}`);
+    if (rec) return extract(rec);
+  } catch (err) { console.error(`[carburant] ${cp}/${brandKey} error:`, err.message); }
   return null;
 }
 
