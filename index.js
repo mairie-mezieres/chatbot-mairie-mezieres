@@ -1,5 +1,6 @@
 const express   = require("express");
 const axios     = require("axios");
+const https     = require("https");
 const Anthropic = require("@anthropic-ai/sdk");
 const webpush   = require("web-push");
 const cloudinary = require("cloudinary").v2;
@@ -5091,7 +5092,7 @@ app.get("/cron/meteo", async (req, res) => {
 });
 
 // ─── Prix carburant — 3 stations locales ─────────────────────────────────────
-const CARBURANT_REDIS_KEY = 'mat:carburant:v1';
+const CARBURANT_REDIS_KEY = 'mat:carburant:v2';
 const CARBURANT_TTL_S     = 3600; // 1 heure
 const CARBURANT_STATIONS  = [
   { key: 'clery',      label: 'Intermarché Cléry-St-André',  cp: '45370', brand: 'intermarch' },
@@ -5134,37 +5135,11 @@ app.get('/carburant', async (req, res) => {
   }
 });
 
-// ─── Environnement local — Loire + Qualité air + Pollens ────────────────────
-const ENV_LOCAL_REDIS_KEY   = 'mat:env-local:v1';
-const ENV_LOCAL_TTL_S       = 900; // 15 min
-const INSEE_MEZIERES        = '45203'; // Mézières-lez-Cléry
-const INSEE_BEAUGENCY       = '45028'; // pour recherche station Loire
-
-async function fetchLoireHauteur() {
-  // Recherche dynamique de la station hydrométrique sur la Loire à Beaugency
-  const searchUrl = `https://hubeau.eaufrance.fr/api/v1/hydrometrie/referentiel/stations?code_commune_station=${INSEE_BEAUGENCY}&format=json&fields=code_station,libelle_station`;
-  const searchRes = await axios.get(searchUrl, { timeout: 8000 });
-  const stations  = (searchRes.data.data || []);
-  if (!stations.length) { console.warn('⚠️ /env-local: aucune station Hubeau à Beaugency'); return null; }
-  const station   = stations[0];
-  console.log(`ℹ️ /env-local: station Loire = ${station.code_station} (${station.libelle_station})`);
-  const obsUrl = `https://hubeau.eaufrance.fr/api/v1/hydrometrie/observations_tr?code_entite=${station.code_station}&grandeur_hydro=H&size=1&fields=date_obs,resultat_obs`;
-  const obsRes = await axios.get(obsUrl, { timeout: 8000 });
-  const obs = ((obsRes.data || {}).data || [])[0];
-  return obs ? { hauteur: obs.resultat_obs != null ? Math.round(obs.resultat_obs * 100) / 100 : null, date: obs.date_obs } : null;
-}
-
-async function fetchEnvAirPollen() {
-  // Recosante agrège Atmo + RNSA par commune
-  const url = `https://api.recosante.beta.gouv.fr/v1/?insee=${INSEE_MEZIERES}`;
-  const res = await axios.get(url, { timeout: 8000 });
-  const r = res.data || {};
-  console.log('ℹ️ /env-local recosante keys:', Object.keys(r).join(', '));
-  return {
-    aqi:    r.indice_atmo ? { label: r.indice_atmo.label,   valeur: r.indice_atmo.valeur } : null,
-    pollen: r.raep        ? { label: r.raep.label,          niveau: r.raep.niveau }        : null,
-  };
-}
+// ─── Environnement local — Qualité air + Pollens (Loire = client-side) ──────
+const ENV_LOCAL_REDIS_KEY = 'mat:env-local:v1';
+const ENV_LOCAL_TTL_S     = 900; // 15 min
+const INSEE_MEZIERES      = '45203'; // Mézières-lez-Cléry
+const relaxedAgent        = new https.Agent({ rejectUnauthorized: false }); // Recosante cert auto-signé
 
 app.get('/env-local', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -5172,16 +5147,18 @@ app.get('/env-local', async (req, res) => {
     const cached = await redisGet(ENV_LOCAL_REDIS_KEY);
     if (cached && cached._ts && Date.now() - cached._ts < ENV_LOCAL_TTL_S * 1000) return res.json(cached);
 
-    const [loireRes, airRes] = await Promise.allSettled([
-      fetchLoireHauteur(),
-      fetchEnvAirPollen(),
-    ]);
+    // Loire = fetchée côté navigateur (Hubeau bloque les IP Render en 403)
+    const data = { _ts: Date.now(), loire: null };
 
-    const data = { _ts: Date.now() };
-    data.loire  = loireRes.status === 'fulfilled' ? loireRes.value  : (console.error('❌ Loire:', loireRes.reason?.message), null);
-    const air   = airRes.status   === 'fulfilled' ? airRes.value    : (console.error('❌ Air/pollen:', airRes.reason?.message), {});
-    data.aqi    = air.aqi    || null;
-    data.pollen = air.pollen || null;
+    try {
+      const recoRes = await axios.get(`https://api.recosante.beta.gouv.fr/v1/?insee=${INSEE_MEZIERES}`, { timeout: 8000, httpsAgent: relaxedAgent });
+      const r = recoRes.data || {};
+      data.aqi    = r.indice_atmo ? { label: r.indice_atmo.label, valeur: r.indice_atmo.valeur } : null;
+      data.pollen = r.raep        ? { label: r.raep.label, niveau: r.raep.niveau }               : null;
+    } catch(e) {
+      console.error('❌ /env-local Recosante:', e.message);
+      data.aqi = null; data.pollen = null;
+    }
 
     await redisSetex(ENV_LOCAL_REDIS_KEY, ENV_LOCAL_TTL_S, data);
     res.json(data);
