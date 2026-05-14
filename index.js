@@ -5137,8 +5137,34 @@ app.get('/carburant', async (req, res) => {
 // ─── Environnement local — Loire + Qualité air + Pollens ────────────────────
 const ENV_LOCAL_REDIS_KEY   = 'mat:env-local:v1';
 const ENV_LOCAL_TTL_S       = 900; // 15 min
-const INSEE_MEZIERES        = '45203';
-const HUBEAU_LOIRE_STATION  = 'K0800050'; // Beaugency
+const INSEE_MEZIERES        = '45203'; // Mézières-lez-Cléry
+const INSEE_BEAUGENCY       = '45028'; // pour recherche station Loire
+
+async function fetchLoireHauteur() {
+  // Recherche dynamique de la station hydrométrique sur la Loire à Beaugency
+  const searchUrl = `https://hubeau.eaufrance.fr/api/v1/hydrometrie/referentiel/stations?code_commune_station=${INSEE_BEAUGENCY}&format=json&fields=code_station,libelle_station`;
+  const searchRes = await axios.get(searchUrl, { timeout: 8000 });
+  const stations  = (searchRes.data.data || []);
+  if (!stations.length) { console.warn('⚠️ /env-local: aucune station Hubeau à Beaugency'); return null; }
+  const station   = stations[0];
+  console.log(`ℹ️ /env-local: station Loire = ${station.code_station} (${station.libelle_station})`);
+  const obsUrl = `https://hubeau.eaufrance.fr/api/v1/hydrometrie/observations_tr?code_entite=${station.code_station}&grandeur_hydro=H&size=1&fields=date_obs,resultat_obs`;
+  const obsRes = await axios.get(obsUrl, { timeout: 8000 });
+  const obs = ((obsRes.data || {}).data || [])[0];
+  return obs ? { hauteur: obs.resultat_obs != null ? Math.round(obs.resultat_obs * 100) / 100 : null, date: obs.date_obs } : null;
+}
+
+async function fetchEnvAirPollen() {
+  // Recosante agrège Atmo + RNSA par commune
+  const url = `https://api.recosante.beta.gouv.fr/v1/?insee=${INSEE_MEZIERES}`;
+  const res = await axios.get(url, { timeout: 8000 });
+  const r = res.data || {};
+  console.log('ℹ️ /env-local recosante keys:', Object.keys(r).join(', '));
+  return {
+    aqi:    r.indice_atmo ? { label: r.indice_atmo.label,   valeur: r.indice_atmo.valeur } : null,
+    pollen: r.raep        ? { label: r.raep.label,          niveau: r.raep.niveau }        : null,
+  };
+}
 
 app.get('/env-local', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -5146,25 +5172,16 @@ app.get('/env-local', async (req, res) => {
     const cached = await redisGet(ENV_LOCAL_REDIS_KEY);
     if (cached && cached._ts && Date.now() - cached._ts < ENV_LOCAL_TTL_S * 1000) return res.json(cached);
 
-    const [loireRes, recoRes] = await Promise.allSettled([
-      axios.get(`https://hubeau.eaufrance.fr/api/v1/hydrometrie/observations_tr?code_entite=${HUBEAU_LOIRE_STATION}&grandeur_hydro=H&size=1&fields=date_obs,resultat_obs`, { timeout: 8000 }),
-      axios.get(`https://api.recosante.beta.gouv.fr/v1/?insee=${INSEE_MEZIERES}`, { timeout: 8000 }),
+    const [loireRes, airRes] = await Promise.allSettled([
+      fetchLoireHauteur(),
+      fetchEnvAirPollen(),
     ]);
 
     const data = { _ts: Date.now() };
-
-    if (loireRes.status === 'fulfilled') {
-      const obs = ((loireRes.value.data || {}).data || [])[0];
-      data.loire = obs
-        ? { hauteur: obs.resultat_obs != null ? Math.round(obs.resultat_obs * 100) / 100 : null, date: obs.date_obs }
-        : null;
-    } else { data.loire = null; }
-
-    if (recoRes.status === 'fulfilled') {
-      const r = recoRes.value.data || {};
-      data.aqi    = r.indice_atmo ? { label: r.indice_atmo.label, valeur: r.indice_atmo.valeur } : null;
-      data.pollen = r.raep        ? { label: r.raep.label, niveau: r.raep.niveau }               : null;
-    } else { data.aqi = null; data.pollen = null; }
+    data.loire  = loireRes.status === 'fulfilled' ? loireRes.value  : (console.error('❌ Loire:', loireRes.reason?.message), null);
+    const air   = airRes.status   === 'fulfilled' ? airRes.value    : (console.error('❌ Air/pollen:', airRes.reason?.message), {});
+    data.aqi    = air.aqi    || null;
+    data.pollen = air.pollen || null;
 
     await redisSetex(ENV_LOCAL_REDIS_KEY, ENV_LOCAL_TTL_S, data);
     res.json(data);
