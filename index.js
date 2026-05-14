@@ -5090,6 +5090,83 @@ app.get("/cron/meteo", async (req, res) => {
   }
 });
 
+// ─── Prix carburant — 3 stations locales ─────────────────────────────────────
+const CARBURANT_REDIS_KEY = 'mat:carburant:v1';
+const CARBURANT_TTL_S     = 3600; // 1 heure
+const CARBURANT_STATIONS  = [
+  { key: 'clery',  label: 'Intermarché Cléry-St-André', cp: '45370', brand: 'intermarch' },
+  { key: 'meung',  label: 'Super U Meung-sur-Loire',    cp: '45130', brand: 'super u' },
+  { key: 'olivet', label: 'E.Leclerc Olivet',           cp: '45160', brand: 'leclerc' },
+];
+
+async function fetchStationPrices(cp, brandKey) {
+  const url = `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/records?where=cp%3D%22${cp}%22&limit=20`;
+  const r = await axios.get(url, { timeout: 8000 });
+  const records = r.data.results || [];
+  const stationName = (x) => (x.nom || x.Nom || x.adresse || '').toLowerCase();
+  const rec = records.find(x => stationName(x).includes(brandKey)) || records[0];
+  if (!rec) return null;
+  const sp95   = rec.sp95_prix   ?? rec.e10_prix  ?? null;
+  const gazole = rec.gazole_prix ?? null;
+  const rawMaj = rec.sp95_maj || rec.e10_maj || rec.gazole_maj || null;
+  const maj    = rawMaj ? new Date(rawMaj).toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : null;
+  return { sp95, gazole, maj };
+}
+
+app.get('/carburant', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  try {
+    const cached = await redisGet(CARBURANT_REDIS_KEY);
+    if (cached && cached._ts && Date.now() - cached._ts < CARBURANT_TTL_S * 1000) return res.json(cached);
+
+    const data = { _ts: Date.now() };
+    await Promise.all(CARBURANT_STATIONS.map(async s => {
+      try { data[s.key] = { label: s.label, ...(await fetchStationPrices(s.cp, s.brand)) }; }
+      catch (_) { data[s.key] = { label: s.label, sp95: null, gazole: null, maj: null }; }
+    }));
+    await redisSetex(CARBURANT_REDIS_KEY, CARBURANT_TTL_S, data);
+    res.json(data);
+  } catch(e) {
+    console.error('❌ /carburant:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Événements locaux — OpenAgenda (rayon 20 km) ────────────────────────────
+const OPENAGENDA_KEY      = process.env.OPENAGENDA_API_KEY || '';
+const EVENTS_LOCAUX_KEY   = 'mat:events-locaux:v1';
+const EVENTS_LOCAUX_TTL   = 1800; // 30 min
+const MEZIERES_LAT        = 47.78;
+const MEZIERES_LON        = 1.75;
+
+app.get('/events-locaux', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!OPENAGENDA_KEY) return res.json({ events: [], nokey: true });
+  try {
+    const cached = await redisGet(EVENTS_LOCAUX_KEY);
+    if (cached && cached._ts && Date.now() - cached._ts < EVENTS_LOCAUX_TTL * 1000) return res.json(cached);
+
+    const now = Math.floor(Date.now() / 1000);
+    const url = `https://api.openagenda.com/v2/events?key=${OPENAGENDA_KEY}&size=20&lang=fr&sort=timingsWithFeatured&filters[geo][latitude]=${MEZIERES_LAT}&filters[geo][longitude]=${MEZIERES_LON}&filters[geo][radius]=20&filters[timings][gte]=${now}`;
+    const r = await axios.get(url, { timeout: 8000 });
+    const events = (r.data.events || []).map(e => ({
+      uid:     e.uid,
+      title:   e.title?.fr || e.title?.en || '',
+      place:   e.location?.name || '',
+      city:    e.location?.city || '',
+      date:    e.nextTiming?.begin ? new Date(e.nextTiming.begin).toLocaleDateString('fr-FR', { weekday:'short', day:'numeric', month:'short' }) : '',
+      url:     e.links?.[0]?.link || `https://openagenda.com/events/${e.uid}`,
+      image:   e.image?.base || null,
+    }));
+    const result = { events, _ts: Date.now() };
+    await redisSetex(EVENTS_LOCAUX_KEY, EVENTS_LOCAUX_TTL, result);
+    res.json(result);
+  } catch(e) {
+    console.error('❌ /events-locaux:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
