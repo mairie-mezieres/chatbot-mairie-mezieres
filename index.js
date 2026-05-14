@@ -5092,7 +5092,7 @@ app.get("/cron/meteo", async (req, res) => {
 });
 
 // ─── Prix carburant — 3 stations locales ─────────────────────────────────────
-const CARBURANT_REDIS_KEY = 'mat:carburant:v3';
+const CARBURANT_REDIS_KEY = 'mat:carburant:v4';
 const CARBURANT_TTL_S     = 3600; // 1 heure
 const CARBURANT_STATIONS  = [
   { key: 'clery',      label: 'Intermarché Cléry-St-André',  cp: '45370', brand: 'intermarch' },
@@ -5118,12 +5118,14 @@ async function fetchStationPrices(cp, brandKey) {
     'prix-des-carburants-en-france-v2',
   ];
   for (const dataset of datasets) {
-    const url = `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/${dataset}/records?where=cp%3D%22${cp}%22&order_by=prix_maj%20DESC&limit=20`;
-    const r = await axios.get(url, { timeout: 8000 });
-    const records = r.data.results || [];
-    if (!records.length) continue;
-    const rec = records.find(x => stationName(x).includes(brandKey)) || (records.length === 1 ? records[0] : null);
-    if (rec) return extract(rec);
+    try {
+      const url = `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/${dataset}/records?where=cp%3D%22${cp}%22&order_by=prix_maj%20DESC&limit=20`;
+      const r = await axios.get(url, { timeout: 8000 });
+      const records = r.data.results || [];
+      if (!records.length) continue;
+      const rec = records.find(x => stationName(x).includes(brandKey)) || records[0] || null;
+      if (rec) return extract(rec);
+    } catch (_) { continue; }
   }
   return null;
 }
@@ -5206,13 +5208,18 @@ app.get('/env-local', async (req, res) => {
           `https://www.vigicrues.gouv.fr/services/observations.json/index.php?CdStationHydro=${stCode}&GrdSerie=H&NbObsHydro=1&FormatDate=iso`,
           { timeout: 8000 }
         );
-        const obs = ((vR.data || {}).Serie || {}).ObssHydro || [];
+        const serie = (vR.data || {}).Serie || {};
+        const obs = serie.ObssHydro || [];
         const last = obs[obs.length - 1] || obs[0];
         let value = null;
         if (Array.isArray(last)) value = last[1];
         else if (last && typeof last === 'object') value = last.ResObsHydro != null ? last.ResObsHydro : last.value;
         if (value != null && !isNaN(value)) {
-          data.loire = { hauteur: Math.round(value * 100) / 100, station: stCode };
+          const seuils = {};
+          ['NivSeuil1','NivSeuil2','NivSeuil3','NivSeuil4'].forEach((k, i) => {
+            const v = serie[k]; if (v != null && !isNaN(v)) seuils['seuil' + (i + 1)] = Math.round(parseFloat(v) * 100) / 100;
+          });
+          data.loire = { hauteur: Math.round(value * 100) / 100, station: stCode, seuils: Object.keys(seuils).length ? seuils : null };
           break;
         }
       } catch(e) { console.error(`❌ Vigicrues Loire ${stCode}:`, e.message); }
