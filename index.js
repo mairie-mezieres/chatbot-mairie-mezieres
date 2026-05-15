@@ -4872,10 +4872,14 @@ async function sendDailyStatsEmail() {
 
   // Services actifs aujourd'hui (hors mel, installation, app_open traités séparément)
   const SVC_LABELS = {
-    meteo:'🌦️ Météo', actus:'📰 Actualités', calendrier:'📅 Agenda',
-    signal:'🚨 Signalement', dechets:'🗑️ Déchets', transport:'🚌 Transport',
-    urbanisme:'🏗️ Urbanisme', contact:'📞 Contact mairie', service_public:'🏛️ Service public',
-    meteoalert:'⚠️ Alerte météo', sondage:'📊 Sondage', idee:'💡 Idée citoyenne'
+    meteo:'🌦️ Météo', actualites:'📰 Actualités', agenda:'📅 Agenda',
+    carburant:'⛽ Carburant', events_locaux:'🎭 Événements locaux',
+    dechets:'🗑️ Déchets', sondages:'📊 Sondages', docs:'📄 Documents',
+    nums:'📞 Numéros utiles', remi:'🚌 Bus Rémi', conseil:'🏛️ Conseil municipal',
+    signalement:'🚨 Signalement', contact:'💬 Contact mairie', idees:'💡 Idées citoyennes',
+    app_resume:'↩️ Retours avant-plan',
+    transport:'🚌 Transport', urbanisme:'🏗️ Urbanisme', service_public:'🏛️ Service public',
+    meteoalert:'⚠️ Alerte météo'
   };
   const svcRows = Object.entries(parJour[today] || {})
     .filter(([k, v]) => v > 0 && k !== 'mel' && k !== 'installation' && k !== 'app_open')
