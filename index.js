@@ -4830,10 +4830,19 @@ app.post("/admin/entreprises/fix-logos", adminAuth, async (req, res) => {
   if (!CLOUDINARY_ENABLED) return res.status(503).json({ error: "Cloudinary non configuré sur ce serveur" });
   const list = await readEntreprises();
   let fixed = 0, skipped = 0;
+  const FB_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Referer': 'https://www.facebook.com/',
+    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    'Accept-Language': 'fr-FR,fr;q=0.9',
+    'Sec-Fetch-Dest': 'image',
+    'Sec-Fetch-Mode': 'no-cors',
+    'Sec-Fetch-Site': 'cross-site'
+  };
   for (const e of list) {
     if (!e.logo || !e.logo.includes('fbcdn.net')) continue;
     try {
-      const resp = await axios.get(e.logo, { responseType: 'arraybuffer', timeout: 10000 });
+      const resp = await axios.get(e.logo, { responseType: 'arraybuffer', timeout: 10000, headers: FB_HEADERS });
       const ct = resp.headers['content-type'] || 'image/jpeg';
       const base64 = `data:${ct};base64,${Buffer.from(resp.data).toString('base64')}`;
       const result = await uploadEntrepriseLogoToCloudinary(base64);
@@ -4845,7 +4854,7 @@ app.post("/admin/entreprises/fix-logos", adminAuth, async (req, res) => {
     }
   }
   if (fixed > 0) await writeEntreprises(list);
-  res.json({ ok: true, fixed, skipped });
+  res.json({ ok: true, fixed, skipped, errors: skipped > 0 ? 'Certains logos nécessitent une mise à jour manuelle via le formulaire.' : undefined });
 });
 
 
