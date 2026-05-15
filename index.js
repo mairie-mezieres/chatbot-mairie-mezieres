@@ -270,6 +270,18 @@ function memDel(key)           { delete _mem[key]; }
 
 async function readSubs()               { return (await redisGet("mat:subs")) || []; }
 async function writeSubs(d)             { await redisSet("mat:subs", d); }
+
+// ── Historique des envois push (50 derniers, pour stats admin) ──
+const PUSH_HISTORY_KEY = 'mat:push:history';
+const PUSH_HISTORY_MAX = 50;
+async function recordPushHistory(entry) {
+  try {
+    const history = (await redisGet(PUSH_HISTORY_KEY)) || [];
+    history.unshift({ ts: Date.now(), ...entry });
+    if (history.length > PUSH_HISTORY_MAX) history.length = PUSH_HISTORY_MAX;
+    await redisSet(PUSH_HISTORY_KEY, history);
+  } catch (e) { console.error('❌ recordPushHistory:', e.message); }
+}
 async function readNews()  { const c=memGet("mat:actus");        if(c!==undefined)return c; const v=(await redisGet("mat:actus"))||[];        memSet("mat:actus",v,MEM_TTL_SHORT);        return v; }
 async function writeNews(d){ memSet("mat:actus",d,MEM_TTL_SHORT);        await redisSet("mat:actus",d); }
 async function readIdeas() { const c=memGet("mat:idees");        if(c!==undefined)return c; const v=(await redisGet("mat:idees"))||[];        memSet("mat:idees",v,MEM_TTL_SHORT);        return v; }
@@ -1714,14 +1726,15 @@ async function sendWeatherPush(vigilance) {
   let sent = 0;
   for (const sub of subs) {
     try {
-      await webpush.sendNotification(sub, payload);
+      await webpush.sendNotification(sub, payload, { urgency: 'high', TTL: 86400 });
       sent++;
     } catch (e) {
       if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
     }
   }
   if (dead.length) await writeSubs(subs.filter(s => !dead.includes(s.endpoint)));
-  console.log(`🌩️ Météo push (vigilance ${color}) → ${sent}/${subs.length} abonnés`);
+  console.log(`🌩️ Météo push (vigilance ${color}) → ${sent}/${subs.length} abonnés (${dead.length} expirés purgés)`);
+  await recordPushHistory({ type: 'meteo', title: `Vigilance ${color} — ${phenom}`, sent, total: subs.length, dead: dead.length });
   return { sent, total: subs.length };
 }
 
@@ -2639,6 +2652,15 @@ app.delete("/admin/push/schedule/:id", adminAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Historique des envois push (50 derniers) + nb d'abonnés vivants actuels
+app.get("/admin/push/history", adminAuth, async (req, res) => {
+  const [history, subs] = await Promise.all([
+    redisGet(PUSH_HISTORY_KEY),
+    readSubs()
+  ]);
+  res.json({ history: history || [], aliveSubs: subs.length });
+});
+
 // ── Cron : envoi des notifications push programmées (toutes les minutes) ──
 setInterval(async () => {
   try {
@@ -2948,9 +2970,11 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   });
 
   const dead = [];
+  let sent = 0;
   for (const sub of subs) {
     try {
-      await webpush.sendNotification(sub, payload);
+      await webpush.sendNotification(sub, payload, { urgency: 'high', TTL: 86400 });
+      sent++;
     } catch(e) {
       if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
     }
@@ -2961,6 +2985,7 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
     await writeSubs(alive);
     console.log(`🗑️ ${dead.length} subscription(s) expirée(s) supprimée(s)`);
   }
+  await recordPushHistory({ type: 'fb', title: title.substring(0, 80), sent, total: subs.length, dead: dead.length });
 
   return { duplicate: false };
 }
@@ -3085,6 +3110,7 @@ async function sendActuPush(title, description, photoUrl, actuId) {
     const alive = subs.filter(s => !dead.includes(s.endpoint));
     await writeSubs(alive);
   }
+  await recordPushHistory({ type: 'actu', title: (title || '').substring(0, 80), sent, total: subs.length, dead: dead.length });
   return { sent, failed, total: subs.length };
 }
 
