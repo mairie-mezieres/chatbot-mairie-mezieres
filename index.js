@@ -386,6 +386,19 @@ function getDataUriMimeType(dataUri = "") {
   return (m?.[1] || "image/jpeg").toLowerCase();
 }
 
+async function uploadEntrepriseLogoToCloudinary(imageBase64) {
+  if (!imageBase64) return null;
+  if (!CLOUDINARY_ENABLED) throw new Error("Cloudinary non configuré");
+  const mimeType = getDataUriMimeType(imageBase64);
+  return await cloudinary.uploader.upload(imageBase64, {
+    folder: "mat/entreprises",
+    resource_type: "image",
+    overwrite: false,
+    unique_filename: true,
+    format: mimeType.includes("png") ? "png" : "jpg"
+  });
+}
+
 async function uploadActuImageToCloudinary(imageBase64) {
   if (!imageBase64) return null;
   if (!CLOUDINARY_ENABLED) throw new Error("Cloudinary non configuré");
@@ -4753,8 +4766,15 @@ app.get("/admin/entreprises", adminAuth, async (req, res) => {
 });
 
 app.post("/admin/entreprises", adminAuth, async (req, res) => {
-  const { nom, activite, description, siteWeb, telephone, email, gerant, logo } = req.body || {};
+  const { nom, activite, description, siteWeb, telephone, email, gerant, logo, logoBase64 } = req.body || {};
   if (!nom) return res.status(400).json({ error: "nom requis" });
+  let logoUrl = logo ? String(logo).substring(0, 500) : "";
+  if (logoBase64) {
+    try {
+      const r = await uploadEntrepriseLogoToCloudinary(logoBase64);
+      logoUrl = r.secure_url;
+    } catch (e) { return res.status(502).json({ error: "Logo Cloudinary: " + e.message }); }
+  }
   const list = await readEntreprises();
   list.push({
     id: Date.now(),
@@ -4765,7 +4785,7 @@ app.post("/admin/entreprises", adminAuth, async (req, res) => {
     telephone:   telephone   ? String(telephone).substring(0, 50)    : "",
     email:       email       ? String(email).substring(0, 200)       : "",
     gerant:      gerant      ? String(gerant).substring(0, 200)      : "",
-    logo:        logo        ? String(logo).substring(0, 500)        : "",
+    logo:        logoUrl,
     addedAt:     new Date().toISOString()
   });
   await writeEntreprises(list);
@@ -4777,7 +4797,7 @@ app.put("/admin/entreprises/:id", adminAuth, async (req, res) => {
   const list = await readEntreprises();
   const idx = list.findIndex(e => e.id === id);
   if (idx < 0) return res.status(404).json({ error: "Entreprise non trouvée" });
-  const { nom, activite, description, siteWeb, telephone, email, gerant, logo } = req.body || {};
+  const { nom, activite, description, siteWeb, telephone, email, gerant, logo, logoBase64 } = req.body || {};
   function _norm(v, max) { return v == null ? '' : String(v).substring(0, max); }
   if (nom         !== undefined) list[idx].nom         = _norm(nom, 200);
   if (activite    !== undefined) list[idx].activite    = _norm(activite, 200);
@@ -4786,7 +4806,14 @@ app.put("/admin/entreprises/:id", adminAuth, async (req, res) => {
   if (telephone   !== undefined) list[idx].telephone   = _norm(telephone, 50);
   if (email       !== undefined) list[idx].email       = _norm(email, 200);
   if (gerant      !== undefined) list[idx].gerant      = _norm(gerant, 200);
-  if (logo        !== undefined) list[idx].logo        = _norm(logo, 500);
+  if (logoBase64) {
+    try {
+      const r = await uploadEntrepriseLogoToCloudinary(logoBase64);
+      list[idx].logo = r.secure_url;
+    } catch (e) { return res.status(502).json({ error: "Logo Cloudinary: " + e.message }); }
+  } else if (logo !== undefined) {
+    list[idx].logo = _norm(logo, 500);
+  }
   await writeEntreprises(list);
   res.json({ ok: true, entreprises: list });
 });
@@ -4796,6 +4823,29 @@ app.delete("/admin/entreprises/:id", adminAuth, async (req, res) => {
   const list = (await readEntreprises()).filter(e => e.id !== id);
   await writeEntreprises(list);
   res.json({ ok: true, entreprises: list });
+});
+
+// Migre les logos fbcdn.net vers Cloudinary (appelé manuellement depuis l'admin)
+app.post("/admin/entreprises/fix-logos", adminAuth, async (req, res) => {
+  if (!CLOUDINARY_ENABLED) return res.status(503).json({ error: "Cloudinary non configuré sur ce serveur" });
+  const list = await readEntreprises();
+  let fixed = 0, skipped = 0;
+  for (const e of list) {
+    if (!e.logo || !e.logo.includes('fbcdn.net')) continue;
+    try {
+      const resp = await axios.get(e.logo, { responseType: 'arraybuffer', timeout: 10000 });
+      const ct = resp.headers['content-type'] || 'image/jpeg';
+      const base64 = `data:${ct};base64,${Buffer.from(resp.data).toString('base64')}`;
+      const result = await uploadEntrepriseLogoToCloudinary(base64);
+      e.logo = result.secure_url;
+      fixed++;
+    } catch (err) {
+      console.warn(`[fix-logos] skip ${e.nom}:`, err.message);
+      skipped++;
+    }
+  }
+  if (fixed > 0) await writeEntreprises(list);
+  res.json({ ok: true, fixed, skipped });
 });
 
 
