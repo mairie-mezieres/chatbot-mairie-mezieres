@@ -1780,12 +1780,14 @@ Soyez prudents et suivez les consignes de sécurité.
 
 function isSameWeatherAlert(a, b) {
   if (!a || !b) return false;
-  return (
+  const sameType = (
     Number(a.level) === Number(b.level) &&
-    String(a.phenomenon_id) === String(b.phenomenon_id) &&
-    String(a.start || "") === String(b.start || "") &&
-    String(a.end || "") === String(b.end || "")
+    String(a.phenomenon_id) === String(b.phenomenon_id)
   );
+  if (!sameType) return false;
+  // Bloquer la re-notification pendant 12h pour la même alerte
+  const pushedAt = a.pushedAt ? new Date(a.pushedAt).getTime() : 0;
+  return (Date.now() - pushedAt) < 12 * 3600 * 1000;
 }
 
 
@@ -3691,7 +3693,7 @@ app.get("/meteo/alertes/check", async (req, res) => {
       if (force || !isSameWeatherAlert(lastPush, vigilance)) {
         try {
           pushResult = await sendWeatherPush(vigilance);
-          await redisSet("mat:weather:last:push", vigilance);
+          await redisSet("mat:weather:last:push", { ...vigilance, pushedAt: new Date().toISOString() });
         } catch (pe) {
           console.warn("Weather push error:", pe.message);
         }
@@ -4827,22 +4829,31 @@ app.delete("/admin/entreprises/:id", adminAuth, async (req, res) => {
 
 // Migre les logos fbcdn.net vers Cloudinary (appelé manuellement depuis l'admin)
 app.post("/admin/entreprises/fix-logos", adminAuth, async (req, res) => {
-  if (!CLOUDINARY_ENABLED) return res.status(503).json({ error: "Cloudinary non configuré sur ce serveur" });
   const list = await readEntreprises();
   let fixed = 0, skipped = 0;
-  const FB_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Referer': 'https://www.facebook.com/',
-    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-    'Accept-Language': 'fr-FR,fr;q=0.9',
-    'Sec-Fetch-Dest': 'image',
-    'Sec-Fetch-Mode': 'no-cors',
-    'Sec-Fetch-Site': 'cross-site'
-  };
+
   for (const e of list) {
     if (!e.logo || !e.logo.includes('fbcdn.net')) continue;
+
+    // Photo de profil (t39.30808-1) : extraire le pageId → URL Graph API permanente
+    // Format : /{random}_{pageId}_{photoId}_n.jpg
+    const profileMatch = e.logo.match(/\/t39\.30808-1\/\d+_(\d+)_\d+_n\.jpg/);
+    if (profileMatch) {
+      e.logo = `https://graph.facebook.com/${profileMatch[1]}/picture?type=large`;
+      fixed++;
+      continue;
+    }
+
+    // Photo de post (t39.30808-6) : tenter un fetch côté serveur → Cloudinary
+    if (!CLOUDINARY_ENABLED) { skipped++; continue; }
     try {
-      const resp = await axios.get(e.logo, { responseType: 'arraybuffer', timeout: 10000, headers: FB_HEADERS });
+      const resp = await axios.get(e.logo, {
+        responseType: 'arraybuffer', timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Referer': 'https://www.facebook.com/'
+        }
+      });
       const ct = resp.headers['content-type'] || 'image/jpeg';
       const base64 = `data:${ct};base64,${Buffer.from(resp.data).toString('base64')}`;
       const result = await uploadEntrepriseLogoToCloudinary(base64);
@@ -4853,8 +4864,12 @@ app.post("/admin/entreprises/fix-logos", adminAuth, async (req, res) => {
       skipped++;
     }
   }
+
   if (fixed > 0) await writeEntreprises(list);
-  res.json({ ok: true, fixed, skipped, errors: skipped > 0 ? 'Certains logos nécessitent une mise à jour manuelle via le formulaire.' : undefined });
+  res.json({
+    ok: true, fixed, skipped,
+    errors: skipped > 0 ? `${skipped} logo(s) non réparable(s) automatiquement — modifiez-les manuellement via le formulaire (bouton ✏️ Modifier).` : undefined
+  });
 });
 
 
@@ -5164,7 +5179,7 @@ app.get("/cron/meteo", async (req, res) => {
     }
 
     const pushResult = await sendWeatherPush(vigilance);
-    await redisSet("mat:weather:last:push", vigilance);
+    await redisSet("mat:weather:last:push", { ...vigilance, pushedAt: new Date().toISOString() });
 
     res.json({
       ok: true,
