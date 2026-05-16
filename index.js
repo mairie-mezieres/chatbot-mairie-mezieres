@@ -291,7 +291,7 @@ async function writeStats(d)            { await redisSet("mat:stats", d); }
 async function readSignals()            { return (await redisGet("mat:signals")) || []; }
 async function writeSignals(d)          { await redisSet("mat:signals", d); }
 async function readLastWeatherAlert()   { return await redisGet("mat:weather:last"); }
-async function writeLastWeatherAlert(d) { await redisSet("mat:weather:last", d); }
+async function writeLastWeatherAlert(d) { await redisSet("mat:weather:last", { ...d, pushedAt: new Date().toISOString() }); }
 async function readMeteoCache()       { return await redisGet("mat:meteo:cache"); }
 async function writeMeteoCache(data)  { await redisSet("mat:meteo:cache", data); }
 async function readSeenPosts()          { return (await redisGet("mat:seen_posts")) || {}; }
@@ -1720,10 +1720,11 @@ async function resolveFacebookPageId() {
 }
 
 async function sendWeatherPush(vigilance) {
-  const subs = await readSubs();
-  if (!subs.length) return { sent: 0, total: 0 };
-  const LEVEL_ICONS  = { 2: '🟡', 3: '🟠', 4: '🔴' };
+  const allSubs = await readMeteoSubs();
   const level  = Number(vigilance.level || 2);
+  const subs   = allSubs.filter(s => (Number(s.minLevel) || 2) <= level);
+  if (!subs.length) return { sent: 0, total: allSubs.length };
+  const LEVEL_ICONS  = { 2: '🟡', 3: '🟠', 4: '🔴' };
   const color  = vigilance.color_label || 'météo';
   const icon   = LEVEL_ICONS[level] || '⚠️';
   const phenom = vigilance.phenomenon_label || 'Alerte météo';
@@ -1745,8 +1746,8 @@ async function sendWeatherPush(vigilance) {
       if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
     }
   }
-  if (dead.length) await writeSubs(subs.filter(s => !dead.includes(s.endpoint)));
-  console.log(`🌩️ Météo push (vigilance ${color}) → ${sent}/${subs.length} abonnés (${dead.length} expirés purgés)`);
+  if (dead.length) await writeMeteoSubs(allSubs.filter(s => !dead.includes(s.endpoint)));
+  console.log(`🌩️ Météo push (vigilance ${color}, level≥${level}) → ${sent}/${subs.length} filtrés / ${allSubs.length} total (${dead.length} expirés purgés)`);
   await recordPushHistory({ type: 'meteo', title: `Vigilance ${color} — ${phenom}`, sent, total: subs.length, dead: dead.length });
   return { sent, total: subs.length };
 }
@@ -3815,6 +3816,21 @@ app.post("/push/test", subscribeLimiter, async (req, res) => {
 async function readDechetsSubs() { return (await redisGet('mat:subs:dechets')) || []; }
 async function writeDechetsSubs(d) { await redisSet('mat:subs:dechets', d); }
 
+// ── Alertes météo (par abonné, avec niveau minimum) ───────────
+async function readMeteoSubs()  { return (await redisGet('mat:subs:meteo'))  || []; }
+async function writeMeteoSubs(d){ await redisSet('mat:subs:meteo', d); }
+// Migration one-shot : peuple mat:subs:meteo depuis mat:subs si clé absente
+(async () => {
+  try {
+    const existing = await redisGet('mat:subs:meteo');
+    if (!existing) {
+      const global = (await redisGet('mat:subs')) || [];
+      await redisSet('mat:subs:meteo', global.map(s => ({ ...s, minLevel: 2 })));
+      console.log(`📦 Migration mat:subs:meteo → ${global.length} abonnés`);
+    }
+  } catch(e) { console.warn('Migration meteo subs:', e.message); }
+})();
+
 app.post('/push/subscribe/dechets', subscribeLimiter, async (req, res) => {
   const sub = req.body;
   if (!sub || !sub.endpoint) return res.status(400).json({ error: 'Subscription invalide' });
@@ -3832,6 +3848,27 @@ app.post('/push/unsubscribe/dechets', async (req, res) => {
   if (!endpoint) return res.status(400).json({ error: 'Endpoint requis' });
   const subs = (await readDechetsSubs()).filter(s => s.endpoint !== endpoint);
   await writeDechetsSubs(subs);
+  res.json({ success: true });
+});
+
+// ── Alertes météo push ────────────────────────────────────────
+app.post('/push/subscribe/meteo', subscribeLimiter, async (req, res) => {
+  const sub = req.body;
+  if (!sub || !sub.endpoint) return res.status(400).json({ error: 'Subscription invalide' });
+  const minLevel = Number(sub.minLevel) || 2;
+  const subs = await readMeteoSubs();
+  const idx = subs.findIndex(s => s.endpoint === sub.endpoint);
+  if (idx >= 0) subs[idx] = { ...subs[idx], ...sub, minLevel };
+  else subs.push({ ...sub, minLevel });
+  await writeMeteoSubs(subs);
+  console.log(`🌦️ Abonné météo push (level≥${minLevel}, total: ${subs.length})`);
+  res.json({ success: true, total: subs.length });
+});
+
+app.post('/push/unsubscribe/meteo', async (req, res) => {
+  const { endpoint } = req.body || {};
+  if (!endpoint) return res.status(400).json({ error: 'Endpoint requis' });
+  await writeMeteoSubs((await readMeteoSubs()).filter(s => s.endpoint !== endpoint));
   res.json({ success: true });
 });
 
