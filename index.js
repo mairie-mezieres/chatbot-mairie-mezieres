@@ -1780,12 +1780,14 @@ Soyez prudents et suivez les consignes de sécurité.
 
 function isSameWeatherAlert(a, b) {
   if (!a || !b) return false;
-  return (
+  const sameType = (
     Number(a.level) === Number(b.level) &&
-    String(a.phenomenon_id) === String(b.phenomenon_id) &&
-    String(a.start || "") === String(b.start || "") &&
-    String(a.end || "") === String(b.end || "")
+    String(a.phenomenon_id) === String(b.phenomenon_id)
   );
+  if (!sameType) return false;
+  // Bloquer la re-notification pendant 12h pour la même alerte
+  const pushedAt = a.pushedAt ? new Date(a.pushedAt).getTime() : 0;
+  return (Date.now() - pushedAt) < 12 * 3600 * 1000;
 }
 
 
@@ -3691,7 +3693,7 @@ app.get("/meteo/alertes/check", async (req, res) => {
       if (force || !isSameWeatherAlert(lastPush, vigilance)) {
         try {
           pushResult = await sendWeatherPush(vigilance);
-          await redisSet("mat:weather:last:push", vigilance);
+          await redisSet("mat:weather:last:push", { ...vigilance, pushedAt: new Date().toISOString() });
         } catch (pe) {
           console.warn("Weather push error:", pe.message);
         }
@@ -5177,7 +5179,7 @@ app.get("/cron/meteo", async (req, res) => {
     }
 
     const pushResult = await sendWeatherPush(vigilance);
-    await redisSet("mat:weather:last:push", vigilance);
+    await redisSet("mat:weather:last:push", { ...vigilance, pushedAt: new Date().toISOString() });
 
     res.json({
       ok: true,
