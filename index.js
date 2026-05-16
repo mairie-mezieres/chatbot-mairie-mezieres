@@ -3764,6 +3764,14 @@ app.post("/push/subscribe", subscribeLimiter, async (req, res) => {
   res.json({ success:true, total:subs.length });
 });
 
+app.post("/push/status", subscribeLimiter, async (req, res) => {
+  const { endpoint } = req.body || {};
+  if (!endpoint) return res.status(400).json({ error: "Endpoint requis" });
+  const subs = await readSubs();
+  const found = subs.some(s => s.endpoint === endpoint);
+  res.json({ found });
+});
+
 app.post("/push/unsubscribe", async (req, res) => {
   const { endpoint } = req.body || {};
   if (!endpoint) return res.status(400).json({ error:"Endpoint requis" });
