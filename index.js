@@ -291,7 +291,7 @@ async function writeStats(d)            { await redisSet("mat:stats", d); }
 async function readSignals()            { return (await redisGet("mat:signals")) || []; }
 async function writeSignals(d)          { await redisSet("mat:signals", d); }
 async function readLastWeatherAlert()   { return await redisGet("mat:weather:last"); }
-async function writeLastWeatherAlert(d) { await redisSet("mat:weather:last", d); }
+async function writeLastWeatherAlert(d) { await redisSet("mat:weather:last", { ...d, pushedAt: new Date().toISOString() }); }
 async function readMeteoCache()       { return await redisGet("mat:meteo:cache"); }
 async function writeMeteoCache(data)  { await redisSet("mat:meteo:cache", data); }
 async function readSeenPosts()          { return (await redisGet("mat:seen_posts")) || {}; }
