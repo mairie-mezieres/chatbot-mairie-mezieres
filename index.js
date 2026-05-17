@@ -733,21 +733,36 @@ function cleanMarkdown(text) {
 }
 
 async function fetchUrl(url) {
-  try {
-    const res = await axios.get(url, {
-      timeout: 10000,
-      responseType: "arraybuffer",
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; MATBot/3.0)" }
-    });
-    const ct = res.headers["content-type"] || "";
-    if (ct.includes("text")) {
-      return { text: cleanHtml(Buffer.from(res.data).toString("utf-8")), binary: null };
+  // Retry exponentiel court sur erreurs transitoires (timeout, ECONNRESET,
+  // ECONNREFUSED, 5xx, EAI_AGAIN). Pas de retry sur 4xx ou autres erreurs
+  // métier : elles ne se résoudront pas en réessayant. Max 2 retries
+  // (3 tentatives au total) — au-delà, le cache stale fait office de
+  // dégradation gracieuse.
+  const RETRIABLE_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ECONNABORTED"]);
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await axios.get(url, {
+        timeout: 10000,
+        responseType: "arraybuffer",
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; MATBot/3.0)" }
+      });
+      const ct = res.headers["content-type"] || "";
+      if (ct.includes("text")) {
+        return { text: cleanHtml(Buffer.from(res.data).toString("utf-8")), binary: null };
+      }
+      return { text: null, binary: Buffer.from(res.data).toString("base64") };
+    } catch(e) {
+      lastErr = e;
+      const code = e && e.code;
+      const status = e && e.response && e.response.status;
+      const retriable = RETRIABLE_CODES.has(code) || (status && status >= 500);
+      if (!retriable || attempt === 2) break;
+      await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt))); // 500 ms, 1 s
     }
-    return { text: null, binary: Buffer.from(res.data).toString("base64") };
-  } catch(e) {
-    console.warn(`⚠️ ${url}: ${e.message}`);
-    return { text:null, binary:null };
   }
+  console.warn(`⚠️ ${url}: ${lastErr && lastErr.message || 'unknown'}`);
+  return { text: null, binary: null };
 }
 
 async function refreshRemiCache() {
@@ -3309,22 +3324,90 @@ function _detectInjection(text) {
   return MEL_INJECTION_PATTERNS.some(p => p.test(text));
 }
 
+// Compteur journalier atomique côté Redis : un INCR par requête, TTL 26 h
+// (marge de 5 min sur le rollover UTC). Une clé par device et par jour →
+// pas de risque de fuite sur Redis (auto-expiration).
+function _melCountKey(deviceId) {
+  const today = new Date().toISOString().slice(0, 10);
+  return `mat:mel:count:${today}:${deviceId}`;
+}
+
+async function _getMelCount(deviceId) {
+  if (!REDIS_URL) return _melQuotas && _melQuotas[deviceId] ? _melQuotas[deviceId].count : 0;
+  try {
+    const key = _melCountKey(deviceId);
+    const r = await axios.get(
+      `${REDIS_URL}/get/${encodeURIComponent(key)}`,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 5000 }
+    );
+    const val = r.data && r.data.result;
+    if (val === null || val === undefined) return 0;
+    return parseInt(val, 10) || 0;
+  } catch(e) {
+    if (e.response?.status === 429) _setRedis429();
+    // Fallback mémoire : la limite reste indicative jusqu'au retour de Redis.
+    return _melQuotas && _melQuotas[deviceId] ? _melQuotas[deviceId].count : 0;
+  }
+}
+
+async function _incrMelCount(deviceId) {
+  // Tente l'INCR atomique côté Redis. Si succès, miroir en mémoire pour
+  // observabilité (admin dashboard) ; si échec, incrémente le compteur
+  // mémoire en fallback (la limite redevient contournable jusqu'au retour
+  // de Redis, comportement nominal pré-J3.f).
+  const key = _melCountKey(deviceId);
+  const today = new Date().toISOString().slice(0, 10);
+  let count = null;
+  if (REDIS_URL) {
+    try {
+      const r = await axios.get(
+        `${REDIS_URL}/incr/${encodeURIComponent(key)}`,
+        { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 5000 }
+      );
+      count = (r.data && typeof r.data.result === "number") ? r.data.result : null;
+      if (count !== null) {
+        // EXPIRE awaited à CHAQUE hit (pas seulement count===1). Garantit
+        // que le TTL est posé même si l'EXPIRE du 1er hit avait échoué
+        // sur un hiccup transient — sans cela, la clé resterait sans TTL
+        // et accumulerait des compteurs quotidiens orphelins indéfiniment.
+        // Idempotent côté Redis (EXPIRE reset le timer à chaque appel).
+        // Coût négligeable : ≤MEL_DAILY_LIMIT EXPIRE/jour/device.
+        try {
+          await axios.get(
+            `${REDIS_URL}/expire/${encodeURIComponent(key)}/${26 * 3600}`,
+            { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 5000 }
+          );
+        } catch(_) { /* on retentera au prochain hit */ }
+      }
+    } catch(e) {
+      if (e.response?.status === 429) _setRedis429();
+      count = null;
+    }
+  }
+  await _loadMelQuotas();
+  if (!_melQuotas[deviceId] || _melQuotas[deviceId].day !== today)
+    _melQuotas[deviceId] = { day: today, count: 0, blocked: false };
+  if (count !== null) {
+    _melQuotas[deviceId].count = count;
+  } else {
+    _melQuotas[deviceId].count++;
+    count = _melQuotas[deviceId].count;
+  }
+  _melQuotasDirty = true;
+  return count;
+}
+
 async function _checkMelAccess(deviceId) {
   await _loadMelQuotas();
   const r = _melQuotas[deviceId];
-  if (!r) return { ok: true, count: 0 };
-  if (r.blocked) return { ok: false, reason: "blocked" };
-  if (r.count >= MEL_DAILY_LIMIT) return { ok: false, reason: "quota" };
-  return { ok: true, count: r.count };
+  if (r && r.blocked) return { ok: false, reason: "blocked" };
+  const count = await _getMelCount(deviceId);
+  if (count >= MEL_DAILY_LIMIT) return { ok: false, reason: "quota" };
+  return { ok: true, count };
 }
 
 async function _recordMelUse(deviceId) {
-  await _loadMelQuotas();
-  const today = new Date().toISOString().slice(0, 10);
-  if (!_melQuotas[deviceId] || _melQuotas[deviceId].day !== today)
-    _melQuotas[deviceId] = { day: today, count: 0, blocked: false };
-  _melQuotas[deviceId].count++;
-  _melQuotasDirty = true;
+  await _incrMelCount(deviceId);
 }
 
 async function _blockMelDevice(deviceId, reason) {
@@ -5494,7 +5577,7 @@ app.get('/events-locaux', async (req, res) => {
   return res.json({ clientSide: true, key: OPENAGENDA_KEY, agendas: OA_AGENDA_UIDS });
 });
 
-app.listen(PORT, async () => {
+const _server = app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
   console.log(`📰 Facebook   : feed only`);
@@ -5584,3 +5667,42 @@ setInterval(async () => {
     await _sendDechetsReminder();
   } catch(e) { console.warn('Dechets reminder:', e.message); }
 }, 5 * 60 * 1000);
+
+// ── Graceful shutdown ─────────────────────────────────────────
+// Render envoie SIGTERM ~30 s avant kill -9. On en profite pour :
+//  - arrêter d'accepter de nouvelles connexions (server.close)
+//  - flusher les caches stats dirty restés en mémoire
+//  - laisser les requêtes en cours se terminer (timeout 25 s safety)
+let _shuttingDown = false;
+async function _gracefulShutdown(sig) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`🔻 ${sig} reçu — fermeture gracieuse…`);
+  try {
+    if (_statsDirty && _statsCache !== null) {
+      await redisSet("mat:stats", _statsCache);
+      _statsDirty = false;
+      console.log("   ✓ mat:stats flushé");
+    }
+    if (_iaStatsDirty && _iaStatsCache !== null) {
+      await redisSet("mat:ia:stats", _iaStatsCache);
+      _iaStatsDirty = false;
+      console.log("   ✓ mat:ia:stats flushé");
+    }
+    if (_melQuotasDirty && _melQuotas !== null) {
+      await redisSet("mat:mel:quotas", _melQuotas);
+      _melQuotasDirty = false;
+      console.log("   ✓ mat:mel:quotas flushé");
+    }
+  } catch (e) {
+    console.warn("   ⚠️ flush shutdown:", e.message);
+  }
+  if (_server && typeof _server.close === "function") {
+    _server.close(() => process.exit(0));
+    setTimeout(() => { console.warn("   ⏰ timeout 25 s — exit forcé"); process.exit(1); }, 25000).unref();
+  } else {
+    process.exit(0);
+  }
+}
+process.on("SIGTERM", () => _gracefulShutdown("SIGTERM"));
+process.on("SIGINT",  () => _gracefulShutdown("SIGINT"));
