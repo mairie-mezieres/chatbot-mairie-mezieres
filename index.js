@@ -3846,26 +3846,35 @@ async function writeMeteoSubs(d){ await redisSet('mat:subs:meteo', d); }
 // autre canal (ex: météo encore vivante alors qu'actus a déjà nettoyé).
 // Best-effort : toute erreur de purge est absorbée pour ne jamais bloquer
 // le caller (le cleanup local au site appelant reste l'opération autoritaire).
-async function purgeEndpointsEverywhere(endpoints) {
-  if (!Array.isArray(endpoints) || !endpoints.length) return;
+// Les appels sont sérialisés via _purgeChain pour éviter que deux purges
+// concurrentes (avec endpoints différents) se marchent dessus en
+// read-filter-write last-wins, ce qui ré-introduirait l'un des endpoints
+// que l'autre vient de supprimer.
+let _purgeChain = Promise.resolve();
+function purgeEndpointsEverywhere(endpoints) {
+  if (!Array.isArray(endpoints) || !endpoints.length) return Promise.resolve();
   const deadSet = new Set(endpoints);
-  const stores = [
-    ['mat:subs',         readSubs,         writeSubs],
-    ['mat:subs:meteo',   readMeteoSubs,    writeMeteoSubs],
-    ['mat:subs:dechets', readDechetsSubs,  writeDechetsSubs]
-  ];
-  for (const [name, read, write] of stores) {
-    try {
-      const all = await read();
-      const kept = all.filter(s => !deadSet.has(s.endpoint));
-      if (kept.length !== all.length) {
-        await write(kept);
-        console.log(`🧹 ${name}: purgé ${all.length - kept.length} endpoint(s) expiré(s)`);
+  const work = async () => {
+    const stores = [
+      ['mat:subs',         readSubs,         writeSubs],
+      ['mat:subs:meteo',   readMeteoSubs,    writeMeteoSubs],
+      ['mat:subs:dechets', readDechetsSubs,  writeDechetsSubs]
+    ];
+    for (const [name, read, write] of stores) {
+      try {
+        const all = await read();
+        const kept = all.filter(s => !deadSet.has(s.endpoint));
+        if (kept.length !== all.length) {
+          await write(kept);
+          console.log(`🧹 ${name}: purgé ${all.length - kept.length} endpoint(s) expiré(s)`);
+        }
+      } catch (e) {
+        console.warn(`purgeEndpointsEverywhere(${name}):`, e.message);
       }
-    } catch (e) {
-      console.warn(`purgeEndpointsEverywhere(${name}):`, e.message);
     }
-  }
+  };
+  _purgeChain = _purgeChain.then(work, work);
+  return _purgeChain;
 }
 
 // Migration one-shot : peuple mat:subs:meteo depuis mat:subs si clé absente
