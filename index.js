@@ -16,7 +16,22 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   next();
 });
-app.use(express.json({ limit: "10mb", verify: (req, res, buf) => { req.rawBody = buf; } }));
+// Body parsing : limite stricte par défaut (256 KB) pour les routes JSON
+// usuelles (/mel, /push/*, /stats/*, /webhook, etc.). Override 6 MB sur les
+// routes qui transportent des photos en base64 (signalement citoyen, ajout
+// d'actu admin, création/édition d'entreprise admin).
+function _isLargeBodyRoute(p) {
+  if (p === "/signal") return true;
+  if (p === "/admin/actus/add") return true;
+  if (p === "/admin/entreprises" || p.startsWith("/admin/entreprises/")) return true;
+  return false;
+}
+const _jsonSmall = express.json({ limit: "256kb", verify: (req, res, buf) => { req.rawBody = buf; } });
+const _jsonLarge = express.json({ limit: "6mb",   verify: (req, res, buf) => { req.rawBody = buf; } });
+app.use((req, res, next) => {
+  if (_isLargeBodyRoute(req.path)) return _jsonLarge(req, res, next);
+  return _jsonSmall(req, res, next);
+});
 app.set('trust proxy', 1); // Render est derrière un reverse proxy
 
 // ─── Variables d'environnement ────────────────────────────────
