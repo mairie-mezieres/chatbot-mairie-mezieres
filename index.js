@@ -2678,24 +2678,39 @@ app.get("/admin/push/history", adminAuth, async (req, res) => {
 });
 
 // ── Cron : envoi des notifications push programmées (toutes les minutes) ──
+const PUSH_SCHEDULED_MAX_RETRIES = 3;
 setInterval(async () => {
   try {
     const now = Date.now();
     const scheduled = (await redisGet('mat:push:scheduled')) || [];
-    const due = scheduled.filter(n => !n.sent && new Date(n.scheduledAt).getTime() <= now);
+    const due = scheduled.filter(n => !n.sent && !n.failed && new Date(n.scheduledAt).getTime() <= now);
     if (!due.length) return;
     for (const notif of due) {
+      // Marquer "envoyé" AVANT l'envoi pour ne pas retenter en boucle si
+      // sendActuPush (ou readSubs sous-jacent) lance. Restauré si l'envoi
+      // échoue, et plafonné par PUSH_SCHEDULED_MAX_RETRIES pour éviter les
+      // notifications fantômes en cas de hiccup persistant.
+      notif.sent = true;
+      notif.sentAt = new Date().toISOString();
       try {
         await sendActuPush(notif.title, notif.body, notif.photoUrl, notif.actuId);
-        notif.sent = true;
-        notif.sentAt = new Date().toISOString();
         console.log(`🔔 Push programmé envoyé : "${notif.title}"`);
       } catch (e) {
-        console.warn('Push programmé erreur:', e.message);
+        notif.sent = false;
+        notif.sentAt = null;
+        notif.retries = (notif.retries || 0) + 1;
+        if (notif.retries >= PUSH_SCHEDULED_MAX_RETRIES) {
+          notif.failed = true;
+          notif.failedAt = new Date().toISOString();
+          notif.failedReason = String((e && e.message) || e).slice(0, 200);
+          console.warn(`Push programmé abandonné après ${notif.retries} tentatives: "${notif.title}" — ${notif.failedReason}`);
+        } else {
+          console.warn(`Push programmé erreur (tentative ${notif.retries}/${PUSH_SCHEDULED_MAX_RETRIES}):`, e.message);
+        }
       }
     }
     const cutoff = now - 7 * 24 * 60 * 60 * 1000;
-    const remaining = scheduled.filter(n => !n.sent || new Date(n.scheduledAt).getTime() > cutoff);
+    const remaining = scheduled.filter(n => (!n.sent && !n.failed) || new Date(n.scheduledAt).getTime() > cutoff);
     await redisSet('mat:push:scheduled', remaining);
   } catch (e) { console.warn('Cron push schedulé:', e.message); }
 }, 60 * 1000);
