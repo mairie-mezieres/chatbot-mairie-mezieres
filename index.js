@@ -2035,7 +2035,7 @@ const signalLimiter = rateLimit({
   message: { error: "Trop de signalements, patientez avant de réessayer." }
 });
 const subscribeLimiter = rateLimit({
-  windowMs: 60 * 1000, max: 5,
+  windowMs: 60 * 1000, max: 20,
   standardHeaders: true, legacyHeaders: false,
   message: { error: "Trop de tentatives d'abonnement." }
 });
