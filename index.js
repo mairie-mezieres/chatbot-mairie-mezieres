@@ -733,21 +733,36 @@ function cleanMarkdown(text) {
 }
 
 async function fetchUrl(url) {
-  try {
-    const res = await axios.get(url, {
-      timeout: 10000,
-      responseType: "arraybuffer",
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; MATBot/3.0)" }
-    });
-    const ct = res.headers["content-type"] || "";
-    if (ct.includes("text")) {
-      return { text: cleanHtml(Buffer.from(res.data).toString("utf-8")), binary: null };
+  // Retry exponentiel court sur erreurs transitoires (timeout, ECONNRESET,
+  // ECONNREFUSED, 5xx, EAI_AGAIN). Pas de retry sur 4xx ou autres erreurs
+  // métier : elles ne se résoudront pas en réessayant. Max 2 retries
+  // (3 tentatives au total) — au-delà, le cache stale fait office de
+  // dégradation gracieuse.
+  const RETRIABLE_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ECONNABORTED"]);
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await axios.get(url, {
+        timeout: 10000,
+        responseType: "arraybuffer",
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; MATBot/3.0)" }
+      });
+      const ct = res.headers["content-type"] || "";
+      if (ct.includes("text")) {
+        return { text: cleanHtml(Buffer.from(res.data).toString("utf-8")), binary: null };
+      }
+      return { text: null, binary: Buffer.from(res.data).toString("base64") };
+    } catch(e) {
+      lastErr = e;
+      const code = e && e.code;
+      const status = e && e.response && e.response.status;
+      const retriable = RETRIABLE_CODES.has(code) || (status && status >= 500);
+      if (!retriable || attempt === 2) break;
+      await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt))); // 500 ms, 1 s
     }
-    return { text: null, binary: Buffer.from(res.data).toString("base64") };
-  } catch(e) {
-    console.warn(`⚠️ ${url}: ${e.message}`);
-    return { text:null, binary:null };
   }
+  console.warn(`⚠️ ${url}: ${lastErr && lastErr.message || 'unknown'}`);
+  return { text: null, binary: null };
 }
 
 async function refreshRemiCache() {
