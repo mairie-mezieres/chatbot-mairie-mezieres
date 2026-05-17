@@ -3365,12 +3365,19 @@ async function _incrMelCount(deviceId) {
         { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 5000 }
       );
       count = (r.data && typeof r.data.result === "number") ? r.data.result : null;
-      if (count === 1) {
-        // 1er hit du jour : poser le TTL (idempotent si déjà posé).
-        axios.get(
-          `${REDIS_URL}/expire/${encodeURIComponent(key)}/${26 * 3600}`,
-          { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 5000 }
-        ).catch(() => {});
+      if (count !== null) {
+        // EXPIRE awaited à CHAQUE hit (pas seulement count===1). Garantit
+        // que le TTL est posé même si l'EXPIRE du 1er hit avait échoué
+        // sur un hiccup transient — sans cela, la clé resterait sans TTL
+        // et accumulerait des compteurs quotidiens orphelins indéfiniment.
+        // Idempotent côté Redis (EXPIRE reset le timer à chaque appel).
+        // Coût négligeable : ≤MEL_DAILY_LIMIT EXPIRE/jour/device.
+        try {
+          await axios.get(
+            `${REDIS_URL}/expire/${encodeURIComponent(key)}/${26 * 3600}`,
+            { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 5000 }
+          );
+        } catch(_) { /* on retentera au prochain hit */ }
       }
     } catch(e) {
       if (e.response?.status === 429) _setRedis429();
