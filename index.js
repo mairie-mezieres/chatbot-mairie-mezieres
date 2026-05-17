@@ -1103,13 +1103,17 @@ function extractDepartmentVigilance(raw, deptCode = "45") {
     let end = null;
 
     if (Array.isArray(main.timelaps_items) && main.timelaps_items.length) {
+      // On filtre les timelaps : bonne couleur ET dont l'end_time n'est pas
+      // encore passé. Sans cette deuxième condition, une alerte qui finissait
+      // à 19h restait retournée jusqu'à minuit (fin de la période MF), parce
+      // que le filtre extérieur (begin/end_validity_time) se base sur la
+      // période, pas sur le phénomène.
       const active = main.timelaps_items
-        .filter(t => Number(t.color_id || 1) >= color)
+        .filter(t => Number(t.color_id || 1) >= color && new Date(t.end_time || 0).getTime() > now)
         .sort((a, b) => new Date(a.begin_time) - new Date(b.begin_time));
-      if (active.length) {
-        start = active[0].begin_time || null;
-        end   = active[active.length - 1].end_time || null;
-      }
+      if (!active.length) continue; // tous les timelaps du phénomène sont terminés
+      start = active[0].begin_time || null;
+      end   = active[active.length - 1].end_time || null;
     }
 
     best = {
