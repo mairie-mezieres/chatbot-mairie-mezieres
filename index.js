@@ -5489,7 +5489,7 @@ app.get('/events-locaux', async (req, res) => {
   return res.json({ clientSide: true, key: OPENAGENDA_KEY, agendas: OA_AGENDA_UIDS });
 });
 
-app.listen(PORT, async () => {
+const _server = app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
   console.log(`📱 PWA MEL    : /mel`);
   console.log(`📰 Facebook   : feed only`);
@@ -5579,3 +5579,42 @@ setInterval(async () => {
     await _sendDechetsReminder();
   } catch(e) { console.warn('Dechets reminder:', e.message); }
 }, 5 * 60 * 1000);
+
+// ── Graceful shutdown ─────────────────────────────────────────
+// Render envoie SIGTERM ~30 s avant kill -9. On en profite pour :
+//  - arrêter d'accepter de nouvelles connexions (server.close)
+//  - flusher les caches stats dirty restés en mémoire
+//  - laisser les requêtes en cours se terminer (timeout 25 s safety)
+let _shuttingDown = false;
+async function _gracefulShutdown(sig) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`🔻 ${sig} reçu — fermeture gracieuse…`);
+  try {
+    if (_statsDirty && _statsCache !== null) {
+      await redisSet("mat:stats", _statsCache);
+      _statsDirty = false;
+      console.log("   ✓ mat:stats flushé");
+    }
+    if (_iaStatsDirty && _iaStatsCache !== null) {
+      await redisSet("mat:ia:stats", _iaStatsCache);
+      _iaStatsDirty = false;
+      console.log("   ✓ mat:ia:stats flushé");
+    }
+    if (_melQuotasDirty && _melQuotas !== null) {
+      await redisSet("mat:mel:quotas", _melQuotas);
+      _melQuotasDirty = false;
+      console.log("   ✓ mat:mel:quotas flushé");
+    }
+  } catch (e) {
+    console.warn("   ⚠️ flush shutdown:", e.message);
+  }
+  if (_server && typeof _server.close === "function") {
+    _server.close(() => process.exit(0));
+    setTimeout(() => { console.warn("   ⏰ timeout 25 s — exit forcé"); process.exit(1); }, 25000).unref();
+  } else {
+    process.exit(0);
+  }
+}
+process.on("SIGTERM", () => _gracefulShutdown("SIGTERM"));
+process.on("SIGINT",  () => _gracefulShutdown("SIGINT"));
