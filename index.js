@@ -3319,22 +3319,83 @@ function _detectInjection(text) {
   return MEL_INJECTION_PATTERNS.some(p => p.test(text));
 }
 
+// Compteur journalier atomique côté Redis : un INCR par requête, TTL 26 h
+// (marge de 5 min sur le rollover UTC). Une clé par device et par jour →
+// pas de risque de fuite sur Redis (auto-expiration).
+function _melCountKey(deviceId) {
+  const today = new Date().toISOString().slice(0, 10);
+  return `mat:mel:count:${today}:${deviceId}`;
+}
+
+async function _getMelCount(deviceId) {
+  if (!REDIS_URL) return _melQuotas && _melQuotas[deviceId] ? _melQuotas[deviceId].count : 0;
+  try {
+    const key = _melCountKey(deviceId);
+    const r = await axios.get(
+      `${REDIS_URL}/get/${encodeURIComponent(key)}`,
+      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 5000 }
+    );
+    const val = r.data && r.data.result;
+    if (val === null || val === undefined) return 0;
+    return parseInt(val, 10) || 0;
+  } catch(e) {
+    if (e.response?.status === 429) _setRedis429();
+    // Fallback mémoire : la limite reste indicative jusqu'au retour de Redis.
+    return _melQuotas && _melQuotas[deviceId] ? _melQuotas[deviceId].count : 0;
+  }
+}
+
+async function _incrMelCount(deviceId) {
+  // Tente l'INCR atomique côté Redis. Si succès, miroir en mémoire pour
+  // observabilité (admin dashboard) ; si échec, incrémente le compteur
+  // mémoire en fallback (la limite redevient contournable jusqu'au retour
+  // de Redis, comportement nominal pré-J3.f).
+  const key = _melCountKey(deviceId);
+  const today = new Date().toISOString().slice(0, 10);
+  let count = null;
+  if (REDIS_URL) {
+    try {
+      const r = await axios.get(
+        `${REDIS_URL}/incr/${encodeURIComponent(key)}`,
+        { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 5000 }
+      );
+      count = (r.data && typeof r.data.result === "number") ? r.data.result : null;
+      if (count === 1) {
+        // 1er hit du jour : poser le TTL (idempotent si déjà posé).
+        axios.get(
+          `${REDIS_URL}/expire/${encodeURIComponent(key)}/${26 * 3600}`,
+          { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 5000 }
+        ).catch(() => {});
+      }
+    } catch(e) {
+      if (e.response?.status === 429) _setRedis429();
+      count = null;
+    }
+  }
+  await _loadMelQuotas();
+  if (!_melQuotas[deviceId] || _melQuotas[deviceId].day !== today)
+    _melQuotas[deviceId] = { day: today, count: 0, blocked: false };
+  if (count !== null) {
+    _melQuotas[deviceId].count = count;
+  } else {
+    _melQuotas[deviceId].count++;
+    count = _melQuotas[deviceId].count;
+  }
+  _melQuotasDirty = true;
+  return count;
+}
+
 async function _checkMelAccess(deviceId) {
   await _loadMelQuotas();
   const r = _melQuotas[deviceId];
-  if (!r) return { ok: true, count: 0 };
-  if (r.blocked) return { ok: false, reason: "blocked" };
-  if (r.count >= MEL_DAILY_LIMIT) return { ok: false, reason: "quota" };
-  return { ok: true, count: r.count };
+  if (r && r.blocked) return { ok: false, reason: "blocked" };
+  const count = await _getMelCount(deviceId);
+  if (count >= MEL_DAILY_LIMIT) return { ok: false, reason: "quota" };
+  return { ok: true, count };
 }
 
 async function _recordMelUse(deviceId) {
-  await _loadMelQuotas();
-  const today = new Date().toISOString().slice(0, 10);
-  if (!_melQuotas[deviceId] || _melQuotas[deviceId].day !== today)
-    _melQuotas[deviceId] = { day: today, count: 0, blocked: false };
-  _melQuotas[deviceId].count++;
-  _melQuotasDirty = true;
+  await _incrMelCount(deviceId);
 }
 
 async function _blockMelDevice(deviceId, reason) {
