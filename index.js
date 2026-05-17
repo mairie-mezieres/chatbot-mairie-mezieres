@@ -1746,7 +1746,10 @@ async function sendWeatherPush(vigilance) {
       if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
     }
   }
-  if (dead.length) await writeMeteoSubs(allSubs.filter(s => !dead.includes(s.endpoint)));
+  if (dead.length) {
+    await writeMeteoSubs(allSubs.filter(s => !dead.includes(s.endpoint)));
+    purgeEndpointsEverywhere(dead).catch(() => {});
+  }
   console.log(`🌩️ Météo push (vigilance ${color}, level≥${level}) → ${sent}/${subs.length} filtrés / ${allSubs.length} total (${dead.length} expirés purgés)`);
   await recordPushHistory({ type: 'meteo', title: `Vigilance ${color} — ${phenom}`, sent, total: subs.length, dead: dead.length });
   return { sent, total: subs.length };
@@ -2678,24 +2681,39 @@ app.get("/admin/push/history", adminAuth, async (req, res) => {
 });
 
 // ── Cron : envoi des notifications push programmées (toutes les minutes) ──
+const PUSH_SCHEDULED_MAX_RETRIES = 3;
 setInterval(async () => {
   try {
     const now = Date.now();
     const scheduled = (await redisGet('mat:push:scheduled')) || [];
-    const due = scheduled.filter(n => !n.sent && new Date(n.scheduledAt).getTime() <= now);
+    const due = scheduled.filter(n => !n.sent && !n.failed && new Date(n.scheduledAt).getTime() <= now);
     if (!due.length) return;
     for (const notif of due) {
+      // Marquer "envoyé" AVANT l'envoi pour ne pas retenter en boucle si
+      // sendActuPush (ou readSubs sous-jacent) lance. Restauré si l'envoi
+      // échoue, et plafonné par PUSH_SCHEDULED_MAX_RETRIES pour éviter les
+      // notifications fantômes en cas de hiccup persistant.
+      notif.sent = true;
+      notif.sentAt = new Date().toISOString();
       try {
         await sendActuPush(notif.title, notif.body, notif.photoUrl, notif.actuId);
-        notif.sent = true;
-        notif.sentAt = new Date().toISOString();
         console.log(`🔔 Push programmé envoyé : "${notif.title}"`);
       } catch (e) {
-        console.warn('Push programmé erreur:', e.message);
+        notif.sent = false;
+        notif.sentAt = null;
+        notif.retries = (notif.retries || 0) + 1;
+        if (notif.retries >= PUSH_SCHEDULED_MAX_RETRIES) {
+          notif.failed = true;
+          notif.failedAt = new Date().toISOString();
+          notif.failedReason = String((e && e.message) || e).slice(0, 200);
+          console.warn(`Push programmé abandonné après ${notif.retries} tentatives: "${notif.title}" — ${notif.failedReason}`);
+        } else {
+          console.warn(`Push programmé erreur (tentative ${notif.retries}/${PUSH_SCHEDULED_MAX_RETRIES}):`, e.message);
+        }
       }
     }
     const cutoff = now - 7 * 24 * 60 * 60 * 1000;
-    const remaining = scheduled.filter(n => !n.sent || new Date(n.scheduledAt).getTime() > cutoff);
+    const remaining = scheduled.filter(n => (!n.sent && !n.failed) || new Date(n.scheduledAt).getTime() > cutoff);
     await redisSet('mat:push:scheduled', remaining);
   } catch (e) { console.warn('Cron push schedulé:', e.message); }
 }, 60 * 1000);
@@ -3125,6 +3143,7 @@ async function sendActuPush(title, description, photoUrl, actuId) {
   if (dead.length) {
     const alive = subs.filter(s => !dead.includes(s.endpoint));
     await writeSubs(alive);
+    purgeEndpointsEverywhere(dead).catch(() => {});
   }
   await recordPushHistory({ type: 'actu', title: (title || '').substring(0, 80), sent, total: subs.length, dead: dead.length });
   return { sent, failed, total: subs.length };
@@ -3806,6 +3825,7 @@ app.post("/push/test", subscribeLimiter, async (req, res) => {
   } catch(e) {
     if (e.statusCode === 410 || e.statusCode === 404) {
       await writeSubs(subs.filter(s => s.endpoint !== endpoint));
+      purgeEndpointsEverywhere([endpoint]).catch(() => {});
       return res.status(410).json({ error: "Abonnement expiré — réactivez les notifications" });
     }
     res.status(500).json({ error: "Échec d'envoi: " + (e.message || 'inconnue') });
@@ -3819,6 +3839,44 @@ async function writeDechetsSubs(d) { await redisSet('mat:subs:dechets', d); }
 // ── Alertes météo (par abonné, avec niveau minimum) ───────────
 async function readMeteoSubs()  { return (await redisGet('mat:subs:meteo'))  || []; }
 async function writeMeteoSubs(d){ await redisSet('mat:subs:meteo', d); }
+
+// Purge un ou plusieurs endpoints de l'ensemble des stores de subscriptions
+// push (mat:subs, mat:subs:meteo, mat:subs:dechets). Appelée après détection
+// d'erreurs 410/404 pour éviter qu'un endpoint expiré soit re-tenté via un
+// autre canal (ex: météo encore vivante alors qu'actus a déjà nettoyé).
+// Best-effort : toute erreur de purge est absorbée pour ne jamais bloquer
+// le caller (le cleanup local au site appelant reste l'opération autoritaire).
+// Les appels sont sérialisés via _purgeChain pour éviter que deux purges
+// concurrentes (avec endpoints différents) se marchent dessus en
+// read-filter-write last-wins, ce qui ré-introduirait l'un des endpoints
+// que l'autre vient de supprimer.
+let _purgeChain = Promise.resolve();
+function purgeEndpointsEverywhere(endpoints) {
+  if (!Array.isArray(endpoints) || !endpoints.length) return Promise.resolve();
+  const deadSet = new Set(endpoints);
+  const work = async () => {
+    const stores = [
+      ['mat:subs',         readSubs,         writeSubs],
+      ['mat:subs:meteo',   readMeteoSubs,    writeMeteoSubs],
+      ['mat:subs:dechets', readDechetsSubs,  writeDechetsSubs]
+    ];
+    for (const [name, read, write] of stores) {
+      try {
+        const all = await read();
+        const kept = all.filter(s => !deadSet.has(s.endpoint));
+        if (kept.length !== all.length) {
+          await write(kept);
+          console.log(`🧹 ${name}: purgé ${all.length - kept.length} endpoint(s) expiré(s)`);
+        }
+      } catch (e) {
+        console.warn(`purgeEndpointsEverywhere(${name}):`, e.message);
+      }
+    }
+  };
+  _purgeChain = _purgeChain.then(work, work);
+  return _purgeChain;
+}
+
 // Migration one-shot : peuple mat:subs:meteo depuis mat:subs si clé absente
 (async () => {
   try {
@@ -5473,7 +5531,10 @@ async function _sendDechetsReminder() {
     try { await webpush.sendNotification(sub, payload); }
     catch(e) { if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint); }
   }
-  if (dead.length) await writeDechetsSubs(subs.filter(s => !dead.includes(s.endpoint)));
+  if (dead.length) {
+    await writeDechetsSubs(subs.filter(s => !dead.includes(s.endpoint)));
+    purgeEndpointsEverywhere(dead).catch(() => {});
+  }
   console.log(`🗑️ Rappel déchets (${type}) → ${subs.length} abonnés`);
 }
 
