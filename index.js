@@ -4979,7 +4979,7 @@ async function sendDailyStatsEmail() {
 
   // Questions MEL du jour
   const melQRaw = await redisLRange(`mat:mel:questions:${today}`, 0, -1).catch(() => []);
-  const melQuestions = melQRaw.map(s => { try { return JSON.parse(s); } catch { return { q: s, cat: '' }; } });
+  const melQuestions = melQRaw.map(s => typeof s === 'object' ? s : (() => { try { return JSON.parse(s); } catch { return { q: String(s), cat: '' }; } })());
 
   // Signalements / idées en attente
   const pendingSignals = signals.filter(s => !s.status || s.status === 'pending' || s.status === 'new');
@@ -5056,7 +5056,7 @@ ${settings.melUsageStatsEnabled !== false ? `<div class="card">
     Object.entries(iaCatsToday).sort(([,a],[,b])=>b-a).map(([k,v])=>`<tr><td style="padding:3px 8px">${IA_LABELS[k]||k}</td><td style="padding:3px 8px;font-weight:700;text-align:right">${v}</td></tr>`).join('')
   }</table></div>` : ''}
   ${melLogs.length > 0 ? `<div style="margin-top:12px"><strong style="font-size:0.8rem;color:#2d6a4f">Questions du jour (${melLogs.length}) :</strong><div style="margin-top:6px;max-height:200px;overflow:auto">${
-    melLogs.map(q => { try { const o = JSON.parse(q); return `<div class="q">${o.q || q}</div>`; } catch(e){ return `<div class="q">${q}</div>`; } }).join('')
+    melLogs.map(q => { const txt = typeof q === 'object' ? (q.q || '') : String(q); return `<div class="q">${txt.replace(/</g,'&lt;')}</div>`; }).join('')
   }</div></div>` : ''}
 </div>` : ''}
 
