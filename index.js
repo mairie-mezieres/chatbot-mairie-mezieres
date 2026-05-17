@@ -4768,7 +4768,7 @@ app.get("/", (req, res) => {
     uptime:  Math.floor(process.uptime()) + "s",
     routes: [
       "/webhook","/mel","/signal","/signalements","/actus","/push/subscribe",
-      "/push/unsubscribe","/refresh","/calendar","/bus",
+      "/push/unsubscribe",
       "/meteo/commune","/meteo/vigilance","/meteo/alertes/check"
     ],
   });
@@ -4789,15 +4789,10 @@ app.get("/status", async (req, res) => {
     signalements: signals.length,
     routes: [
       "/webhook","/mel","/signal","/signalements","/actus","/push/subscribe",
-      "/push/unsubscribe","/refresh","/calendar","/bus",
+      "/push/unsubscribe",
       "/meteo/commune","/meteo/vigilance","/meteo/alertes/check"
     ],
   });
-});
-
-app.get("/refresh", async (req, res) => {
-  await Promise.all([refreshCalendarCache(), refreshRemiCache()]);
-  res.json({ success:true, lastUpdate:new Date() });
 });
 
 // ── Proxy iCal pour la PWA (résout le CORS Google Calendar) ──
@@ -4813,16 +4808,6 @@ app.get("/calendar-proxy", async (req, res) => {
     res.status(500).send("Calendrier indisponible");
   }
 });
-
-app.get("/calendar", (req, res) => res.json({
-  lastUpdate: calendarCache.lastUpdate?.toLocaleString("fr-FR"),
-  content: calendarCache.content
-}));
-
-app.get("/bus", (req, res) => res.json({
-  lastUpdate: remiCache.lastUpdate?.toLocaleString("fr-FR"),
-  content: remiCache.content
-}));
 
 // ── Démarrage ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
