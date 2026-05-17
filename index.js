@@ -16,7 +16,27 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   next();
 });
-app.use(express.json({ limit: "10mb", verify: (req, res, buf) => { req.rawBody = buf; } }));
+// Body parsing : limite stricte par défaut (256 KB) pour les routes JSON
+// usuelles (/mel, /push/*, /stats/*, /webhook, etc.). Override 6 MB sur les
+// routes qui transportent des photos en base64 (signalement citoyen, ajout
+// d'actu admin, création/édition d'entreprise admin).
+// Express ne désactive pas strict-routing par défaut : /signal et /signal/
+// résolvent au même handler. On normalise donc le slash final pour que
+// l'override large ne soit pas contourné par un client mettant un trailing
+// slash et reçoive un 413 inattendu.
+function _isLargeBodyRoute(p) {
+  if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+  if (p === "/signal") return true;
+  if (p === "/admin/actus/add") return true;
+  if (p === "/admin/entreprises" || p.startsWith("/admin/entreprises/")) return true;
+  return false;
+}
+const _jsonSmall = express.json({ limit: "256kb", verify: (req, res, buf) => { req.rawBody = buf; } });
+const _jsonLarge = express.json({ limit: "6mb",   verify: (req, res, buf) => { req.rawBody = buf; } });
+app.use((req, res, next) => {
+  if (_isLargeBodyRoute(req.path)) return _jsonLarge(req, res, next);
+  return _jsonSmall(req, res, next);
+});
 app.set('trust proxy', 1); // Render est derrière un reverse proxy
 
 // ─── Variables d'environnement ────────────────────────────────
@@ -2015,7 +2035,7 @@ const signalLimiter = rateLimit({
   message: { error: "Trop de signalements, patientez avant de réessayer." }
 });
 const subscribeLimiter = rateLimit({
-  windowMs: 60 * 1000, max: 5,
+  windowMs: 60 * 1000, max: 20,
   standardHeaders: true, legacyHeaders: false,
   message: { error: "Trop de tentatives d'abonnement." }
 });
@@ -3318,10 +3338,21 @@ async function _blockMelDevice(deviceId, reason) {
 }
 
 // ── Proxy MEL pour la PWA ─────────────────────────────────────
+const MEL_ALLOWED_ROLES = new Set(["user", "assistant"]);
 app.post("/mel", melLimiter, async (req, res) => {
   const { messages, category, extraCtx } = req.body || {};
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error:"messages[] requis" });
+  }
+  // Validation stricte : on n'accepte que les rôles 'user' et 'assistant'.
+  // Bloque les tentatives d'injection via {role:'system', content:'...'} qui
+  // pourraient sinon être transmises à l'IA comme instruction système.
+  // Les entrées malformées sont silencieusement filtrées.
+  const validMessages = messages.filter(m =>
+    m && typeof m === "object" && MEL_ALLOWED_ROLES.has(m.role)
+  );
+  if (!validMessages.length) {
+    return res.status(400).json({ error: "messages[] doit contenir au moins une entrée {role:'user'|'assistant', content:string}" });
   }
 
   const melSettings = await readAdminSettings();
@@ -3344,9 +3375,9 @@ app.post("/mel", melLimiter, async (req, res) => {
 
   try {
     const MAX_MSG_LENGTH = 2000;
-    const history = messages.slice(-8).map(m => ({
+    const history = validMessages.slice(-8).map(m => ({
       role: m.role,
-      content: typeof m.content === "string" ? m.content.slice(0, MAX_MSG_LENGTH) : String(m.content || "").slice(0, MAX_MSG_LENGTH)
+      content: (typeof m.content === "string" ? m.content : String(m.content || "")).slice(0, MAX_MSG_LENGTH)
     }));
     const lastUser = history.filter(m => m.role === "user").slice(-1)[0]?.content || "";
 
