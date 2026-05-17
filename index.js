@@ -135,6 +135,13 @@ if (CLOUDINARY_ENABLED) {
   console.log("✅ Cloudinary configuré");
 }
 
+// ─── Logs diagnostiques (gated derrière MAT_DEBUG=1) ──────────
+// Réduit le bruit dans les logs Render en prod. Les console.warn/error
+// restent intacts — ils signalent toujours quelque chose qui mérite
+// attention. Activer en posant MAT_DEBUG=1 dans Render → Environment.
+const MAT_DEBUG = process.env.MAT_DEBUG === '1';
+function dlog(...args) { if (MAT_DEBUG) console.log(...args); }
+
 // ─── Web Push VAPID ───────────────────────────────────────────
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
@@ -3476,7 +3483,7 @@ app.post("/mel", melLimiter, async (req, res) => {
     await trackMelStats(lastUser);
     const result = await generateMelReply(lastUser, history, category || "autre", extraCtx || "");
     await trackMelQuestion(lastUser, category, result.reply);
-    console.log(`📱 PWA MEL [${category||"autre"}] via ${result.provider}`);
+    dlog(`📱 PWA MEL [${category||"autre"}] via ${result.provider}`);
     const showElus = (result.reply || "").includes("[SHOW_ELUS]");
     const showUrbanisme = (result.reply || "").includes("[SHOW_URBANISME]");
     const cleanReply = (result.reply || "")
@@ -4033,7 +4040,10 @@ app.post('/push/subscribe/meteo', subscribeLimiter, async (req, res) => {
   if (idx >= 0) subs[idx] = { ...subs[idx], ...sub, minLevel };
   else subs.push({ ...sub, minLevel });
   await writeMeteoSubs(subs);
-  console.log(`🌦️ Abonné météo push (level≥${minLevel}, total: ${subs.length})`);
+  // Logger uniquement les nouvelles souscriptions, pas les re-sync. Avant,
+  // chaque redéploiement Render générait un essaim de logs identiques quand
+  // toutes les PWA installées se re-synchronisaient au boot.
+  if (idx < 0) console.log(`🌦️ Nouvel abonné météo push (level≥${minLevel}, total: ${subs.length})`);
   res.json({ success: true, total: subs.length });
 });
 
@@ -5442,9 +5452,9 @@ async function fetchStationPrices(cp, brandKey) {
     const records = r.data.results || [];
     if (records.length) {
       const rec = records.find(x => stationName(x).includes(brandKey)) || records[0];
-      console.log(`[carburant] v2.1 ${cp}/${brandKey}: ${records.length} recs, sp95=${rec&&rec.sp95_prix}, go=${rec&&rec.gazole_prix}`);
+      dlog(`[carburant] v2.1 ${cp}/${brandKey}: ${records.length} recs, sp95=${rec&&rec.sp95_prix}, go=${rec&&rec.gazole_prix}`);
       if (rec) return extract(rec);
-    } else { console.log(`[carburant] v2.1 ${cp}/${brandKey}: 0 records`); }
+    } else { dlog(`[carburant] v2.1 ${cp}/${brandKey}: 0 records`); }
   } catch (err) { console.error(`[carburant] v2.1 ${cp}/${brandKey}:`, err.message); }
 
   // Tentative 2 : API v1 (syntaxe refine.cp différente)
@@ -5456,9 +5466,9 @@ async function fetchStationPrices(cp, brandKey) {
     const records = (r.data.records || []).map(rec => rec.fields || rec);
     if (records.length) {
       const rec = records.find(x => stationName(x).includes(brandKey)) || records[0];
-      console.log(`[carburant] v1 ${cp}/${brandKey}: ${records.length} recs, sp95=${rec&&rec.sp95_prix}, go=${rec&&rec.gazole_prix}`);
+      dlog(`[carburant] v1 ${cp}/${brandKey}: ${records.length} recs, sp95=${rec&&rec.sp95_prix}, go=${rec&&rec.gazole_prix}`);
       if (rec) return extract(rec);
-    } else { console.log(`[carburant] v1 ${cp}/${brandKey}: 0 records`); }
+    } else { dlog(`[carburant] v1 ${cp}/${brandKey}: 0 records`); }
   } catch (err) { console.error(`[carburant] v1 ${cp}/${brandKey}:`, err.message); }
   return null;
 }
