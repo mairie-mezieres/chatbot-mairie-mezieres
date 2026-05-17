@@ -3333,10 +3333,21 @@ async function _blockMelDevice(deviceId, reason) {
 }
 
 // ── Proxy MEL pour la PWA ─────────────────────────────────────
+const MEL_ALLOWED_ROLES = new Set(["user", "assistant"]);
 app.post("/mel", melLimiter, async (req, res) => {
   const { messages, category, extraCtx } = req.body || {};
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error:"messages[] requis" });
+  }
+  // Validation stricte : on n'accepte que les rôles 'user' et 'assistant'.
+  // Bloque les tentatives d'injection via {role:'system', content:'...'} qui
+  // pourraient sinon être transmises à l'IA comme instruction système.
+  // Les entrées malformées sont silencieusement filtrées.
+  const validMessages = messages.filter(m =>
+    m && typeof m === "object" && MEL_ALLOWED_ROLES.has(m.role)
+  );
+  if (!validMessages.length) {
+    return res.status(400).json({ error: "messages[] doit contenir au moins une entrée {role:'user'|'assistant', content:string}" });
   }
 
   const melSettings = await readAdminSettings();
@@ -3359,9 +3370,9 @@ app.post("/mel", melLimiter, async (req, res) => {
 
   try {
     const MAX_MSG_LENGTH = 2000;
-    const history = messages.slice(-8).map(m => ({
+    const history = validMessages.slice(-8).map(m => ({
       role: m.role,
-      content: typeof m.content === "string" ? m.content.slice(0, MAX_MSG_LENGTH) : String(m.content || "").slice(0, MAX_MSG_LENGTH)
+      content: (typeof m.content === "string" ? m.content : String(m.content || "")).slice(0, MAX_MSG_LENGTH)
     }));
     const lastUser = history.filter(m => m.role === "user").slice(-1)[0]?.content || "";
 
