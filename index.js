@@ -1746,7 +1746,10 @@ async function sendWeatherPush(vigilance) {
       if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
     }
   }
-  if (dead.length) await writeMeteoSubs(allSubs.filter(s => !dead.includes(s.endpoint)));
+  if (dead.length) {
+    await writeMeteoSubs(allSubs.filter(s => !dead.includes(s.endpoint)));
+    purgeEndpointsEverywhere(dead).catch(() => {});
+  }
   console.log(`🌩️ Météo push (vigilance ${color}, level≥${level}) → ${sent}/${subs.length} filtrés / ${allSubs.length} total (${dead.length} expirés purgés)`);
   await recordPushHistory({ type: 'meteo', title: `Vigilance ${color} — ${phenom}`, sent, total: subs.length, dead: dead.length });
   return { sent, total: subs.length };
@@ -3140,6 +3143,7 @@ async function sendActuPush(title, description, photoUrl, actuId) {
   if (dead.length) {
     const alive = subs.filter(s => !dead.includes(s.endpoint));
     await writeSubs(alive);
+    purgeEndpointsEverywhere(dead).catch(() => {});
   }
   await recordPushHistory({ type: 'actu', title: (title || '').substring(0, 80), sent, total: subs.length, dead: dead.length });
   return { sent, failed, total: subs.length };
@@ -3821,6 +3825,7 @@ app.post("/push/test", subscribeLimiter, async (req, res) => {
   } catch(e) {
     if (e.statusCode === 410 || e.statusCode === 404) {
       await writeSubs(subs.filter(s => s.endpoint !== endpoint));
+      purgeEndpointsEverywhere([endpoint]).catch(() => {});
       return res.status(410).json({ error: "Abonnement expiré — réactivez les notifications" });
     }
     res.status(500).json({ error: "Échec d'envoi: " + (e.message || 'inconnue') });
@@ -3834,6 +3839,35 @@ async function writeDechetsSubs(d) { await redisSet('mat:subs:dechets', d); }
 // ── Alertes météo (par abonné, avec niveau minimum) ───────────
 async function readMeteoSubs()  { return (await redisGet('mat:subs:meteo'))  || []; }
 async function writeMeteoSubs(d){ await redisSet('mat:subs:meteo', d); }
+
+// Purge un ou plusieurs endpoints de l'ensemble des stores de subscriptions
+// push (mat:subs, mat:subs:meteo, mat:subs:dechets). Appelée après détection
+// d'erreurs 410/404 pour éviter qu'un endpoint expiré soit re-tenté via un
+// autre canal (ex: météo encore vivante alors qu'actus a déjà nettoyé).
+// Best-effort : toute erreur de purge est absorbée pour ne jamais bloquer
+// le caller (le cleanup local au site appelant reste l'opération autoritaire).
+async function purgeEndpointsEverywhere(endpoints) {
+  if (!Array.isArray(endpoints) || !endpoints.length) return;
+  const deadSet = new Set(endpoints);
+  const stores = [
+    ['mat:subs',         readSubs,         writeSubs],
+    ['mat:subs:meteo',   readMeteoSubs,    writeMeteoSubs],
+    ['mat:subs:dechets', readDechetsSubs,  writeDechetsSubs]
+  ];
+  for (const [name, read, write] of stores) {
+    try {
+      const all = await read();
+      const kept = all.filter(s => !deadSet.has(s.endpoint));
+      if (kept.length !== all.length) {
+        await write(kept);
+        console.log(`🧹 ${name}: purgé ${all.length - kept.length} endpoint(s) expiré(s)`);
+      }
+    } catch (e) {
+      console.warn(`purgeEndpointsEverywhere(${name}):`, e.message);
+    }
+  }
+}
+
 // Migration one-shot : peuple mat:subs:meteo depuis mat:subs si clé absente
 (async () => {
   try {
@@ -5488,7 +5522,10 @@ async function _sendDechetsReminder() {
     try { await webpush.sendNotification(sub, payload); }
     catch(e) { if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint); }
   }
-  if (dead.length) await writeDechetsSubs(subs.filter(s => !dead.includes(s.endpoint)));
+  if (dead.length) {
+    await writeDechetsSubs(subs.filter(s => !dead.includes(s.endpoint)));
+    purgeEndpointsEverywhere(dead).catch(() => {});
+  }
   console.log(`🗑️ Rappel déchets (${type}) → ${subs.length} abonnés`);
 }
 
