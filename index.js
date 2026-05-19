@@ -2540,6 +2540,25 @@ app.post("/admin/info-banner", adminAuth, async (req, res) => {
   res.json({ ok: true, id });
 });
 
+// ── Migration overlay (public lecture) ─────────────────────────
+app.get("/api/migration-status", async (req, res) => {
+  let v = memGet("mat:migration_overlay");
+  if (v === undefined) {
+    v = (await redisGet("migration:overlay:active")) === true;
+    memSet("mat:migration_overlay", v, MEM_TTL_SHORT);
+  }
+  res.json({ active: !!v });
+});
+
+// ── Migration overlay (admin toggle) ──────────────────────────
+app.post("/api/admin/migration-toggle", adminAuth, async (req, res) => {
+  const current = (await redisGet("migration:overlay:active")) === true;
+  const next = !current;
+  await redisSet("migration:overlay:active", next);
+  memSet("mat:migration_overlay", next, MEM_TTL_SHORT);
+  res.json({ ok: true, active: next });
+});
+
 // ── Route : publier une actualité (multi-canal) ─────────────
 app.post("/admin/actus/add", adminAuth, async (req, res) => {
   const {
