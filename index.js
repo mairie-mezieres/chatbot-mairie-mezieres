@@ -2540,6 +2540,29 @@ app.post("/admin/info-banner", adminAuth, async (req, res) => {
   res.json({ ok: true, id });
 });
 
+// ── Migration overlay (public lecture) ─────────────────────────
+app.get("/migration-status", async (req, res) => {
+  let v = memGet("mat:migration_overlay");
+  if (v === undefined) {
+    v = (await redisGet("migration:overlay:active")) === true;
+    memSet("mat:migration_overlay", v, MEM_TTL_SHORT);
+  }
+  res.json({ active: !!v });
+});
+
+// ── Migration overlay (admin set explicite) ───────────────────
+// Cible explicite (pas un toggle aveugle) pour éviter d'inverser un état
+// inconnu côté UI si /migration-status a échoué silencieusement.
+app.post("/admin/migration", adminAuth, async (req, res) => {
+  const { active } = req.body || {};
+  if (typeof active !== "boolean") {
+    return res.status(400).json({ error: "Le champ 'active' (boolean) est requis" });
+  }
+  await redisSet("migration:overlay:active", active);
+  memSet("mat:migration_overlay", active, MEM_TTL_SHORT);
+  res.json({ ok: true, active });
+});
+
 // ── Route : publier une actualité (multi-canal) ─────────────
 app.post("/admin/actus/add", adminAuth, async (req, res) => {
   const {
