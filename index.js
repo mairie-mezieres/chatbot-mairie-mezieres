@@ -2541,7 +2541,7 @@ app.post("/admin/info-banner", adminAuth, async (req, res) => {
 });
 
 // ── Migration overlay (public lecture) ─────────────────────────
-app.get("/api/migration-status", async (req, res) => {
+app.get("/migration-status", async (req, res) => {
   let v = memGet("mat:migration_overlay");
   if (v === undefined) {
     v = (await redisGet("migration:overlay:active")) === true;
@@ -2551,7 +2551,7 @@ app.get("/api/migration-status", async (req, res) => {
 });
 
 // ── Migration overlay (admin toggle) ──────────────────────────
-app.post("/api/admin/migration-toggle", adminAuth, async (req, res) => {
+app.post("/admin/migration-toggle", adminAuth, async (req, res) => {
   const current = (await redisGet("migration:overlay:active")) === true;
   const next = !current;
   await redisSet("migration:overlay:active", next);
