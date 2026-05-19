@@ -501,6 +501,7 @@ function compactSeenMap(mapObj = {}, keepKeys = []) {
 // ─── CORS ─────────────────────────────────────────────────────
 const ADMIN_ALLOWED_ORIGINS = new Set([
   "https://mairie-mezieres.github.io",
+  "https://mezieres-lez-clery.fr",
   "http://localhost:8080",
   "http://localhost:3000",
   "http://127.0.0.1:8080"
