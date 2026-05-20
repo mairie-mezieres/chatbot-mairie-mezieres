@@ -1335,12 +1335,12 @@ const DIRECT_RULES = [
   },
   {
     name: "rgpd_dpo_recia",
-    test: (q) => /(rgpd|dpo|dpd|délégué.protect|delegue.protect|données.personnelles|donnees.personnelles|gip.recia|\brecia\b|protection.données|protection.donnees)/.test(q),
+    test: (q) => /(rgpd|dpo|dpd|delegue.{0,15}protect|protect.{0,20}donnees|donnees.{0,15}personnelles|gip.recia|\brecia\b)/.test(q),
     answer: "🔒 Pour toute question RGPD ou protection des données : la commune est accompagnée par le GIP RECIA (Groupement d'Intérêt Public — Ressources numériques publiques en Centre-Val de Loire). Pour joindre le Délégué à la Protection des Données (DPD), contactez la mairie au 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr qui transmettra votre demande. Informations générales : cnil.fr"
   },
   {
     name: "cnil_definition",
-    test: (q) => /\bcnil\b|commission.nationale.informatique|commission.nationale.des.libertes/.test(q),
+    test: (q) => /\bcnil\b|commission.{0,25}informatique/.test(q),
     answer: "🛡️ La CNIL (Commission nationale de l'informatique et des libertés) est l'autorité française indépendante de protection des données personnelles — à ne pas confondre avec la CNI (carte nationale d'identité). Pour toute réclamation ou information : cnil.fr. Pour les questions relatives aux données traitées par la mairie de Mézières-lez-Cléry : 02 38 45 61 76 ou mairie@mezieres-lez-clery.fr"
   },
   {
