@@ -3840,7 +3840,7 @@ async function _trelloBoardIdFor(listId) {
 
 function _trelloStatusFromListName(name) {
   const n = (name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (/resolu|termine|done|ferme|clos/.test(n)) return 'resolved';
+  if (/resolu|termine|done|ferme|clos|\btraites?\b/.test(n)) return 'resolved';
   if (/cours|progress|traitement/.test(n)) return 'in_progress';
   return 'pending';
 }
