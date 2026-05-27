@@ -3914,29 +3914,29 @@ app.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
     let entry = _attachmentUrlMap.get(`${cardId}/${attachId}`);
     if (!entry) { await _fetchTrelloSignalements(); entry = _attachmentUrlMap.get(`${cardId}/${attachId}`); }
     if (!entry) return res.status(404).end();
-    // Utiliser la previewUrl cachée si fraîche (< 30 min) — redirect rapide, pas de streaming
-    const AGE = entry.cachedAt ? Date.now() - entry.cachedAt : Infinity;
-    if (entry.previewUrl && AGE < 30 * 60 * 1000) {
-      return res.redirect(302, entry.previewUrl);
-    }
-    // Preview expirée ou absente : refraîchir depuis l'API Trello
-    const att = await _trelloGet(`/cards/${cardId}/attachments/${attachId}?fields=previews,mimeType,url`);
-    const prvs = (att.previews || []).filter(p => p.url).sort((a, b) => (b.width || 0) - (a.width || 0));
-    if (prvs.length) {
-      entry.previewUrl = prvs[0].url;
-      entry.cachedAt = Date.now();
-      return res.redirect(302, prvs[0].url);
-    }
-    // Fallback : stream via OAuth (seulement pour les URLs Trello)
-    const isTrelloUrl = /^https:\/\/(?:trello\.com|api\.trello\.com)\//.test(att.url || '');
-    const r = await axios.get(att.url, {
-      responseType: 'stream', maxRedirects: 5, timeout: 20000,
-      headers: isTrelloUrl ? { Authorization: `OAuth oauth_consumer_key="${TRELLO_KEY}", oauth_token="${TRELLO_TOKEN}"` } : {},
+    // Étape 1 : requête Trello avec OAuth, sans suivre la redirection
+    const step1 = await axios.get(entry.trelloUrl, {
+      responseType: 'stream',
+      maxRedirects: 0,
+      validateStatus: s => s < 500,
+      timeout: 10000,
+      headers: { Authorization: `OAuth oauth_consumer_key="${TRELLO_KEY}", oauth_token="${TRELLO_TOKEN}"` },
     });
-    res.setHeader('Content-Type', r.headers['content-type'] || att.mimeType || 'image/jpeg');
+    if (step1.status >= 300 && step1.status < 400 && step1.headers['location']) {
+      // Étape 2 : récupérer le fichier depuis S3/Cloudinary (URL signée, pas d'auth)
+      step1.data.resume();
+      const s3Url = step1.headers['location'];
+      const r = await axios.get(s3Url, { responseType: 'stream', timeout: 20000 });
+      res.setHeader('Content-Type', r.headers['content-type'] || entry.mimeType);
+      res.setHeader('Content-Disposition', 'inline');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      return r.data.pipe(res);
+    }
+    // Trello a renvoyé l'image directement
+    res.setHeader('Content-Type', step1.headers['content-type'] || entry.mimeType);
     res.setHeader('Content-Disposition', 'inline');
-    res.setHeader('Cache-Control', 'public, max-age=600');
-    r.data.pipe(res);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    step1.data.pipe(res);
   } catch(e) { console.error('photo proxy:', e.message); res.status(502).end(); }
 });
 
