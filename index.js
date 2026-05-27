@@ -3802,6 +3802,99 @@ app.get("/signalements", async (req, res) => {
   res.json({ signalements: signals, count: signals.length });
 });
 
+// ── Suivi public des signalements via Trello ──────────────────
+function _anonymize(text) {
+  if (!text) return '';
+  return text
+    .replace(/\b0[1-9](?:[\s.\-]?\d{2}){4}\b/g, '[tél. masqué]')
+    .replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, '[email masqué]');
+}
+
+async function _trelloGet(path) {
+  if (!TRELLO_KEY || !TRELLO_TOKEN) throw new Error('Trello non configuré');
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `https://api.trello.com/1${path}${sep}key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
+  const r = await axios.get(url, { timeout: 8000 });
+  return r.data;
+}
+
+const _trelloBoardIdCache = {};
+async function _trelloBoardIdFor(listId) {
+  if (_trelloBoardIdCache[listId]) return _trelloBoardIdCache[listId];
+  const list = await _trelloGet(`/lists/${listId}?fields=idBoard`);
+  _trelloBoardIdCache[listId] = list.idBoard;
+  return list.idBoard;
+}
+
+function _trelloStatusFromListName(name) {
+  const n = (name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (/resolu|termine|done|ferme|clos/.test(n)) return 'resolved';
+  if (/cours|progress|traitement/.test(n)) return 'in_progress';
+  return 'pending';
+}
+
+let _sigTrackCache = null, _sigTrackCacheAt = 0;
+
+async function _fetchTrelloSignalements() {
+  if (_sigTrackCache && Date.now() - _sigTrackCacheAt < 5 * 60 * 1000) return _sigTrackCache;
+  if (!TRELLO_KEY || !TRELLO_TOKEN || !TRELLO_LIST_ID_SIG) return { signalements: [], bugs: [] };
+  const boardId = await _trelloBoardIdFor(TRELLO_LIST_ID_SIG);
+  const [lists, cards] = await Promise.all([
+    _trelloGet(`/boards/${boardId}/lists?fields=id,name&filter=open`),
+    _trelloGet(`/boards/${boardId}/cards?filter=open&fields=id,name,desc,idList,dateLastActivity&attachments=true&actions=commentCard`),
+  ]);
+  const listStatusMap = {}, listNameMap = {};
+  for (const l of lists) { listStatusMap[l.id] = _trelloStatusFromListName(l.name); listNameMap[l.id] = l.name; }
+  const result = { signalements: [], bugs: [] };
+  for (const card of cards) {
+    const isSig = card.name.startsWith('[Signalement]');
+    const isBug = card.name.startsWith('[BUG]');
+    if (!isSig && !isBug) continue;
+    const cat = card.name.replace(/^\[(Signalement|BUG)\]\s*/, '');
+    const status = listStatusMap[card.idList] || 'pending';
+    const statusLabel = listNameMap[card.idList] || 'À traiter';
+    const comments = ((card.actions || [])
+      .filter(a => a.type === 'commentCard')
+      .map(a => ({ text: _anonymize(a.data.text), date: a.date }))
+    ).reverse();
+    const photos = (card.attachments || [])
+      .filter(a => a.mimeType && a.mimeType.startsWith('image/'))
+      .map(a => ({ url: `/api/signalements/photo/${card.id}/${a.id}` }));
+    const item = { id: card.id, cat, desc: _anonymize(card.desc), status, statusLabel, date: card.dateLastActivity, comments, photos };
+    if (isSig) result.signalements.push(item);
+    else result.bugs.push(item);
+  }
+  result.signalements.sort((a, b) => b.date.localeCompare(a.date));
+  result.bugs.sort((a, b) => b.date.localeCompare(a.date));
+  _sigTrackCache = result; _sigTrackCacheAt = Date.now();
+  return result;
+}
+
+app.get('/api/signalements', async (req, res) => {
+  try { res.json(await _fetchTrelloSignalements()); }
+  catch(e) {
+    console.error('api/signalements:', e.message);
+    res.status(502).json({ signalements: [], bugs: [], error: 'Service temporairement indisponible' });
+  }
+});
+
+app.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
+  try {
+    const { cardId, attachId } = req.params;
+    if (!/^[a-zA-Z0-9]+$/.test(cardId) || !/^[a-zA-Z0-9]+$/.test(attachId)) return res.status(400).end();
+    if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).end();
+    const meta = await _trelloGet(`/cards/${cardId}/attachments/${attachId}?fields=url,mimeType`);
+    const r = await axios.get(meta.url, {
+      responseType: 'stream',
+      headers: { Authorization: `OAuth oauth_consumer_key="${TRELLO_KEY}", oauth_token="${TRELLO_TOKEN}"` },
+      timeout: 10000,
+    });
+    res.setHeader('Content-Type', meta.mimeType || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    r.data.pipe(res);
+  } catch(e) { res.status(404).end(); }
+});
+
 // ── Boîte à idées partagées ──────────────────────────────────
 app.get("/idees", async (req, res) => {
   const idees = await readIdeas();
