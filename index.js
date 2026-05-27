@@ -3910,18 +3910,28 @@ app.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
     const { cardId, attachId } = req.params;
     if (!/^[a-zA-Z0-9]+$/.test(cardId) || !/^[a-zA-Z0-9]+$/.test(attachId)) return res.status(400).end();
     if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).end();
-    let entry = _attachmentUrlMap.get(`${cardId}/${attachId}`);
-    if (!entry) { await _fetchTrelloSignalements(); entry = _attachmentUrlMap.get(`${cardId}/${attachId}`); }
-    if (!entry) return res.status(404).end();
-    // Trello attachment downloads on private boards require OAuth header, not query params
-    const r = await axios.get(entry.trelloUrl, {
+    // Récupérer une URL signée fraîche (les previews S3/Cloudinary expirent)
+    const att = await _trelloGet(`/cards/${cardId}/attachments/${attachId}?fields=previews,mimeType,url`);
+    const previews = (att.previews || []).filter(p => p.url).sort((a, b) => (b.width || 0) - (a.width || 0));
+    const signedUrl = previews.length ? previews[0].url : null;
+    if (signedUrl) {
+      // Stream depuis l'URL signée — pas besoin d'auth
+      const r = await axios.get(signedUrl, { responseType: 'stream', maxRedirects: 5, timeout: 20000 });
+      res.setHeader('Content-Type', r.headers['content-type'] || att.mimeType || 'image/jpeg');
+      res.setHeader('Content-Disposition', 'inline');
+      res.setHeader('Cache-Control', 'public, max-age=600');
+      return r.data.pipe(res);
+    }
+    // Fallback : download via OAuth header (Trello redirige vers S3 signé)
+    const r = await axios.get(att.url, {
       responseType: 'stream',
-      maxRedirects: 10,
+      maxRedirects: 5,
       timeout: 20000,
       headers: { Authorization: `OAuth oauth_consumer_key="${TRELLO_KEY}", oauth_token="${TRELLO_TOKEN}"` },
     });
-    res.setHeader('Content-Type', r.headers['content-type'] || entry.mimeType);
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Content-Type', r.headers['content-type'] || att.mimeType || 'image/jpeg');
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'public, max-age=600');
     r.data.pipe(res);
   } catch(e) { console.error('photo proxy:', e.message); res.status(502).end(); }
 });
