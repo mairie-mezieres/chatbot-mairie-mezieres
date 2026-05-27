@@ -3884,7 +3884,8 @@ async function _fetchTrelloSignalements() {
     const photos = (card.attachments || [])
       .filter(a => a.id && a.url && (!a.mimeType || a.mimeType.startsWith('image/')))
       .map(a => {
-        _attachmentUrlMap.set(`${card.id}/${a.id}`, { trelloUrl: a.url, mimeType: a.mimeType || 'image/jpeg' });
+        const prvs = (a.previews || []).filter(p => p.url).sort((x, y) => (y.width || 0) - (x.width || 0));
+        _attachmentUrlMap.set(`${card.id}/${a.id}`, { trelloUrl: a.url, previewUrl: prvs.length ? prvs[0].url : null, cachedAt: Date.now(), mimeType: a.mimeType || 'image/jpeg' });
         return { url: `https://chatbot-mairie-mezieres.onrender.com/api/signalements/photo/${card.id}/${a.id}` };
       });
     const item = { id: card.id, cat, desc: _anonymize(card.desc), status, statusLabel, date: card.dateLastActivity, comments, photos };
@@ -3910,24 +3911,27 @@ app.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
     const { cardId, attachId } = req.params;
     if (!/^[a-zA-Z0-9]+$/.test(cardId) || !/^[a-zA-Z0-9]+$/.test(attachId)) return res.status(400).end();
     if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).end();
-    // Récupérer une URL signée fraîche (les previews S3/Cloudinary expirent)
-    const att = await _trelloGet(`/cards/${cardId}/attachments/${attachId}?fields=previews,mimeType,url`);
-    const previews = (att.previews || []).filter(p => p.url).sort((a, b) => (b.width || 0) - (a.width || 0));
-    const signedUrl = previews.length ? previews[0].url : null;
-    if (signedUrl) {
-      // Stream depuis l'URL signée — pas besoin d'auth
-      const r = await axios.get(signedUrl, { responseType: 'stream', maxRedirects: 5, timeout: 20000 });
-      res.setHeader('Content-Type', r.headers['content-type'] || att.mimeType || 'image/jpeg');
-      res.setHeader('Content-Disposition', 'inline');
-      res.setHeader('Cache-Control', 'public, max-age=600');
-      return r.data.pipe(res);
+    let entry = _attachmentUrlMap.get(`${cardId}/${attachId}`);
+    if (!entry) { await _fetchTrelloSignalements(); entry = _attachmentUrlMap.get(`${cardId}/${attachId}`); }
+    if (!entry) return res.status(404).end();
+    // Utiliser la previewUrl cachée si fraîche (< 30 min) — redirect rapide, pas de streaming
+    const AGE = entry.cachedAt ? Date.now() - entry.cachedAt : Infinity;
+    if (entry.previewUrl && AGE < 30 * 60 * 1000) {
+      return res.redirect(302, entry.previewUrl);
     }
-    // Fallback : download via OAuth header (Trello redirige vers S3 signé)
+    // Preview expirée ou absente : refraîchir depuis l'API Trello
+    const att = await _trelloGet(`/cards/${cardId}/attachments/${attachId}?fields=previews,mimeType,url`);
+    const prvs = (att.previews || []).filter(p => p.url).sort((a, b) => (b.width || 0) - (a.width || 0));
+    if (prvs.length) {
+      entry.previewUrl = prvs[0].url;
+      entry.cachedAt = Date.now();
+      return res.redirect(302, prvs[0].url);
+    }
+    // Fallback : stream via OAuth (seulement pour les URLs Trello)
+    const isTrelloUrl = /^https:\/\/(?:trello\.com|api\.trello\.com)\//.test(att.url || '');
     const r = await axios.get(att.url, {
-      responseType: 'stream',
-      maxRedirects: 5,
-      timeout: 20000,
-      headers: { Authorization: `OAuth oauth_consumer_key="${TRELLO_KEY}", oauth_token="${TRELLO_TOKEN}"` },
+      responseType: 'stream', maxRedirects: 5, timeout: 20000,
+      headers: isTrelloUrl ? { Authorization: `OAuth oauth_consumer_key="${TRELLO_KEY}", oauth_token="${TRELLO_TOKEN}"` } : {},
     });
     res.setHeader('Content-Type', r.headers['content-type'] || att.mimeType || 'image/jpeg');
     res.setHeader('Content-Disposition', 'inline');
