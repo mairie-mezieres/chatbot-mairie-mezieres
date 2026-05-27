@@ -3879,9 +3879,13 @@ async function _fetchTrelloSignalements() {
       .filter(a => a.type === 'commentCard')
       .map(a => ({ text: _anonymize(a.data.text), date: a.date }))
     ).reverse();
+    // Use preview URLs directly (Cloudinary/S3) — no proxy needed, they are accessible
     const photos = (card.attachments || [])
       .filter(a => a.id && (!a.mimeType || a.mimeType.startsWith('image/')))
-      .map(a => ({ url: `https://chatbot-mairie-mezieres.onrender.com/api/signalements/photo/${card.id}/${a.id}` }));
+      .map(a => {
+        const prvs = (a.previews || []).filter(p => p.url).sort((x, y) => (y.width || 0) - (x.width || 0));
+        return { url: prvs.length ? prvs[0].url : `https://chatbot-mairie-mezieres.onrender.com/api/signalements/photo/${card.id}/${a.id}` };
+      });
     const item = { id: card.id, cat, desc: _anonymize(card.desc), status, statusLabel, date: card.dateLastActivity, comments, photos };
     if (isSig) result.signalements.push(item);
     else result.bugs.push(item);
