@@ -3880,7 +3880,7 @@ async function _fetchTrelloSignalements() {
       .map(a => ({ text: _anonymize(a.data.text), date: a.date }))
     ).reverse();
     const photos = (card.attachments || [])
-      .filter(a => a.mimeType && a.mimeType.startsWith('image/'))
+      .filter(a => a.id && (!a.mimeType || a.mimeType.startsWith('image/')))
       .map(a => ({ url: `/api/signalements/photo/${card.id}/${a.id}` }));
     const item = { id: card.id, cat, desc: _anonymize(card.desc), status, statusLabel, date: card.dateLastActivity, comments, photos };
     if (isSig) result.signalements.push(item);
@@ -3905,17 +3905,21 @@ app.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
     const { cardId, attachId } = req.params;
     if (!/^[a-zA-Z0-9]+$/.test(cardId) || !/^[a-zA-Z0-9]+$/.test(attachId)) return res.status(400).end();
     if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).end();
-    const meta = await _trelloGet(`/cards/${cardId}/attachments/${attachId}?fields=url,mimeType`);
-    const authSep = meta.url.includes('?') ? '&' : '?';
-    const authedUrl = `${meta.url}${authSep}key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
-    const r = await axios.get(authedUrl, {
-      responseType: 'stream',
-      timeout: 10000,
-    });
-    res.setHeader('Content-Type', meta.mimeType || 'image/jpeg');
+    const att = await _trelloGet(`/cards/${cardId}/attachments/${attachId}`);
+    // Use largest preview (public S3 URL) if available, else authenticated download
+    const previews = (att.previews || []).filter(p => p.url).sort((a, b) => (b.width || 0) - (a.width || 0));
+    let downloadUrl;
+    if (previews.length) {
+      downloadUrl = previews[0].url;
+    } else {
+      const sep = att.url.includes('?') ? '&' : '?';
+      downloadUrl = `${att.url}${sep}key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
+    }
+    const r = await axios.get(downloadUrl, { responseType: 'stream', maxRedirects: 10, timeout: 15000 });
+    res.setHeader('Content-Type', r.headers['content-type'] || att.mimeType || 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
     r.data.pipe(res);
-  } catch(e) { res.status(404).end(); }
+  } catch(e) { console.error('photo proxy:', e.message); res.status(404).end(); }
 });
 
 // ── Boîte à idées partagées ──────────────────────────────────
