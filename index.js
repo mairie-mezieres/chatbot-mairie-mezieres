@@ -3881,7 +3881,7 @@ async function _fetchTrelloSignalements() {
     ).reverse();
     const photos = (card.attachments || [])
       .filter(a => a.id && (!a.mimeType || a.mimeType.startsWith('image/')))
-      .map(a => ({ url: `/api/signalements/photo/${card.id}/${a.id}` }));
+      .map(a => ({ url: `https://chatbot-mairie-mezieres.onrender.com/api/signalements/photo/${card.id}/${a.id}` }));
     const item = { id: card.id, cat, desc: _anonymize(card.desc), status, statusLabel, date: card.dateLastActivity, comments, photos };
     if (isSig) result.signalements.push(item);
     else result.bugs.push(item);
