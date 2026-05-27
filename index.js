@@ -3805,7 +3805,19 @@ app.get("/signalements", async (req, res) => {
 // ── Suivi public des signalements via Trello ──────────────────
 function _anonymize(text) {
   if (!text) return '';
-  return text
+  let t = text
+    .replace(/\n+📱[^\n]*/g, '')
+    .replace(/\n+🏷️[^\n]*/g, '')
+    .replace(/\n+Appareil\s*:[^\n]*/g, '')
+    .replace(/\n+Modèle\s*:[^\n]*/g, '')
+    .replace(/\n+OS\s*:[^\n]*/g, '')
+    .replace(/\n+Navigateur\s*:[^\n]*/g, '')
+    .replace(/\n+Écran\s*:[^\n]*/g, '')
+    .replace(/\n+PWA\s*:[^\n]*/g, '')
+    .replace(/\n+MAT\s*:[^\n]*/g, '')
+    .replace(/\n+Description\s*:\n*/g, '\n')
+    .trim();
+  return t
     .replace(/\b0[1-9](?:[\s.\-]?\d{2}){4}\b/g, '[tél. masqué]')
     .replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, '[email masqué]');
 }
@@ -3894,9 +3906,10 @@ app.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
     if (!/^[a-zA-Z0-9]+$/.test(cardId) || !/^[a-zA-Z0-9]+$/.test(attachId)) return res.status(400).end();
     if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).end();
     const meta = await _trelloGet(`/cards/${cardId}/attachments/${attachId}?fields=url,mimeType`);
-    const r = await axios.get(meta.url, {
+    const authSep = meta.url.includes('?') ? '&' : '?';
+    const authedUrl = `${meta.url}${authSep}key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
+    const r = await axios.get(authedUrl, {
       responseType: 'stream',
-      headers: { Authorization: `OAuth oauth_consumer_key="${TRELLO_KEY}", oauth_token="${TRELLO_TOKEN}"` },
       timeout: 10000,
     });
     res.setHeader('Content-Type', meta.mimeType || 'image/jpeg');
