@@ -3913,9 +3913,13 @@ app.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
     let entry = _attachmentUrlMap.get(`${cardId}/${attachId}`);
     if (!entry) { await _fetchTrelloSignalements(); entry = _attachmentUrlMap.get(`${cardId}/${attachId}`); }
     if (!entry) return res.status(404).end();
-    const sep = entry.trelloUrl.includes('?') ? '&' : '?';
-    const authedUrl = `${entry.trelloUrl}${sep}key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
-    const r = await axios.get(authedUrl, { responseType: 'stream', maxRedirects: 10, timeout: 20000 });
+    // Trello attachment downloads on private boards require OAuth header, not query params
+    const r = await axios.get(entry.trelloUrl, {
+      responseType: 'stream',
+      maxRedirects: 10,
+      timeout: 20000,
+      headers: { Authorization: `OAuth oauth_consumer_key="${TRELLO_KEY}", oauth_token="${TRELLO_TOKEN}"` },
+    });
     res.setHeader('Content-Type', r.headers['content-type'] || entry.mimeType);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     r.data.pipe(res);
