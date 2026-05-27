@@ -3837,14 +3837,24 @@ let _sigTrackCache = null, _sigTrackCacheAt = 0;
 
 async function _fetchTrelloSignalements() {
   if (_sigTrackCache && Date.now() - _sigTrackCacheAt < 5 * 60 * 1000) return _sigTrackCache;
-  if (!TRELLO_KEY || !TRELLO_TOKEN || !TRELLO_LIST_ID_SIG) return { signalements: [], bugs: [] };
-  const boardId = await _trelloBoardIdFor(TRELLO_LIST_ID_SIG);
-  const [lists, cards] = await Promise.all([
-    _trelloGet(`/boards/${boardId}/lists?fields=id,name&filter=open`),
-    _trelloGet(`/boards/${boardId}/cards?filter=open&fields=id,name,desc,idList,dateLastActivity&attachments=true&actions=commentCard`),
-  ]);
+  if (!TRELLO_KEY || !TRELLO_TOKEN) return { signalements: [], bugs: [] };
+  // Support SIG et BUG sur des boards Trello séparés
+  const boardIds = new Set();
+  if (TRELLO_LIST_ID_SIG) boardIds.add(await _trelloBoardIdFor(TRELLO_LIST_ID_SIG));
+  if (TRELLO_LIST_ID_BUG) boardIds.add(await _trelloBoardIdFor(TRELLO_LIST_ID_BUG));
+  if (!boardIds.size) return { signalements: [], bugs: [] };
   const listStatusMap = {}, listNameMap = {};
-  for (const l of lists) { listStatusMap[l.id] = _trelloStatusFromListName(l.name); listNameMap[l.id] = l.name; }
+  const allCards = [];
+  await Promise.all([...boardIds].map(async bid => {
+    const [lists, cards] = await Promise.all([
+      _trelloGet(`/boards/${bid}/lists?fields=id,name&filter=open`),
+      _trelloGet(`/boards/${bid}/cards?filter=open&fields=id,name,desc,idList,dateLastActivity&attachments=true&actions=commentCard`),
+    ]);
+    for (const l of lists) { listStatusMap[l.id] = _trelloStatusFromListName(l.name); listNameMap[l.id] = l.name; }
+    allCards.push(...cards);
+  }));
+  // Compatibility: replace local cards variable reference
+  const cards = allCards;
   const result = { signalements: [], bugs: [] };
   for (const card of cards) {
     const isSig = card.name.startsWith('[Signalement]');
