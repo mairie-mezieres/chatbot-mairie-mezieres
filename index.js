@@ -3845,11 +3845,13 @@ function _trelloStatusFromListName(name) {
   return 'pending';
 }
 
+const _attachmentUrlMap = new Map();
 let _sigTrackCache = null, _sigTrackCacheAt = 0;
 
 async function _fetchTrelloSignalements() {
   if (_sigTrackCache && Date.now() - _sigTrackCacheAt < 5 * 60 * 1000) return _sigTrackCache;
   if (!TRELLO_KEY || !TRELLO_TOKEN) return { signalements: [], bugs: [] };
+  _attachmentUrlMap.clear();
   // Support SIG et BUG sur des boards Trello séparés
   const boardIds = new Set();
   if (TRELLO_LIST_ID_SIG) boardIds.add(await _trelloBoardIdFor(TRELLO_LIST_ID_SIG));
@@ -3879,12 +3881,11 @@ async function _fetchTrelloSignalements() {
       .filter(a => a.type === 'commentCard')
       .map(a => ({ text: _anonymize(a.data.text), date: a.date }))
     ).reverse();
-    // Use preview URLs directly (Cloudinary/S3) — no proxy needed, they are accessible
     const photos = (card.attachments || [])
-      .filter(a => a.id && (!a.mimeType || a.mimeType.startsWith('image/')))
+      .filter(a => a.id && a.url && (!a.mimeType || a.mimeType.startsWith('image/')))
       .map(a => {
-        const prvs = (a.previews || []).filter(p => p.url).sort((x, y) => (y.width || 0) - (x.width || 0));
-        return { url: prvs.length ? prvs[0].url : `https://chatbot-mairie-mezieres.onrender.com/api/signalements/photo/${card.id}/${a.id}` };
+        _attachmentUrlMap.set(`${card.id}/${a.id}`, { trelloUrl: a.url, mimeType: a.mimeType || 'image/jpeg' });
+        return { url: `https://chatbot-mairie-mezieres.onrender.com/api/signalements/photo/${card.id}/${a.id}` };
       });
     const item = { id: card.id, cat, desc: _anonymize(card.desc), status, statusLabel, date: card.dateLastActivity, comments, photos };
     if (isSig) result.signalements.push(item);
@@ -3909,21 +3910,16 @@ app.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
     const { cardId, attachId } = req.params;
     if (!/^[a-zA-Z0-9]+$/.test(cardId) || !/^[a-zA-Z0-9]+$/.test(attachId)) return res.status(400).end();
     if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).end();
-    const att = await _trelloGet(`/cards/${cardId}/attachments/${attachId}`);
-    // Use largest preview (public S3 URL) if available, else authenticated download
-    const previews = (att.previews || []).filter(p => p.url).sort((a, b) => (b.width || 0) - (a.width || 0));
-    let downloadUrl;
-    if (previews.length) {
-      downloadUrl = previews[0].url;
-    } else {
-      const sep = att.url.includes('?') ? '&' : '?';
-      downloadUrl = `${att.url}${sep}key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
-    }
-    const r = await axios.get(downloadUrl, { responseType: 'stream', maxRedirects: 10, timeout: 15000 });
-    res.setHeader('Content-Type', r.headers['content-type'] || att.mimeType || 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    let entry = _attachmentUrlMap.get(`${cardId}/${attachId}`);
+    if (!entry) { await _fetchTrelloSignalements(); entry = _attachmentUrlMap.get(`${cardId}/${attachId}`); }
+    if (!entry) return res.status(404).end();
+    const sep = entry.trelloUrl.includes('?') ? '&' : '?';
+    const authedUrl = `${entry.trelloUrl}${sep}key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
+    const r = await axios.get(authedUrl, { responseType: 'stream', maxRedirects: 10, timeout: 20000 });
+    res.setHeader('Content-Type', r.headers['content-type'] || entry.mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
     r.data.pipe(res);
-  } catch(e) { console.error('photo proxy:', e.message); res.status(404).end(); }
+  } catch(e) { console.error('photo proxy:', e.message); res.status(502).end(); }
 });
 
 // ── Boîte à idées partagées ──────────────────────────────────
