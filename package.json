@@ -2,6 +2,8 @@
   "name": "chatbot-mairie-mezieres",
   "version": "6.8.0",
   "description": "MAT — Mézières Avec Toi · Serveur Render",
+  "author": "Commune de Mézières-lez-Cléry",
+  "license": "MIT",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

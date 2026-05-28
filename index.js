@@ -1,3 +1,8 @@
+/*
+ * MAT — Mézières Avec Toi
+ * Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
+ * Licence MIT — voir LICENSE
+ */
 const express   = require("express");
 const axios     = require("axios");
 const https     = require("https");
