@@ -1862,7 +1862,7 @@ Fin : ${formatAlertDateFr(vigilance.end)}
 
 Soyez prudents et suivez les consignes de sécurité.
 
-#app-mezieres`;
+#MAT`;
 
   await axios.post(
     `https://graph.facebook.com/v19.0/${pageId}/feed`,
@@ -3035,7 +3035,7 @@ app.post("/webhook", async (req, res) => {
               change.value.sender_id ||
               (msg.replace(/\s+/g, " ").trim() + "|" + (photo || ""));
 
-            console.log("📰 Publication #app-mezieres détectée", postKey);
+            console.log("📰 Publication #MAT détectée", postKey);
             await handleFacebookPublication(msg, photo, postKey);
           }
         }
@@ -3142,7 +3142,7 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
 // PUBLICATION MULTI-CANAL (Admin)
 // ═══════════════════════════════════════════════════════════════
 
-// ── Publier une actu sur Facebook (sans #app-mezieres) ───────
+// ── Publier une actu sur Facebook (sans #MAT) ───────────────
 async function publishActuToFacebook(title, description, imageBase64, eventDate, eventLocation) {
   const pageId = await resolveFacebookPageId();
   if (!pageId || !PAGE_ACCESS_TOKEN) {
