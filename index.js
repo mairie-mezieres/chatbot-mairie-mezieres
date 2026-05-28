@@ -3028,7 +3028,7 @@ app.post("/webhook", async (req, res) => {
         if (change.field === "feed" && change.value?.message) {
           const msg = change.value.message;
           const photo = change.value.photo || null;
-          if (msg.includes("#app-mezieres")) {
+          if (msg.includes("#MAT")) {
             const postKey =
               change.value.post_id ||
               change.value.comment_id ||
@@ -3054,7 +3054,7 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   }
 
   // Texte complet du post, sans le hashtag
-  const fullText = (msg || "").replace(/#app-mezieres/gi, "").trim();
+  const fullText = (msg || "").replace(/#MAT/gi, "").trim();
 
   // Découpage propre : 1ère ligne (non vide) = titre, reste = description
   const lines = fullText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
