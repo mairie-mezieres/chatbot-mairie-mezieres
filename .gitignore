@@ -1,3 +1,31 @@
 node_modules/
+
+# Variables d'environnement — ne jamais committer
 .env
+.env.*
+*.env
+.env.local
+.env.production
+.env.development
+# Sauf le fichier d'exemple (à committer pour documenter les variables)
+!.env.example
+
+# Logs
 *.log
+npm-debug.log*
+
+# Système
+.DS_Store
+Thumbs.db
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
+*~
+
+# Build / temp
+dist/
+.cache/
+tmp/
+
