@@ -1,0 +1,100 @@
+{
+  "cleanHtml": [
+    [
+      "<p>Bonjour <b>Mézières</b></p>",
+      "Bonjour  Mézières"
+    ],
+    [
+      "<script>alert(1)</script>Texte sûr",
+      "Texte sûr"
+    ],
+    [
+      "<style>.x{}</style><nav>menu</nav>Contenu éàç",
+      "Contenu éàç"
+    ],
+    [
+      "Texte&nbsp;avec&amp;entités",
+      "Texte avec entités"
+    ],
+    [
+      "<header>H</header>Corps<footer>F</footer>",
+      "Corps"
+    ],
+    [
+      "Trois   espaces    multiples",
+      "Troisespacesmultiples"
+    ],
+    [
+      "Café œuf naïve <span>🚨</span>",
+      "Café œuf naïve  🚨"
+    ],
+    [
+      "<div>Ligne1</div>\n\n\n<div>Ligne2</div>",
+      "Ligne1Ligne2"
+    ]
+  ],
+  "normalizeQuestion": [
+    [
+      "Mézières-lez-Cléry",
+      "mezieres lez clery"
+    ],
+    [
+      "OÙ est la MAIRIE ?",
+      "ou est la mairie"
+    ],
+    [
+      "Horaires d'été : 9h-12h",
+      "horaires d ete 9h 12h"
+    ],
+    [
+      "Œuf & cœur, naïve façade",
+      "uf c ur naive facade"
+    ],
+    [
+      "  Plusieurs   espaces  ",
+      "plusieurs espaces"
+    ],
+    [
+      "",
+      ""
+    ],
+    [
+      null,
+      ""
+    ],
+    [
+      "Accents: àâäéèêëïîôöùûüÿç",
+      "accents aaaeeeeiioouuuyc"
+    ],
+    [
+      "Tél: 02.38.45.61.76 !!!",
+      "tel 02 38 45 61 76"
+    ]
+  ],
+  "hashKey": [
+    [
+      "mairie",
+      "487224046"
+    ],
+    [
+      "mézières",
+      "2126862140"
+    ],
+    [
+      "",
+      "2166136261"
+    ],
+    [
+      "café",
+      "856211068"
+    ],
+    [
+      "🚨 emoji",
+      "3870534654"
+    ],
+    [
+      "Mézières-lez-Cléry",
+      "3743956116"
+    ]
+  ]
+}
