@@ -69,6 +69,7 @@ const { uploadActuImageToCloudinary, deleteActuImageFromCloudinary } = require("
 // ─── Logs diagnostiques + adminAuth — voir lib/middleware.js ──
 const { dlog } = require("./lib/middleware");
 const { resolveFacebookPageId } = require("./lib/facebook");
+const { logServerError } = require("./lib/logger");
 const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance, sendWeatherPush, publishWeatherAlertToFacebook, isSameWeatherAlert, VIGILANCE_COLORS, VIGILANCE_PHENOMENA } = require("./lib/meteo");
 
 // ─── Web Push VAPID — voir lib/webpush.js ─────────────────────
@@ -1153,83 +1154,6 @@ function calcIaCost(provider, inTokens, outTokens) {
   return 0;
 }
 
-function normalizeMelLink(link = {}) {
-  const label = String(link.label || "").trim();
-  const tel = String(link.tel || "").trim();
-  const url = String(link.url || "").trim();
-  if (!label || (!tel && !url)) return null;
-  return tel ? { label, tel } : { label, url };
-}
-
-function normalizeMelQuestion(question = {}, idx = 0) {
-  const id = String(question.id || `q${idx + 1}`).trim();
-  const label = String(question.label || "").trim();
-  const ico = String(question.ico || "💬").trim() || "💬";
-  if (!id || !label) return null;
-
-  const out = { id, ico, label };
-
-  const prompt = String(question.prompt || "").trim();
-  const topic = String(question.topic || "").trim();
-  if (prompt) out.prompt = prompt;
-  if (topic) out.topic = topic;
-
-  const rawAnswer = question.directAnswer;
-  if (typeof rawAnswer === "string") {
-    const txt = rawAnswer.trim();
-    if (txt) out.directAnswer = { text: txt };
-  } else if (rawAnswer && typeof rawAnswer === "object") {
-    const text = String(rawAnswer.text || "").trim();
-    const links = Array.isArray(rawAnswer.links)
-      ? rawAnswer.links.map(normalizeMelLink).filter(Boolean)
-      : [];
-    if (text || links.length) {
-      out.directAnswer = {};
-      if (text) out.directAnswer.text = text;
-      if (links.length) out.directAnswer.links = links;
-    }
-  }
-
-  return out;
-}
-
-function normalizeMelCategory(key, category = {}) {
-  const cleanKey = String(key || "").trim();
-  const label = String(category.label || "").trim();
-  const ico = String(category.ico || "💬").trim() || "💬";
-  if (!cleanKey || !label) return null;
-
-  const out = {
-    label,
-    ico,
-    needZone: !!category.needZone,
-    questions: Array.isArray(category.questions)
-      ? category.questions.map(normalizeMelQuestion).filter(Boolean)
-      : []
-  };
-
-  if (category.openChatDirectly) out.openChatDirectly = true;
-  return [cleanKey, out];
-}
-
-function normalizeMelTree(tree = {}) {
-  if (!tree || typeof tree !== "object" || Array.isArray(tree)) {
-    throw new Error("Structure MEL invalide");
-  }
-
-  const out = {};
-  for (const [key, value] of Object.entries(tree)) {
-    const normalized = normalizeMelCategory(key, value);
-    if (normalized) out[normalized[0]] = normalized[1];
-  }
-
-  if (!Object.keys(out).length) {
-    throw new Error("Aucune catégorie MEL valide");
-  }
-
-  return out;
-}
-
 // ── Middleware auth admin ─────────────────────────────────────
 const { adminAuth } = require("./lib/middleware");
 
@@ -1238,16 +1162,6 @@ const melLimiter = rateLimit({
   windowMs: 60 * 1000, max: 30,
   standardHeaders: true, legacyHeaders: false,
   message: { error: "Trop de requêtes, réessayez dans une minute." }
-});
-const logsLimiter = rateLimit({
-  windowMs: 60 * 1000, max: 60,
-  standardHeaders: true, legacyHeaders: false,
-  skip: () => false
-});
-const adminLoginLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, max: 8,
-  standardHeaders: true, legacyHeaders: false,
-  message: { error: "Trop de tentatives de connexion. Patientez 5 minutes." }
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1259,38 +1173,6 @@ const adminLoginLimiter = rateLimit({
 // ROUTES ADMIN (authentifiées)
 // ═══════════════════════════════════════════════════════════════
 
-// ── Logs d'erreurs PWA ────────────────────────────────────────
-const LOG_KEY     = "mat:error_logs";
-const LOG_MAX     = 200;
-const _logRateMap = new Map();
-
-// Purge automatique des entrées rate-map > 5 min, toutes les heures
-setInterval(() => {
-  const cutoff = Date.now() - 5 * 60 * 1000;
-  for (const [k, ts] of _logRateMap) if (ts < cutoff) _logRateMap.delete(k);
-}, 60 * 60 * 1000).unref?.();
-
-// Écriture directe côté serveur (sans passer par HTTP)
-async function logServerError(module, msg, extra) {
-  if (!REDIS_URL) return;
-  try {
-    const key = module + ':' + String(msg).slice(0, 60);
-    const last = _logRateMap.get(key) || 0;
-    if (Date.now() - last < 60000) return;
-    _logRateMap.set(key, Date.now());
-    const record = {
-      ts: new Date().toISOString(),
-      module: String(module || 'server').slice(0, 30),
-      msg: String(msg || '').slice(0, 200),
-      extra: extra ? String(extra).slice(0, 100) : undefined
-    };
-    await axios.post(`${REDIS_URL}/lpush/${LOG_KEY}`, JSON.stringify(record),
-      { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' } });
-    await axios.post(`${REDIS_URL}/ltrim/${LOG_KEY}/0/${LOG_MAX - 1}`,
-      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
-  } catch (_) {}
-}
-
 // Capture des erreurs Node.js non gérées → logs admin
 process.on('uncaughtException', (err) => {
   console.error('💥 uncaughtException:', err.message);
@@ -1300,64 +1182,6 @@ process.on('unhandledRejection', (reason) => {
   const msg = reason instanceof Error ? reason.message : String(reason);
   console.error('💥 unhandledRejection:', msg);
   logServerError('unhandledRejection', msg);
-});
-
-app.post("/logs/error", logsLimiter, async (req, res) => {
-  res.sendStatus(204);
-  try {
-    const batch = Array.isArray(req.body) ? req.body : [req.body];
-    const now = Date.now();
-    for (const entry of batch.slice(0, 10)) {
-      if (!entry || !entry.msg) continue;
-      const key = (entry.module || '') + ':' + String(entry.msg).slice(0, 60);
-      const last = _logRateMap.get(key) || 0;
-      if (now - last < 60000) continue;
-      _logRateMap.set(key, now);
-      const record = {
-        ts:     entry.ts || new Date().toISOString(),
-        module: String(entry.module || 'MAT').slice(0, 30),
-        msg:    String(entry.msg || '').slice(0, 200),
-        extra:  entry.extra ? String(entry.extra).slice(0, 100) : undefined
-      };
-      if (REDIS_URL) {
-        await axios.post(`${REDIS_URL}/lpush/${LOG_KEY}`, JSON.stringify(record),
-          { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' } });
-        await axios.post(`${REDIS_URL}/ltrim/${LOG_KEY}/0/${LOG_MAX - 1}`,
-          { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
-      }
-    }
-  } catch(_) {}
-});
-
-app.get("/admin/logs", adminAuth, async (req, res) => {
-  try {
-    if (!REDIS_URL) return res.json({ logs: [] });
-    const r = await axios.get(`${REDIS_URL}/lrange/${LOG_KEY}/0/199`,
-      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
-    const raw = r.data?.result || [];
-    const logs = raw.map(s => { try { return JSON.parse(s); } catch(_) { return { msg: s }; } });
-    res.json({ logs });
-  } catch(e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.delete("/admin/logs", adminAuth, async (req, res) => {
-  try {
-    if (REDIS_URL) await axios.post(`${REDIS_URL}/del/${LOG_KEY}`, null,
-      { headers: { Authorization: `Bearer ${REDIS_TOKEN}` }, timeout: 4000 });
-    res.json({ ok: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// ── Login admin ───────────────────────────────────────────────
-app.post("/admin/login", adminLoginLimiter, (req, res) => {
-  const { password } = req.body || {};
-  if (ADMIN_PASSWORD && password === ADMIN_PASSWORD) {
-    res.json({ ok: true, token: ADMIN_PASSWORD });
-  } else {
-    res.status(401).json({ ok: false, error: "Mot de passe incorrect" });
-  }
 });
 
 // ── Stats globales ────────────────────────────────────────────
@@ -1540,135 +1364,6 @@ app.get("/admin/dashboard", adminAuth, async (req, res) => {
   } catch(e) {
     res.status(500).json({ ok: false, error: e.message });
   }
-});
-
-//Modifier les régagles
-app.get("/admin/settings", adminAuth, async (req, res) => {
-  try {
-    const settings = await readAdminSettings();
-    res.json({ ok: true, settings });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/admin/settings", adminAuth, async (req, res) => {
-  try {
-    const current = await readAdminSettings();
-    const next = {
-      ...current,
-      detailedStatsEnabled:  req.body?.detailedStatsEnabled === true,
-      melUsageStatsEnabled:  req.body?.melUsageStatsEnabled === true,
-      appOpenStatsEnabled:   req.body?.appOpenStatsEnabled === true,
-      melQuestionLogEnabled: req.body?.melQuestionLogEnabled === true,
-      melEnabled:            req.body?.melEnabled !== false,
-      melDisabledMessage:    String(req.body?.melDisabledMessage || '').substring(0, 300)
-    };
-    await writeAdminSettings(next);
-    res.json({ ok: true, settings: next });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// ── Route : consultation des questions MEL stockées anonymement ───────────────
-// Retourne les questions du jour (ou d'une date donnée via ?date=YYYY-MM-DD).
-app.get("/admin/mel-questions", adminAuth, async (req, res) => {
-  try {
-    const date = (req.query.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
-    const questions = await redisLRange(`mat:mel:questions:${date}`, 0, -1);
-    res.json({ ok: true, date, questions, count: questions.length });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/mel/tree", async (req, res) => {
-  try {
-    const tree = await readMelTreeConfig();
-    res.json({ ok: true, tree: tree || null });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/admin/mel-tree", adminAuth, async (req, res) => {
-  try {
-    const tree = await readMelTreeConfig();
-    res.json({ ok: true, tree: tree || null });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/admin/mel-tree", adminAuth, async (req, res) => {
-  try {
-    const tree = normalizeMelTree((req.body || {}).tree);
-    await writeMelTreeConfig(tree);
-    res.json({ ok: true, tree, categories: Object.keys(tree).length });
-  } catch (e) {
-    res.status(400).json({ ok: false, error: e.message || "Structure MEL invalide" });
-  }
-});
-
-// ── Liste idées (admin) ───────────────────────────────────────
-app.get("/admin/ideas", adminAuth, async (req, res) => {
-  const ideas = await readIdeas();
-  res.json({ ideas, count: ideas.length });
-});
-
-// ── Supprimer une idée ────────────────────────────────────────
-app.delete("/admin/ideas/:id", adminAuth, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const ideas = await readIdeas();
-  const filtered = ideas.filter(i => i.id !== id);
-  if (filtered.length === ideas.length) return res.status(404).json({ error: "Idée non trouvée" });
-  await writeIdeas(filtered);
-  res.json({ ok: true, deleted: id });
-});
-
-// ── Mettre à jour statut + commentaire d'une idée ────────────
-app.patch("/admin/ideas/:id", adminAuth, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { status, adminComment } = req.body || {};
-  const validStatuses = [null, "", "studying", "accepted", "rejected"];
-  if (status !== undefined && !validStatuses.includes(status)) {
-    return res.status(400).json({ error: "Statut invalide" });
-  }
-  const ideas = await readIdeas();
-  const idx = ideas.findIndex(i => i.id === id);
-  if (idx < 0) return res.status(404).json({ error: "Idée non trouvée" });
-  if (status !== undefined) ideas[idx].status = status || null;
-  if (adminComment !== undefined) ideas[idx].adminComment = (adminComment == null) ? '' : String(adminComment).substring(0, 500);
-  await writeIdeas(ideas);
-  res.json({ ok: true, idea: ideas[idx] });
-});
-
-// ── Liste notifications/actus (admin) ─────────────────────────
-app.get("/admin/actus", adminAuth, async (req, res) => {
-  const actus = await readNews();
-  res.json({ actus, count: actus.length });
-});
-
-// ── Supprimer une actu ────────────────────────────────────────
-app.delete("/admin/actus/:id", adminAuth, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const actus = await readNews();
-  const actu = actus.find(a => a.id === id);
-  if (!actu) return res.status(404).json({ error: "Actu non trouvée" });
-
-  let cloudinaryResult = null;
-  if (actu.photoPublicId) {
-    try {
-      cloudinaryResult = await deleteActuImageFromCloudinary(actu.photoPublicId);
-    } catch (e) {
-      return res.status(502).json({ error: "Suppression Cloudinary impossible : " + e.message });
-    }
-  }
-
-  const filtered = actus.filter(a => a.id !== id);
-  await writeNews(filtered);
-  res.json({ ok: true, deleted: id, cloudinary: cloudinaryResult });
 });
 
 // ── Signalements + Trello — voir routes/signalements.js ──────
@@ -2823,6 +2518,12 @@ app.use(require("./routes/meteo"));
 
 // ── Abonnements push — voir routes/push.js ─────────────────
 app.use(require("./routes/push"));
+
+// ── Logs PWA + login admin — voir routes/logs.js ────────────
+app.use(require("./routes/logs"));
+
+// ── Admin simple (settings, MEL, idées, actus) — voir routes/admin-simple.js ──
+app.use(require("./routes/admin-simple"));
 
 
 // ── Stats usage ──────────────────────────────────────────────
