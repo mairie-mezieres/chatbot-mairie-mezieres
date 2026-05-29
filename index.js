@@ -8,7 +8,6 @@ const axios     = require("axios");
 const https     = require("https");
 const Anthropic = require("@anthropic-ai/sdk");
 const webpush   = require("web-push");
-const cloudinary = require("cloudinary").v2;
 const rateLimit = require("express-rate-limit");
 
 // Timeout global sur tous les appels axios sortants (8 s)
@@ -49,7 +48,6 @@ app.set('trust proxy', 1); // Render est derrière un reverse proxy
 const {
   PAGE_ACCESS_TOKEN, VERIFY_TOKEN, ANTHROPIC_API_KEY, GOOGLE_CALENDAR_ICAL,
   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_EMAIL, REDIS_URL, REDIS_TOKEN,
-  CLOUDINARY_NAME, CLOUDINARY_KEY, CLOUDINARY_SECRET, CLOUDINARY_ENABLED,
   MISTRAL_API_KEY, MISTRAL_MODEL, MISTRAL_URL,
   TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_BUG, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_DEMANDE, TRELLO_NOTIFY,
   UPSTASH_EMAIL, UPSTASH_API_KEY, UPSTASH_REDIS_DB_ID, ADMIN_PASSWORD,
@@ -65,15 +63,8 @@ if (!ADMIN_PASSWORD) {
 
 const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
 
-if (CLOUDINARY_ENABLED) {
-  cloudinary.config({
-    cloud_name: CLOUDINARY_NAME,
-    api_key: CLOUDINARY_KEY,
-    api_secret: CLOUDINARY_SECRET,
-    secure: true
-  });
-  console.log("✅ Cloudinary configuré");
-}
+// ─── Cloudinary (upload images) — voir lib/cloudinary.js ─────
+const { uploadActuImageToCloudinary, deleteActuImageFromCloudinary } = require("./lib/cloudinary");
 
 // ─── Logs diagnostiques + adminAuth — voir lib/middleware.js ──
 const { dlog } = require("./lib/middleware");
@@ -111,50 +102,6 @@ function shouldTrackDeviceBreakdown(service, settings) {
   return settings.detailedStatsEnabled !== false;
 }
 
-function getDataUriMimeType(dataUri = "") {
-  const m = String(dataUri).match(/^data:([^;]+);base64,/i);
-  return (m?.[1] || "image/jpeg").toLowerCase();
-}
-
-async function uploadEntrepriseLogoToCloudinary(imageBase64) {
-  if (!imageBase64) return null;
-  if (!CLOUDINARY_ENABLED) throw new Error("Cloudinary non configuré");
-  const mimeType = getDataUriMimeType(imageBase64);
-  return await cloudinary.uploader.upload(imageBase64, {
-    folder: "mat/entreprises",
-    resource_type: "image",
-    overwrite: false,
-    unique_filename: true,
-    format: mimeType.includes("png") ? "png" : "jpg"
-  });
-}
-
-async function uploadActuImageToCloudinary(imageBase64) {
-  if (!imageBase64) return null;
-  if (!CLOUDINARY_ENABLED) throw new Error("Cloudinary non configuré");
-
-  const mimeType = getDataUriMimeType(imageBase64);
-  return await cloudinary.uploader.upload(imageBase64, {
-    folder: "mat/actus",
-    resource_type: "image",
-    overwrite: false,
-    invalidate: false,
-    use_filename: false,
-    unique_filename: true,
-    format: mimeType.includes("png") ? "png" : undefined
-  });
-}
-
-async function deleteActuImageFromCloudinary(publicId) {
-  if (!publicId) return { result: "skipped" };
-  if (!CLOUDINARY_ENABLED) throw new Error("Cloudinary non configuré");
-
-  return await cloudinary.uploader.destroy(publicId, {
-    resource_type: "image",
-    type: "upload",
-    invalidate: true
-  });
-}
 
 function pctTrend(current, previous) {
   if (!previous) return current > 0 ? 100 : 0;
@@ -4530,120 +4477,8 @@ app.use(require("./routes/docs"));
 app.use(require("./routes/sondages"));
 
 
-// ── Annuaire entreprises ─────────────────────────────────────
-app.get("/entreprises", async (req, res) => {
-  const list = await readEntreprises();
-  res.json({ entreprises: list });
-});
-
-app.get("/admin/entreprises", adminAuth, async (req, res) => {
-  res.json({ entreprises: await readEntreprises() });
-});
-
-app.post("/admin/entreprises", adminAuth, async (req, res) => {
-  const { nom, activite, description, siteWeb, telephone, email, gerant, logo, logoBase64 } = req.body || {};
-  if (!nom) return res.status(400).json({ error: "nom requis" });
-  let logoUrl = logo ? String(logo).substring(0, 500) : "";
-  if (logoBase64) {
-    try {
-      const r = await uploadEntrepriseLogoToCloudinary(logoBase64);
-      logoUrl = r.secure_url;
-    } catch (e) { return res.status(502).json({ error: "Logo Cloudinary: " + e.message }); }
-  }
-  const list = await readEntreprises();
-  list.push({
-    id: Date.now(),
-    nom:         String(nom).substring(0, 200),
-    activite:    activite    ? String(activite).substring(0, 200)    : "",
-    description: description ? String(description).substring(0, 1000) : "",
-    siteWeb:     siteWeb     ? String(siteWeb).substring(0, 500)     : "",
-    telephone:   telephone   ? String(telephone).substring(0, 50)    : "",
-    email:       email       ? String(email).substring(0, 200)       : "",
-    gerant:      gerant      ? String(gerant).substring(0, 200)      : "",
-    logo:        logoUrl,
-    addedAt:     new Date().toISOString()
-  });
-  await writeEntreprises(list);
-  res.json({ ok: true, entreprises: list });
-});
-
-app.put("/admin/entreprises/:id", adminAuth, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const list = await readEntreprises();
-  const idx = list.findIndex(e => e.id === id);
-  if (idx < 0) return res.status(404).json({ error: "Entreprise non trouvée" });
-  const { nom, activite, description, siteWeb, telephone, email, gerant, logo, logoBase64 } = req.body || {};
-  function _norm(v, max) { return v == null ? '' : String(v).substring(0, max); }
-  if (nom         !== undefined) list[idx].nom         = _norm(nom, 200);
-  if (activite    !== undefined) list[idx].activite    = _norm(activite, 200);
-  if (description !== undefined) list[idx].description = _norm(description, 1000);
-  if (siteWeb     !== undefined) list[idx].siteWeb     = _norm(siteWeb, 500);
-  if (telephone   !== undefined) list[idx].telephone   = _norm(telephone, 50);
-  if (email       !== undefined) list[idx].email       = _norm(email, 200);
-  if (gerant      !== undefined) list[idx].gerant      = _norm(gerant, 200);
-  if (logoBase64) {
-    try {
-      const r = await uploadEntrepriseLogoToCloudinary(logoBase64);
-      list[idx].logo = r.secure_url;
-    } catch (e) { return res.status(502).json({ error: "Logo Cloudinary: " + e.message }); }
-  } else if (logo !== undefined) {
-    list[idx].logo = _norm(logo, 500);
-  }
-  await writeEntreprises(list);
-  res.json({ ok: true, entreprises: list });
-});
-
-app.delete("/admin/entreprises/:id", adminAuth, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const list = (await readEntreprises()).filter(e => e.id !== id);
-  await writeEntreprises(list);
-  res.json({ ok: true, entreprises: list });
-});
-
-// Migre les logos fbcdn.net vers Cloudinary (appelé manuellement depuis l'admin)
-app.post("/admin/entreprises/fix-logos", adminAuth, async (req, res) => {
-  const list = await readEntreprises();
-  let fixed = 0, skipped = 0;
-
-  for (const e of list) {
-    if (!e.logo || !e.logo.includes('fbcdn.net')) continue;
-
-    // Photo de profil (t39.30808-1) : extraire le pageId → URL Graph API permanente
-    // Format : /{random}_{pageId}_{photoId}_n.jpg
-    const profileMatch = e.logo.match(/\/t39\.30808-1\/\d+_(\d+)_\d+_n\.jpg/);
-    if (profileMatch) {
-      e.logo = `https://graph.facebook.com/${profileMatch[1]}/picture?type=large`;
-      fixed++;
-      continue;
-    }
-
-    // Photo de post (t39.30808-6) : tenter un fetch côté serveur → Cloudinary
-    if (!CLOUDINARY_ENABLED) { skipped++; continue; }
-    try {
-      const resp = await axios.get(e.logo, {
-        responseType: 'arraybuffer', timeout: 10000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Referer': 'https://www.facebook.com/'
-        }
-      });
-      const ct = resp.headers['content-type'] || 'image/jpeg';
-      const base64 = `data:${ct};base64,${Buffer.from(resp.data).toString('base64')}`;
-      const result = await uploadEntrepriseLogoToCloudinary(base64);
-      e.logo = result.secure_url;
-      fixed++;
-    } catch (err) {
-      console.warn(`[fix-logos] skip ${e.nom}:`, err.message);
-      skipped++;
-    }
-  }
-
-  if (fixed > 0) await writeEntreprises(list);
-  res.json({
-    ok: true, fixed, skipped,
-    errors: skipped > 0 ? `${skipped} logo(s) non réparable(s) automatiquement — modifiez-les manuellement via le formulaire (bouton ✏️ Modifier).` : undefined
-  });
-});
+// ── Annuaire entreprises — voir routes/entreprises.js ────────
+app.use(require("./routes/entreprises"));
 
 
 // ═══════════════════════════════════════════════════════════════
