@@ -58,7 +58,7 @@ router.post("/push/test", subscribeLimiter, async (req, res) => {
     title: '🔔 Test notification MAT',
     body:  'Votre appareil reçoit bien les notifications !',
     icon:  './icon-192.png',
-    badge: './icon-192.png',
+    badge: './icon-badge.png',
     tag:   'mat-test',
     renotify: true,
     data:  { url: './#notifs', open: 'notifs' }

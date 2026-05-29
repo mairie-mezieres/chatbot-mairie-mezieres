@@ -325,7 +325,7 @@ router.patch("/admin/signals/:id", adminAuth, async (req, res) => {
     const msg = SIGNAL_STATUS_PUSH[status];
     sendPushToToken(token, {
       title: msg.title, body: msg.body,
-      icon: "./icon-192.png", badge: "./icon-192.png",
+      icon: "./icon-192.png", badge: "./icon-badge.png",
       tag: `signal-status-${id}`,
       data: { url: "./#signalements", open: "signalements" }
     }).catch(() => {});
