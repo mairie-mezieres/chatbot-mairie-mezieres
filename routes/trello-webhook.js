@@ -6,18 +6,12 @@ const axios = require("axios");
 const crypto = require("crypto");
 const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG } = require("../config");
 const { trelloStatusFromListName } = require("../lib/trello-status");
-const { sendPushToToken } = require("../lib/push-notify");
+const { sendSignalStatusPush, SIGNAL_STATUS_PUSH } = require("../lib/push-notify");
 const { adminAuth } = require("../lib/middleware");
 
 // Secret optionnel pour valider la signature HMAC-SHA1 envoyée par Trello.
 // (Trello → "App Secret" / "OAuth Secret" sur https://trello.com/app-key)
 const TRELLO_WEBHOOK_SECRET = process.env.TRELLO_WEBHOOK_SECRET || process.env.TRELLO_SECRET || "";
-
-// On ne notifie que les transitions vers "en cours" et "résolu".
-const STATUS_PUSH = {
-  in_progress: { title: "🔵 Votre signalement est en cours de traitement", body: "La mairie a pris en compte votre signalement." },
-  resolved:    { title: "✅ Votre signalement a été résolu", body: "La mairie a traité votre signalement. Merci pour votre contribution !" }
-};
 
 // Trello vérifie le callback via une requête HEAD lors de la création du webhook.
 router.head("/trello/webhook", (req, res) => res.sendStatus(200));
@@ -53,8 +47,8 @@ async function handleTrelloAction(action) {
   if (!data.listBefore || !data.listAfter) return;
   const prevStatus = trelloStatusFromListName(data.listBefore.name);
   const newStatus = trelloStatusFromListName(data.listAfter.name);
-  if (prevStatus === newStatus) return;       // même catégorie de statut → rien
-  if (!STATUS_PUSH[newStatus]) return;         // on ne notifie pas le retour "pending"
+  if (prevStatus === newStatus) return;        // même catégorie de statut → rien
+  if (!SIGNAL_STATUS_PUSH[newStatus]) return;  // on ne notifie pas le retour "pending"
 
   const cardId = data.card && data.card.id;
   if (!cardId) return;
@@ -62,19 +56,10 @@ async function handleTrelloAction(action) {
   // Le payload Trello ne contient pas la description : on la refetch pour
   // lire le marqueur MAT-REF (le notifyToken du citoyen).
   const desc = await fetchCardDesc(cardId);
-  const m = (desc || "").match(/\nMAT-REF:\s*([a-f0-9-]{36})/i);
+  const m = (desc || "").match(/MAT-REF:\s*([a-f0-9-]{36})/i);
   if (!m) return; // carte non issue de MAT (ou ancienne, sans token)
-  const token = m[1];
 
-  const msg = STATUS_PUSH[newStatus];
-  const r = await sendPushToToken(token, {
-    title: msg.title,
-    body: msg.body,
-    icon: "./icon-192.png",
-    badge: "./icon-badge.png",
-    tag: `signal-status-${cardId}`,
-    data: { url: "./#signalements", open: "signalements" }
-  });
+  const r = await sendSignalStatusPush(m[1], newStatus, cardId);
   console.log(`🔔 Trello ${prevStatus}→${newStatus} carte ${cardId} — push:`, r);
 }
 

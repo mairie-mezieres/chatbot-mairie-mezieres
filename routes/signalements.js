@@ -7,13 +7,8 @@ const rateLimit = require("express-rate-limit");
 const { readSignals, writeSignals } = require("../lib/store");
 const { adminAuth } = require("../lib/middleware");
 const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_NOTIFY } = require("../config");
-const { registerNotifyToken, sendPushToToken } = require("../lib/push-notify");
+const { registerNotifyToken, sendSignalStatusPush } = require("../lib/push-notify");
 const { trelloStatusFromListName } = require("../lib/trello-status");
-
-const SIGNAL_STATUS_PUSH = {
-  in_progress: { title: "🔵 Votre signalement est en cours de traitement", body: "La mairie a pris en compte votre signalement." },
-  resolved:    { title: "✅ Votre signalement a été résolu", body: "La mairie a traité votre signalement. Merci pour votre contribution !" }
-};
 
 const signalLimiter = rateLimit({
   windowMs: 60 * 1000, max: 10,
@@ -130,10 +125,17 @@ async function _trelloBoardIdFor(listId) {
 }
 
 const _attachmentUrlMap = new Map();
-let _sigTrackCache = null, _sigTrackCacheAt = 0;
+// Cache « riche » (desc brute conservée), partagé entre vue citoyen et vue
+// admin. TTL court : Trello est la source de vérité, on veut peu de latence.
+const SIG_CACHE_TTL = 60 * 1000;
+let _sigRichCache = null, _sigRichCacheAt = 0;
 
-async function _fetchTrelloSignalements() {
-  if (_sigTrackCache && Date.now() - _sigTrackCacheAt < 5 * 60 * 1000) return _sigTrackCache;
+function _invalidateSigCache() { _sigRichCache = null; _sigRichCacheAt = 0; }
+
+// Récupère les cartes Trello et construit des items « riches » (desc brute,
+// matRef, coordonnées). Les vues citoyen/admin en dérivent.
+async function _fetchTrelloRich() {
+  if (_sigRichCache && Date.now() - _sigRichCacheAt < SIG_CACHE_TTL) return _sigRichCache;
   if (!TRELLO_KEY || !TRELLO_TOKEN) return { signalements: [], bugs: [] };
   _attachmentUrlMap.clear();
   // Support SIG et BUG sur des boards Trello séparés
@@ -151,7 +153,6 @@ async function _fetchTrelloSignalements() {
     for (const l of lists) { listStatusMap[l.id] = trelloStatusFromListName(l.name); listNameMap[l.id] = l.name; }
     allCards.push(...cards);
   }));
-  // Compatibility: replace local cards variable reference
   const cards = allCards;
   const result = { signalements: [], bugs: [] };
   for (const card of cards) {
@@ -174,20 +175,44 @@ async function _fetchTrelloSignalements() {
       });
     const matRefMatch = (card.desc || '').match(/\nMAT-REF:\s*([a-f0-9-]{36})/i);
     const matRef = matRefMatch ? matRefMatch[1] : null;
-    const descNoRef = (card.desc || '').replace(/\nMAT-REF:\s*[a-f0-9-]{36}/gi, '');
+    const descRaw = (card.desc || '').replace(/\nMAT-REF:\s*[a-f0-9-]{36}/gi, '').trim();
     // Coordonnées GPS extraites du lien OpenStreetMap inséré à la création
     const geoMatch = (card.desc || '').match(/mlat=(-?\d+(?:\.\d+)?)&mlon=(-?\d+(?:\.\d+)?)/i);
     const lat = geoMatch ? parseFloat(geoMatch[1]) : null;
     const lon = geoMatch ? parseFloat(geoMatch[2]) : null;
     const hasGeo = lat != null && lon != null && !isNaN(lat) && !isNaN(lon);
-    const item = { id: card.id, cat, desc: _anonymize(descNoRef), status, statusLabel, date: card.dateLastActivity, comments, photos, ...(matRef ? { matRef } : {}), ...(hasGeo ? { lat, lon } : {}) };
-    if (isSig) result.signalements.push(item);
-    else result.bugs.push(item);
+    const rich = { id: card.id, type: isSig ? 'signalement' : 'bug', cat, descRaw, status, statusLabel, date: card.dateLastActivity, comments, photos, matRef, lat: hasGeo ? lat : null, lon: hasGeo ? lon : null };
+    if (isSig) result.signalements.push(rich);
+    else result.bugs.push(rich);
   }
   result.signalements.sort((a, b) => b.date.localeCompare(a.date));
   result.bugs.sort((a, b) => b.date.localeCompare(a.date));
-  _sigTrackCache = result; _sigTrackCacheAt = Date.now();
+  _sigRichCache = result; _sigRichCacheAt = Date.now();
   return result;
+}
+
+// Vue citoyen : description anonymisée, champs publics seulement.
+async function _fetchTrelloSignalements() {
+  const rich = await _fetchTrelloRich();
+  const pub = s => ({
+    id: s.id, cat: s.cat, desc: _anonymize(s.descRaw), status: s.status, statusLabel: s.statusLabel,
+    date: s.date, comments: s.comments, photos: s.photos,
+    ...(s.matRef ? { matRef: s.matRef } : {}),
+    ...(s.lat != null && s.lon != null ? { lat: s.lat, lon: s.lon } : {})
+  });
+  return { signalements: rich.signalements.map(pub), bugs: rich.bugs.map(pub) };
+}
+
+// Vue admin : description brute (infos de contact visibles), id de carte Trello.
+async function _fetchTrelloAdmin() {
+  const rich = await _fetchTrelloRich();
+  const adm = s => ({
+    id: s.id, type: s.type, cat: s.cat, desc: s.descRaw, status: s.status, statusLabel: s.statusLabel,
+    date: (() => { try { return new Date(s.date).toLocaleString('fr-FR'); } catch (_) { return s.date; } })(),
+    hasPhoto: (s.photos || []).length > 0,
+    ...(s.lat != null && s.lon != null ? { lat: s.lat, lon: s.lon, mapsLink: `https://www.openstreetmap.org/?mlat=${s.lat}&mlon=${s.lon}&zoom=18` } : {})
+  });
+  return [...rich.signalements.map(adm), ...rich.bugs.map(adm)];
 }
 
 // ── Signalement citoyen → Redis + Trello ─────────────────────
@@ -217,7 +242,8 @@ router.post("/signal", signalLimiter, async (req, res) => {
     ...(notifyToken ? { notifyToken } : {})
   };
 
-  // Stockage Redis
+  // Journal de soumissions (Redis) — sert uniquement aux compteurs/stats
+  // (dashboard, email quotidien). La source de vérité est désormais Trello.
   const signals = await readSignals();
   signals.unshift(signal);
   if (signals.length > 100) signals.splice(100);
@@ -251,8 +277,9 @@ router.post("/signal", signalLimiter, async (req, res) => {
     const cardDesc = `${desc || "Aucune description."}${typeLine}${mapsLine}${dateLine}`;
 
     await createTrelloCard(signalType, cardName, cardDesc, photoB64 || null, notifyToken || null);
+    _invalidateSigCache(); // la nouvelle carte doit apparaître sans attendre le TTL
   } catch (trelloErr) {
-    console.warn("⚠️ Trello échec (signal stocké Redis quand même):", trelloErr.message);
+    console.warn("⚠️ Trello échec (signal journalisé Redis quand même):", trelloErr.message);
   }
 
   res.json({ success: true });
@@ -305,47 +332,64 @@ router.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
   } catch(e) { console.error('photo proxy:', e.message); res.status(502).end(); }
 });
 
-// ── Liste signalements (admin) ────────────────────────────────
+// ── Liste signalements (admin) — lue depuis Trello (source de vérité) ──
 router.get("/admin/signals", adminAuth, async (req, res) => {
-  const signals = await readSignals();
-  res.json({ signals, count: signals.length });
+  try {
+    const signals = await _fetchTrelloAdmin();
+    res.json({ signals, count: signals.length });
+  } catch (e) {
+    console.error('admin/signals:', e.message);
+    res.status(502).json({ signals: [], count: 0, error: 'Trello temporairement indisponible' });
+  }
 });
 
-// ── Modifier le statut d'un signalement (admin) ──────────────
+// ── Modifier le statut (admin) → déplace la carte Trello ─────
 router.patch("/admin/signals/:id", adminAuth, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
+  const cardId = req.params.id;
   const { status } = req.body || {};
   const validStatuses = ["pending", "in_progress", "resolved"];
-  if (!validStatuses.includes(status)) {
-    return res.status(400).json({ error: "Statut invalide" });
+  if (!validStatuses.includes(status)) return res.status(400).json({ error: "Statut invalide" });
+  if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).json({ error: "Trello non configuré" });
+  try {
+    const card = await _trelloGet(`/cards/${encodeURIComponent(cardId)}?fields=idBoard,idList,desc`);
+    const lists = await _trelloGet(`/boards/${card.idBoard}/lists?fields=id,name&filter=open`);
+    const target = lists.find(l => trelloStatusFromListName(l.name) === status);
+    if (!target) return res.status(422).json({ error: `Aucune liste Trello ne correspond au statut « ${status} ». Renommez une liste (ex. « En cours », « Résolu ») ou créez-la.` });
+    const curList = lists.find(l => l.id === card.idList);
+    const prevStatus = curList ? trelloStatusFromListName(curList.name) : 'pending';
+
+    if (target.id !== card.idList) {
+      await axios.put(`https://api.trello.com/1/cards/${encodeURIComponent(cardId)}`, null, {
+        params: { key: TRELLO_KEY, token: TRELLO_TOKEN, idList: target.id }, timeout: 10000
+      });
+      _invalidateSigCache();
+    }
+    // Push au propriétaire si le statut change réellement (token = MAT-REF)
+    if (prevStatus !== status) {
+      const m = (card.desc || '').match(/MAT-REF:\s*([a-f0-9-]{36})/i);
+      if (m) sendSignalStatusPush(m[1], status, cardId).catch(() => {});
+    }
+    res.json({ ok: true, status });
+  } catch (e) {
+    console.error('patch signal:', e.message);
+    res.status(502).json({ error: (e.response && e.response.data) || e.message });
   }
-  const signals = await readSignals();
-  const idx = signals.findIndex(s => s.id === id);
-  if (idx < 0) return res.status(404).json({ error: "Signalement non trouvé" });
-  const prevStatus = signals[idx].status || "pending";
-  signals[idx].status = status;
-  await writeSignals(signals);
-  const token = signals[idx].notifyToken;
-  if (token && status !== prevStatus && SIGNAL_STATUS_PUSH[status]) {
-    const msg = SIGNAL_STATUS_PUSH[status];
-    sendPushToToken(token, {
-      title: msg.title, body: msg.body,
-      icon: "./icon-192.png", badge: "./icon-badge.png",
-      tag: `signal-status-${id}`,
-      data: { url: "./#signalements", open: "signalements" }
-    }).catch(() => {});
-  }
-  res.json({ ok: true, signal: signals[idx] });
 });
 
-// ── Supprimer un signalement ──────────────────────────────────
+// ── Supprimer un signalement (admin) → archive la carte Trello ──
 router.delete("/admin/signals/:id", adminAuth, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const signals = await readSignals();
-  const filtered = signals.filter(s => s.id !== id);
-  if (filtered.length === signals.length) return res.status(404).json({ error: "Signalement non trouvé" });
-  await writeSignals(filtered);
-  res.json({ ok: true, deleted: id });
+  const cardId = req.params.id;
+  if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).json({ error: "Trello non configuré" });
+  try {
+    await axios.put(`https://api.trello.com/1/cards/${encodeURIComponent(cardId)}`, null, {
+      params: { key: TRELLO_KEY, token: TRELLO_TOKEN, closed: true }, timeout: 10000
+    });
+    _invalidateSigCache();
+    res.json({ ok: true, deleted: cardId });
+  } catch (e) {
+    console.error('delete signal:', e.message);
+    res.status(502).json({ error: (e.response && e.response.data) || e.message });
+  }
 });
 
 module.exports = router;
