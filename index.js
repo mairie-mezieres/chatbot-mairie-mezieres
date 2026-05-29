@@ -309,6 +309,9 @@ app.use(require("./routes/admin-purge"));
 // ── Webhook Facebook — voir routes/webhook.js ────────────────
 app.use(require("./routes/webhook"));
 
+// ── Webhook Trello (statut signalements → push) ──────────────
+app.use(require("./routes/trello-webhook"));
+
 // ── Geo (zone-plu, chemins, parcours) — voir routes/geo.js ──
 app.use(require("./routes/geo"));
 

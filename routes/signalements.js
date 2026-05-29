@@ -8,6 +8,7 @@ const { readSignals, writeSignals } = require("../lib/store");
 const { adminAuth } = require("../lib/middleware");
 const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_NOTIFY } = require("../config");
 const { registerNotifyToken, sendPushToToken } = require("../lib/push-notify");
+const { trelloStatusFromListName } = require("../lib/trello-status");
 
 const SIGNAL_STATUS_PUSH = {
   in_progress: { title: "🔵 Votre signalement est en cours de traitement", body: "La mairie a pris en compte votre signalement." },
@@ -128,13 +129,6 @@ async function _trelloBoardIdFor(listId) {
   return list.idBoard;
 }
 
-function _trelloStatusFromListName(name) {
-  const n = (name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (/resolu|termine|done|ferme|clos|\btraites?\b/.test(n)) return 'resolved';
-  if (/cours|progress|traitement/.test(n)) return 'in_progress';
-  return 'pending';
-}
-
 const _attachmentUrlMap = new Map();
 let _sigTrackCache = null, _sigTrackCacheAt = 0;
 
@@ -154,7 +148,7 @@ async function _fetchTrelloSignalements() {
       _trelloGet(`/boards/${bid}/lists?fields=id,name&filter=open`),
       _trelloGet(`/boards/${bid}/cards?filter=open&fields=id,name,desc,idList,dateLastActivity&attachments=true&actions=commentCard`),
     ]);
-    for (const l of lists) { listStatusMap[l.id] = _trelloStatusFromListName(l.name); listNameMap[l.id] = l.name; }
+    for (const l of lists) { listStatusMap[l.id] = trelloStatusFromListName(l.name); listNameMap[l.id] = l.name; }
     allCards.push(...cards);
   }));
   // Compatibility: replace local cards variable reference
