@@ -196,7 +196,7 @@ router.patch("/admin/ideas/:id", adminAuth, async (req, res) => {
     const msg = IDEA_STATUS_PUSH[newStatus];
     sendPushToToken(token, {
       title: msg.title, body: msg.body,
-      icon: "./icon-192.png", badge: "./icon-192.png",
+      icon: "./icon-192.png", badge: "./icon-badge.png",
       tag: `idea-status-${id}`,
       data: { url: "./#idees", open: "idees" }
     }).catch(() => {});

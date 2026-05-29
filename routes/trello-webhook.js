@@ -71,7 +71,7 @@ async function handleTrelloAction(action) {
     title: msg.title,
     body: msg.body,
     icon: "./icon-192.png",
-    badge: "./icon-192.png",
+    badge: "./icon-badge.png",
     tag: `signal-status-${cardId}`,
     data: { url: "./#signalements", open: "signalements" }
   });

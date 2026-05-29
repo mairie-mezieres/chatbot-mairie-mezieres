@@ -118,7 +118,7 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
     title: `MAT — ${title.substring(0, 60)}`,
     body: notifBody,
     icon: "./icon-192.png",
-    badge: "./icon-192.png",
+    badge: "./icon-badge.png",
     image: photoUrl || undefined,
     data: { url: "./#notifs", listUrl: "./#notifs", open: "notifs" }
   });
