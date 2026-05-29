@@ -12,8 +12,6 @@ const { adminAuth } = require("../lib/middleware");
 // Secret optionnel pour valider la signature HMAC-SHA1 envoyée par Trello.
 // (Trello → "App Secret" / "OAuth Secret" sur https://trello.com/app-key)
 const TRELLO_WEBHOOK_SECRET = process.env.TRELLO_WEBHOOK_SECRET || process.env.TRELLO_SECRET || "";
-const CALLBACK_URL = process.env.TRELLO_WEBHOOK_CALLBACK ||
-  "https://chatbot-mairie-mezieres.onrender.com/trello/webhook";
 
 // On ne notifie que les transitions vers "en cours" et "résolu".
 const STATUS_PUSH = {
@@ -30,7 +28,10 @@ router.post("/trello/webhook", async (req, res) => {
   // mais non authentifié — recommandé de définir TRELLO_WEBHOOK_SECRET).
   if (TRELLO_WEBHOOK_SECRET) {
     const sig = req.headers["x-trello-webhook"];
-    const base = (req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {})) + CALLBACK_URL;
+    // Trello signe avec l'URL de callback enregistrée = notre propre URL.
+    const callback = process.env.TRELLO_WEBHOOK_CALLBACK ||
+      `${req.protocol}://${req.get("host")}/trello/webhook`;
+    const base = (req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {})) + callback;
     const expected = crypto.createHmac("sha1", TRELLO_WEBHOOK_SECRET).update(base).digest("base64");
     if (!sig || sig !== expected) {
       console.warn("⚠️ Trello webhook: signature invalide");
@@ -97,7 +98,11 @@ async function _boardIdForList(listId) {
 // les listes SIG / BUG. À appeler une fois après déploiement.
 router.post("/admin/trello/register-webhook", adminAuth, async (req, res) => {
   if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).json({ error: "Trello non configuré" });
-  const callbackURL = (req.body && req.body.callbackURL) || CALLBACK_URL;
+  // URL de callback : 1) override explicite, 2) variable d'env, 3) auto-détectée
+  // à partir de la requête entrante (le serveur connaît sa propre URL publique).
+  const selfUrl = `${req.protocol}://${req.get("host")}/trello/webhook`;
+  const callbackURL = (req.body && req.body.callbackURL) ||
+    process.env.TRELLO_WEBHOOK_CALLBACK || selfUrl;
   try {
     const boardIds = new Set();
     for (const listId of [TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG]) {
