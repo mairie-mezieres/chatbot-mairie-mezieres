@@ -3,6 +3,7 @@
 "use strict";
 const router = require("express").Router();
 const { readIdeas, writeIdeas, readNews } = require("../lib/store");
+const { registerNotifyToken } = require("../lib/push-notify");
 
 router.get("/idees", async (req, res) => {
   const idees = await readIdeas();
@@ -10,22 +11,29 @@ router.get("/idees", async (req, res) => {
 });
 
 router.post("/idee", async (req, res) => {
-  const { id, text, cat, date } = req.body || {};
+  const { id, text, cat, date, notifyToken, sub } = req.body || {};
   if (!text) return res.status(400).json({ error: "text requis" });
 
   const ideas = await readIdeas();
   if (ideas.find(i => i.id === id)) return res.json({ success:true, duplicate:true });
 
-  ideas.unshift({
+  const idea = {
     id: id || Date.now(),
     text: text.substring(0,500),
     cat: cat || "💡 Autre",
     votes: 0,
-    date: date || new Date().toLocaleDateString("fr-FR")
-  });
+    date: date || new Date().toLocaleDateString("fr-FR"),
+    ...(notifyToken ? { notifyToken } : {})
+  };
+  ideas.unshift(idea);
 
   if (ideas.length > 200) ideas.splice(200);
   await writeIdeas(ideas);
+
+  if (notifyToken) {
+    registerNotifyToken(notifyToken, "idea", idea.id, sub || null).catch(() => {});
+  }
+
   console.log(`💡 Idée stockée: "${text.substring(0,50)}"`);
   res.json({ success:true });
 });

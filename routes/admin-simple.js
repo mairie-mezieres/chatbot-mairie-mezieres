@@ -6,6 +6,13 @@ const { adminAuth } = require("../lib/middleware");
 const { readAdminSettings, writeAdminSettings, readMelTreeConfig, writeMelTreeConfig, readIdeas, writeIdeas, readNews, writeNews } = require("../lib/store");
 const { redisLRange } = require("../lib/redis");
 const { deleteActuImageFromCloudinary } = require("../lib/cloudinary");
+const { sendPushToToken } = require("../lib/push-notify");
+
+const IDEA_STATUS_PUSH = {
+  studying: { title: "🔍 Votre idée est en cours d'étude", body: "La mairie étudie votre proposition." },
+  accepted: { title: "✅ Votre idée a été retenue !", body: "Félicitations, votre idée a été acceptée par la mairie." },
+  rejected: { title: "💡 Retour sur votre idée", body: "Votre idée a été étudiée mais ne sera pas retenue pour l'instant." }
+};
 
 // ── Helpers MEL tree (validation/normalisation) ───────────────
 function normalizeMelLink(link = {}) {
@@ -179,9 +186,21 @@ router.patch("/admin/ideas/:id", adminAuth, async (req, res) => {
   const ideas = await readIdeas();
   const idx = ideas.findIndex(i => i.id === id);
   if (idx < 0) return res.status(404).json({ error: "Idée non trouvée" });
+  const prevStatus = ideas[idx].status;
   if (status !== undefined) ideas[idx].status = status || null;
   if (adminComment !== undefined) ideas[idx].adminComment = (adminComment == null) ? '' : String(adminComment).substring(0, 500);
   await writeIdeas(ideas);
+  const newStatus = ideas[idx].status;
+  const token = ideas[idx].notifyToken;
+  if (token && newStatus && newStatus !== prevStatus && IDEA_STATUS_PUSH[newStatus]) {
+    const msg = IDEA_STATUS_PUSH[newStatus];
+    sendPushToToken(token, {
+      title: msg.title, body: msg.body,
+      icon: "./icon-192.png", badge: "./icon-192.png",
+      tag: `idea-status-${id}`,
+      data: { url: "./#idees", open: "idees" }
+    }).catch(() => {});
+  }
   res.json({ ok: true, idea: ideas[idx] });
 });
 

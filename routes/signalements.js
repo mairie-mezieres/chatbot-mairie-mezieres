@@ -7,6 +7,12 @@ const rateLimit = require("express-rate-limit");
 const { readSignals, writeSignals } = require("../lib/store");
 const { adminAuth } = require("../lib/middleware");
 const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_NOTIFY } = require("../config");
+const { registerNotifyToken, sendPushToToken } = require("../lib/push-notify");
+
+const SIGNAL_STATUS_PUSH = {
+  in_progress: { title: "🔵 Votre signalement est en cours de traitement", body: "La mairie a pris en compte votre signalement." },
+  resolved:    { title: "✅ Votre signalement a été résolu", body: "La mairie a traité votre signalement. Merci pour votre contribution !" }
+};
 
 const signalLimiter = rateLimit({
   windowMs: 60 * 1000, max: 10,
@@ -15,7 +21,7 @@ const signalLimiter = rateLimit({
 });
 
 // ── Création carte Trello ─────────────────────────────────────
-async function createTrelloCard(type, name, desc, photoB64) {
+async function createTrelloCard(type, name, desc, photoB64, matRef = null) {
   if (!TRELLO_KEY || !TRELLO_TOKEN) {
     console.warn("⚠️ Trello non configuré — clé/token manquants");
     return null;
@@ -37,7 +43,7 @@ async function createTrelloCard(type, name, desc, photoB64) {
         token: TRELLO_TOKEN,
         idList: cfg.listId,
         name: String(name || "Sans titre").substring(0, 512),
-        desc: String(desc || "").substring(0, 16384),
+        desc: (String(desc || "") + (matRef ? `\nMAT-REF: ${matRef}` : "")).substring(0, 16384),
         pos: "top",
         ...(cfg.memberIds.length ? { idMembers: cfg.memberIds.join(",") } : {})
       },
@@ -172,7 +178,10 @@ async function _fetchTrelloSignalements() {
         _attachmentUrlMap.set(`${card.id}/${a.id}`, { trelloUrl: a.url, previewUrl: prvs.length ? prvs[0].url : null, cachedAt: Date.now(), mimeType: a.mimeType || 'image/jpeg' });
         return { url: `https://chatbot-mairie-mezieres.onrender.com/api/signalements/photo/${card.id}/${a.id}` };
       });
-    const item = { id: card.id, cat, desc: _anonymize(card.desc), status, statusLabel, date: card.dateLastActivity, comments, photos };
+    const matRefMatch = (card.desc || '').match(/\nMAT-REF:\s*([a-f0-9-]{36})/i);
+    const matRef = matRefMatch ? matRefMatch[1] : null;
+    const descNoRef = (card.desc || '').replace(/\nMAT-REF:\s*[a-f0-9-]{36}/gi, '');
+    const item = { id: card.id, cat, desc: _anonymize(descNoRef), status, statusLabel, date: card.dateLastActivity, comments, photos, ...(matRef ? { matRef } : {}) };
     if (isSig) result.signalements.push(item);
     else result.bugs.push(item);
   }
@@ -194,6 +203,7 @@ router.post("/signal", signalLimiter, async (req, res) => {
   const isContact = (type === "contact" || (cat || "").startsWith("[Demande]"));
   const signalType = isBug ? "bug" : isContact ? "demande" : "signalement";
 
+  const { notifyToken, sub } = req.body || {};
   const signal = {
     id: Date.now(),
     type: signalType,
@@ -205,6 +215,7 @@ router.post("/signal", signalLimiter, async (req, res) => {
     hasPhoto: !!photoB64,
     date: new Date().toLocaleString("fr-FR"),
     dateISO: new Date().toISOString(),
+    ...(notifyToken ? { notifyToken } : {})
   };
 
   // Stockage Redis
@@ -212,6 +223,9 @@ router.post("/signal", signalLimiter, async (req, res) => {
   signals.unshift(signal);
   if (signals.length > 100) signals.splice(100);
   await writeSignals(signals);
+  if (notifyToken) {
+    registerNotifyToken(notifyToken, "signal", signal.id, sub || null).catch(() => {});
+  }
   console.log(`🚨 Signalement stocké #${signal.id}: ${signalType} — ${signal.cat}`);
 
   // Envoi Trello
@@ -237,7 +251,7 @@ router.post("/signal", signalLimiter, async (req, res) => {
 🏷️ Type : ${signalType}`;
     const cardDesc = `${desc || "Aucune description."}${typeLine}${mapsLine}${dateLine}`;
 
-    await createTrelloCard(signalType, cardName, cardDesc, photoB64 || null);
+    await createTrelloCard(signalType, cardName, cardDesc, photoB64 || null, notifyToken || null);
   } catch (trelloErr) {
     console.warn("⚠️ Trello échec (signal stocké Redis quand même):", trelloErr.message);
   }
@@ -296,6 +310,33 @@ router.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
 router.get("/admin/signals", adminAuth, async (req, res) => {
   const signals = await readSignals();
   res.json({ signals, count: signals.length });
+});
+
+// ── Modifier le statut d'un signalement (admin) ──────────────
+router.patch("/admin/signals/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { status } = req.body || {};
+  const validStatuses = ["pending", "in_progress", "resolved"];
+  if (!validStatuses.includes(status)) {
+    return res.status(400).json({ error: "Statut invalide" });
+  }
+  const signals = await readSignals();
+  const idx = signals.findIndex(s => s.id === id);
+  if (idx < 0) return res.status(404).json({ error: "Signalement non trouvé" });
+  const prevStatus = signals[idx].status || "pending";
+  signals[idx].status = status;
+  await writeSignals(signals);
+  const token = signals[idx].notifyToken;
+  if (token && status !== prevStatus && SIGNAL_STATUS_PUSH[status]) {
+    const msg = SIGNAL_STATUS_PUSH[status];
+    sendPushToToken(token, {
+      title: msg.title, body: msg.body,
+      icon: "./icon-192.png", badge: "./icon-192.png",
+      tag: `signal-status-${id}`,
+      data: { url: "./#signalements", open: "signalements" }
+    }).catch(() => {});
+  }
+  res.json({ ok: true, signal: signals[idx] });
 });
 
 // ── Supprimer un signalement ──────────────────────────────────
