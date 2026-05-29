@@ -7,7 +7,7 @@ const express   = require("express");
 const axios     = require("axios");
 const https     = require("https");
 const Anthropic = require("@anthropic-ai/sdk");
-const webpush   = require("web-push");
+const webpush   = require("./lib/webpush");
 const rateLimit = require("express-rate-limit");
 
 // Timeout global sur tous les appels axios sortants (8 s)
@@ -69,11 +69,7 @@ const { uploadActuImageToCloudinary, deleteActuImageFromCloudinary } = require("
 // ─── Logs diagnostiques + adminAuth — voir lib/middleware.js ──
 const { dlog } = require("./lib/middleware");
 
-// ─── Web Push VAPID ───────────────────────────────────────────
-if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
-  webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-  console.log("✅ Web Push VAPID configuré");
-}
+// ─── Web Push VAPID — voir lib/webpush.js ─────────────────────
 
 // ─── Stockage persistant Upstash Redis ───────────────────────
 // Client HTTP Upstash — voir lib/redis.js
@@ -81,7 +77,7 @@ const { redisGet, redisSet, redisSetex, redisDel, redisPipeline, redisLRange, ge
 
 // ─── Cache mémoire & store Redis ──────────────────────────────
 // Accesseurs read/write pour toutes les clés mat:* — voir lib/store.js
-const { MEM_TTL_SHORT, MEM_TTL_LONG, memGet, memSet, memDel, readSubs, writeSubs, recordPushHistory, readNews, writeNews, readIdeas, writeIdeas, readStats, writeStats, readSignals, writeSignals, readLastWeatherAlert, writeLastWeatherAlert, readMeteoCache, writeMeteoCache, readSeenPosts, writeSeenPosts, readMelCache, writeMelCache, readIaStats, writeIaStats, readTempDocs, writeTempDocs, readSondages, writeSondages, readSondageResults, writeSondageResults, readFeaturedDoc, writeFeaturedDoc, readEntreprises, writeEntreprises, initEntreprisesIfEmpty, readMelTreeConfig, writeMelTreeConfig, getDefaultAdminSettings, readAdminSettings, writeAdminSettings, flushStatsNow } = require("./lib/store");
+const { MEM_TTL_SHORT, MEM_TTL_LONG, memGet, memSet, memDel, readSubs, writeSubs, readDechetsSubs, writeDechetsSubs, readMeteoSubs, writeMeteoSubs, purgeEndpointsEverywhere, recordPushHistory, readNews, writeNews, readIdeas, writeIdeas, readStats, writeStats, readSignals, writeSignals, readLastWeatherAlert, writeLastWeatherAlert, readMeteoCache, writeMeteoCache, readSeenPosts, writeSeenPosts, readMelCache, writeMelCache, readIaStats, writeIaStats, readTempDocs, writeTempDocs, readSondages, writeSondages, readSondageResults, writeSondageResults, readFeaturedDoc, writeFeaturedDoc, readEntreprises, writeEntreprises, initEntreprisesIfEmpty, readMelTreeConfig, writeMelTreeConfig, getDefaultAdminSettings, readAdminSettings, writeAdminSettings, flushStatsNow } = require("./lib/store");
 
 function shouldTrackService(service, settings) {
   // Toujours gardé
@@ -1557,11 +1553,6 @@ const melLimiter = rateLimit({
   windowMs: 60 * 1000, max: 30,
   standardHeaders: true, legacyHeaders: false,
   message: { error: "Trop de requêtes, réessayez dans une minute." }
-});
-const subscribeLimiter = rateLimit({
-  windowMs: 60 * 1000, max: 20,
-  standardHeaders: true, legacyHeaders: false,
-  message: { error: "Trop de tentatives d'abonnement." }
 });
 const logsLimiter = rateLimit({
   windowMs: 60 * 1000, max: 60,
@@ -3252,170 +3243,9 @@ app.get("/meteo/alertes/check", async (req, res) => {
   }
 });
 
-// ── Abonnement push ───────────────────────────────────────────
-app.post("/push/subscribe", subscribeLimiter, async (req, res) => {
-  const sub = req.body;
-  if (!sub || !sub.endpoint) return res.status(400).json({ error:"Subscription invalide" });
+// ── Abonnements push — voir routes/push.js ─────────────────
+app.use(require("./routes/push"));
 
-  const subs = await readSubs();
-  const exists = subs.some(s => s.endpoint === sub.endpoint);
-  if (!exists) {
-    subs.push(sub);
-    await writeSubs(subs);
-    console.log(`📱 Nouvel abonné push (total: ${subs.length})`);
-  }
-
-  res.json({ success:true, total:subs.length });
-});
-
-app.post("/push/status", subscribeLimiter, async (req, res) => {
-  const { endpoint } = req.body || {};
-  if (!endpoint) return res.status(400).json({ error: "Endpoint requis" });
-  const subs = await readSubs();
-  const found = subs.some(s => s.endpoint === endpoint);
-  res.json({ found });
-});
-
-app.post("/push/unsubscribe", async (req, res) => {
-  const { endpoint } = req.body || {};
-  if (!endpoint) return res.status(400).json({ error:"Endpoint requis" });
-
-  const subs = (await readSubs()).filter(s => s.endpoint !== endpoint);
-  await writeSubs(subs);
-  res.json({ success: true });
-});
-
-app.post("/push/test", subscribeLimiter, async (req, res) => {
-  const { endpoint } = req.body || {};
-  if (!endpoint) return res.status(400).json({ error: "Endpoint requis" });
-
-  const subs = await readSubs();
-  const sub  = subs.find(s => s.endpoint === endpoint);
-  if (!sub) return res.status(404).json({ error: "Abonnement non trouvé sur le serveur — réactivez les notifications" });
-
-  const payload = JSON.stringify({
-    title: '🔔 Test notification MAT',
-    body:  'Votre appareil reçoit bien les notifications !',
-    icon:  './icon-192.png',
-    badge: './icon-192.png',
-    tag:   'mat-test',
-    renotify: true,
-    data:  { url: './#notifs', open: 'notifs' }
-  });
-  try {
-    await webpush.sendNotification(sub, payload, { urgency: 'high', TTL: 3600 });
-    console.log(`🧪 Push test → ${endpoint.slice(-20)}`);
-    res.json({ ok: true });
-  } catch(e) {
-    if (e.statusCode === 410 || e.statusCode === 404) {
-      await writeSubs(subs.filter(s => s.endpoint !== endpoint));
-      purgeEndpointsEverywhere([endpoint]).catch(() => {});
-      return res.status(410).json({ error: "Abonnement expiré — réactivez les notifications" });
-    }
-    res.status(500).json({ error: "Échec d'envoi: " + (e.message || 'inconnue') });
-  }
-});
-
-// ── Rappels déchets ───────────────────────────────────────────
-async function readDechetsSubs() { return (await redisGet('mat:subs:dechets')) || []; }
-async function writeDechetsSubs(d) { await redisSet('mat:subs:dechets', d); }
-
-// ── Alertes météo (par abonné, avec niveau minimum) ───────────
-async function readMeteoSubs()  { return (await redisGet('mat:subs:meteo'))  || []; }
-async function writeMeteoSubs(d){ await redisSet('mat:subs:meteo', d); }
-
-// Purge un ou plusieurs endpoints de l'ensemble des stores de subscriptions
-// push (mat:subs, mat:subs:meteo, mat:subs:dechets). Appelée après détection
-// d'erreurs 410/404 pour éviter qu'un endpoint expiré soit re-tenté via un
-// autre canal (ex: météo encore vivante alors qu'actus a déjà nettoyé).
-// Best-effort : toute erreur de purge est absorbée pour ne jamais bloquer
-// le caller (le cleanup local au site appelant reste l'opération autoritaire).
-// Les appels sont sérialisés via _purgeChain pour éviter que deux purges
-// concurrentes (avec endpoints différents) se marchent dessus en
-// read-filter-write last-wins, ce qui ré-introduirait l'un des endpoints
-// que l'autre vient de supprimer.
-let _purgeChain = Promise.resolve();
-function purgeEndpointsEverywhere(endpoints) {
-  if (!Array.isArray(endpoints) || !endpoints.length) return Promise.resolve();
-  const deadSet = new Set(endpoints);
-  const work = async () => {
-    const stores = [
-      ['mat:subs',         readSubs,         writeSubs],
-      ['mat:subs:meteo',   readMeteoSubs,    writeMeteoSubs],
-      ['mat:subs:dechets', readDechetsSubs,  writeDechetsSubs]
-    ];
-    for (const [name, read, write] of stores) {
-      try {
-        const all = await read();
-        const kept = all.filter(s => !deadSet.has(s.endpoint));
-        if (kept.length !== all.length) {
-          await write(kept);
-          console.log(`🧹 ${name}: purgé ${all.length - kept.length} endpoint(s) expiré(s)`);
-        }
-      } catch (e) {
-        console.warn(`purgeEndpointsEverywhere(${name}):`, e.message);
-      }
-    }
-  };
-  _purgeChain = _purgeChain.then(work, work);
-  return _purgeChain;
-}
-
-// Migration one-shot : peuple mat:subs:meteo depuis mat:subs si clé absente
-(async () => {
-  try {
-    const existing = await redisGet('mat:subs:meteo');
-    if (!existing) {
-      const global = (await redisGet('mat:subs')) || [];
-      await redisSet('mat:subs:meteo', global.map(s => ({ ...s, minLevel: 2 })));
-      console.log(`📦 Migration mat:subs:meteo → ${global.length} abonnés`);
-    }
-  } catch(e) { console.warn('Migration meteo subs:', e.message); }
-})();
-
-app.post('/push/subscribe/dechets', subscribeLimiter, async (req, res) => {
-  const sub = req.body;
-  if (!sub || !sub.endpoint) return res.status(400).json({ error: 'Subscription invalide' });
-  const subs = await readDechetsSubs();
-  if (!subs.some(s => s.endpoint === sub.endpoint)) {
-    subs.push(sub);
-    await writeDechetsSubs(subs);
-    console.log(`♻️ Nouvel abonné rappels déchets (total: ${subs.length})`);
-  }
-  res.json({ success: true, total: subs.length });
-});
-
-app.post('/push/unsubscribe/dechets', async (req, res) => {
-  const { endpoint } = req.body || {};
-  if (!endpoint) return res.status(400).json({ error: 'Endpoint requis' });
-  const subs = (await readDechetsSubs()).filter(s => s.endpoint !== endpoint);
-  await writeDechetsSubs(subs);
-  res.json({ success: true });
-});
-
-// ── Alertes météo push ────────────────────────────────────────
-app.post('/push/subscribe/meteo', subscribeLimiter, async (req, res) => {
-  const sub = req.body;
-  if (!sub || !sub.endpoint) return res.status(400).json({ error: 'Subscription invalide' });
-  const minLevel = Number(sub.minLevel) || 2;
-  const subs = await readMeteoSubs();
-  const idx = subs.findIndex(s => s.endpoint === sub.endpoint);
-  if (idx >= 0) subs[idx] = { ...subs[idx], ...sub, minLevel };
-  else subs.push({ ...sub, minLevel });
-  await writeMeteoSubs(subs);
-  // Logger uniquement les nouvelles souscriptions, pas les re-sync. Avant,
-  // chaque redéploiement Render générait un essaim de logs identiques quand
-  // toutes les PWA installées se re-synchronisaient au boot.
-  if (idx < 0) console.log(`🌦️ Nouvel abonné météo push (level≥${minLevel}, total: ${subs.length})`);
-  res.json({ success: true, total: subs.length });
-});
-
-app.post('/push/unsubscribe/meteo', async (req, res) => {
-  const { endpoint } = req.body || {};
-  if (!endpoint) return res.status(400).json({ error: 'Endpoint requis' });
-  await writeMeteoSubs((await readMeteoSubs()).filter(s => s.endpoint !== endpoint));
-  res.json({ success: true });
-});
 
 // ── Stats usage ──────────────────────────────────────────────
 app.post("/stats/track", async (req, res) => {
