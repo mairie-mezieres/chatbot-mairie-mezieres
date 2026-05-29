@@ -733,17 +733,8 @@ function cleanHtml(html) {
 }
 
 // ─── Nettoyage markdown pour affichage mobile ─────────────────
-function cleanMarkdown(text) {
-  if (!text) return text;
-  return text
-    .replace(/\*\*(.*?)\*\*/g, "$1")   // gras
-    .replace(/\*(.*?)\*/g, "$1")       // italique
-    .replace(/#{1,6}\s/g, "")          // titres
-    .replace(/`{1,3}(.*?)`{1,3}/g, "$1") // code
-    .replace(/^\s*[-•]\s/gm, "• ")    // listes
-    .replace(/\n{3,}/g, "\n\n") // sauts multiples
-    .trim();
-}
+// Extrait dans lib/text.js (testé golden-master) — voir test/text.test.js
+const { cleanMarkdown } = require("./lib/text");
 
 async function fetchUrl(url) {
   // Retry exponentiel court sur erreurs transitoires (timeout, ECONNRESET,
