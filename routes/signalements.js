@@ -21,7 +21,7 @@ const signalLimiter = rateLimit({
 });
 
 // ── Création carte Trello ─────────────────────────────────────
-async function createTrelloCard(type, name, desc, photoB64) {
+async function createTrelloCard(type, name, desc, photoB64, matRef = null) {
   if (!TRELLO_KEY || !TRELLO_TOKEN) {
     console.warn("⚠️ Trello non configuré — clé/token manquants");
     return null;
@@ -43,7 +43,7 @@ async function createTrelloCard(type, name, desc, photoB64) {
         token: TRELLO_TOKEN,
         idList: cfg.listId,
         name: String(name || "Sans titre").substring(0, 512),
-        desc: String(desc || "").substring(0, 16384),
+        desc: (String(desc || "") + (matRef ? `\nMAT-REF: ${matRef}` : "")).substring(0, 16384),
         pos: "top",
         ...(cfg.memberIds.length ? { idMembers: cfg.memberIds.join(",") } : {})
       },
@@ -178,7 +178,10 @@ async function _fetchTrelloSignalements() {
         _attachmentUrlMap.set(`${card.id}/${a.id}`, { trelloUrl: a.url, previewUrl: prvs.length ? prvs[0].url : null, cachedAt: Date.now(), mimeType: a.mimeType || 'image/jpeg' });
         return { url: `https://chatbot-mairie-mezieres.onrender.com/api/signalements/photo/${card.id}/${a.id}` };
       });
-    const item = { id: card.id, cat, desc: _anonymize(card.desc), status, statusLabel, date: card.dateLastActivity, comments, photos };
+    const matRefMatch = (card.desc || '').match(/\nMAT-REF:\s*([a-f0-9-]{36})/i);
+    const matRef = matRefMatch ? matRefMatch[1] : null;
+    const descNoRef = (card.desc || '').replace(/\nMAT-REF:\s*[a-f0-9-]{36}/gi, '');
+    const item = { id: card.id, cat, desc: _anonymize(descNoRef), status, statusLabel, date: card.dateLastActivity, comments, photos, ...(matRef ? { matRef } : {}) };
     if (isSig) result.signalements.push(item);
     else result.bugs.push(item);
   }
@@ -248,7 +251,7 @@ router.post("/signal", signalLimiter, async (req, res) => {
 🏷️ Type : ${signalType}`;
     const cardDesc = `${desc || "Aucune description."}${typeLine}${mapsLine}${dateLine}`;
 
-    await createTrelloCard(signalType, cardName, cardDesc, photoB64 || null);
+    await createTrelloCard(signalType, cardName, cardDesc, photoB64 || null, notifyToken || null);
   } catch (trelloErr) {
     console.warn("⚠️ Trello échec (signal stocké Redis quand même):", trelloErr.message);
   }
