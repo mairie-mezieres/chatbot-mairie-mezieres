@@ -716,25 +716,10 @@ setInterval(async () => {
 }, STATS_FLUSH_MS);
 
 
-function cleanHtml(html) {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi,"")
-    .replace(/<style[\s\S]*?<\/style>/gi,"")
-    .replace(/<nav[\s\S]*?<\/nav>/gi,"")
-    .replace(/<footer[\s\S]*?<\/footer>/gi,"")
-    .replace(/<header[\s\S]*?<\/header>/gi,"")
-    .replace(/<[^>]+>/g," ")
-    .replace(/\s{3,}/g,"\
-\
-")
-    .replace(/&[a-z]+;/g," ")
-    .trim()
-    .substring(0,2500);
-}
 
-// ─── Nettoyage markdown pour affichage mobile ─────────────────
-// Extrait dans lib/text.js (testé golden-master) — voir test/text.test.js
-const { cleanMarkdown } = require("./lib/text");
+// ─── Helpers texte (purs) extraits dans lib/text.js ──────────
+// Testés golden-master sur les caractères spéciaux — voir test/text.test.js
+const { cleanMarkdown, cleanHtml, normalizeQuestion, hashKey } = require("./lib/text");
 
 async function fetchUrl(url) {
   // Retry exponentiel court sur erreurs transitoires (timeout, ECONNRESET,
@@ -1494,23 +1479,7 @@ const DIRECT_RULES = [
   }
 ];
 
-function normalizeQuestion(s) {
-  return (s || "")
-    .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
-function hashKey(s) {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
-  }
-  return String(h >>> 0);
-}
 
 function getCacheTtlMs(normalized) {
   if (/permis|urbanisme|plu|fibre|cantine|ecole|cr[eè]che|centre de loisirs|etat civil|passeport|carte identite/.test(normalized)) {
