@@ -27,4 +27,4 @@ jobs:
             | sort | xargs -I{} node --check {}
 
       - name: Golden-master tests
-        run: node --test test/
+        run: node --test test/*.test.js
