@@ -75,12 +75,8 @@ if (CLOUDINARY_ENABLED) {
   console.log("✅ Cloudinary configuré");
 }
 
-// ─── Logs diagnostiques (gated derrière MAT_DEBUG=1) ──────────
-// Réduit le bruit dans les logs Render en prod. Les console.warn/error
-// restent intacts — ils signalent toujours quelque chose qui mérite
-// attention. Activer en posant MAT_DEBUG=1 dans Render → Environment.
-const MAT_DEBUG = process.env.MAT_DEBUG === '1';
-function dlog(...args) { if (MAT_DEBUG) console.log(...args); }
+// ─── Logs diagnostiques + adminAuth — voir lib/middleware.js ──
+const { dlog } = require("./lib/middleware");
 
 // ─── Web Push VAPID ───────────────────────────────────────────
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
@@ -2148,53 +2144,8 @@ app.delete("/admin/signals/:id", adminAuth, async (req, res) => {
 });
 
 // ── Encart info/alerte (public) ─────────────────────────────
-app.get("/info-banner", async (req, res) => {
-  let d = memGet("mat:info_banner");
-  if (d === undefined) {
-    d = (await redisGet("mat:info_banner")) || { active: false };
-    memSet("mat:info_banner", d, MEM_TTL_SHORT);
-  }
-  res.json(d);
-});
-
-// ── Encart info/alerte (admin) ────────────────────────────────
-app.post("/admin/info-banner", adminAuth, async (req, res) => {
-  const { active, title, text, icon } = req.body || {};
-  const id = Date.now().toString();
-  const data = {
-    active: !!active,
-    title: (title || "").substring(0, 100),
-    text: (text || "").substring(0, 300),
-    icon: icon || "ℹ️",
-    id
-  };
-  memSet("mat:info_banner", data, MEM_TTL_SHORT);
-  await redisSet("mat:info_banner", data);
-  res.json({ ok: true, id });
-});
-
-// ── Migration overlay (public lecture) ─────────────────────────
-app.get("/migration-status", async (req, res) => {
-  let v = memGet("mat:migration_overlay");
-  if (v === undefined) {
-    v = (await redisGet("migration:overlay:active")) === true;
-    memSet("mat:migration_overlay", v, MEM_TTL_SHORT);
-  }
-  res.json({ active: !!v });
-});
-
-// ── Migration overlay (admin set explicite) ───────────────────
-// Cible explicite (pas un toggle aveugle) pour éviter d'inverser un état
-// inconnu côté UI si /migration-status a échoué silencieusement.
-app.post("/admin/migration", adminAuth, async (req, res) => {
-  const { active } = req.body || {};
-  if (typeof active !== "boolean") {
-    return res.status(400).json({ error: "Le champ 'active' (boolean) est requis" });
-  }
-  await redisSet("migration:overlay:active", active);
-  memSet("mat:migration_overlay", active, MEM_TTL_SHORT);
-  res.json({ ok: true, active });
-});
+// ── Banderole info + overlay migration — voir routes/info-banner.js ──
+app.use(require("./routes/info-banner"));
 
 // ── Route : publier une actualité (multi-canal) ─────────────
 app.post("/admin/actus/add", adminAuth, async (req, res) => {
@@ -5018,169 +4969,14 @@ app.get("/cron/meteo", async (req, res) => {
 });
 
 // ─── Prix carburant — 3 stations locales ─────────────────────────────────────
-const CARBURANT_REDIS_KEY = 'mat:carburant:v7';
-const CARBURANT_TTL_S     = 3600; // 1 heure
-const CARBURANT_STATIONS  = [
-  { key: 'clery',      label: 'Intermarché Cléry-St-André',  cp: '45370', brand: 'intermarch' },
-  { key: 'meung',      label: 'Super U Meung-sur-Loire',     cp: '45130', brand: 'super u' },
-  { key: 'olivet',     label: 'E.Leclerc Olivet',            cp: '45160', brand: 'leclerc' },
-  { key: 'beaugency',  label: 'E.Leclerc Beaugency',         cp: '45190', brand: 'leclerc' },
-  { key: 'saintpryve', label: 'Super U Les Quinze Pierres',  cp: '45750', brand: 'super u' },
-];
+// ── Prix carburants — voir routes/carburant.js ────────────────
+app.use(require("./routes/carburant"));
 
-async function fetchStationPrices(cp, brandKey) {
-  const stationName = (x) => [x.ensigne, x.nom, x.Nom, x.adresse].filter(Boolean).join(' ').toLowerCase();
-  const extract = (rec) => {
-    const sp95   = rec.sp95_prix   ?? rec.e10_prix  ?? null;
-    const gazole = rec.gazole_prix ?? null;
-    const rawMaj = rec.sp95_maj || rec.e10_maj || rec.gazole_maj || rec.prix_maj || null;
-    const maj    = rawMaj ? new Date(rawMaj).toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : null;
-    return { sp95, gazole, maj };
-  };
+// ── Qualité air + Vigicrues Loire — voir routes/env-local.js ─
+app.use(require("./routes/env-local"));
 
-  // Tentative 1 : API v2.1 — refine=cp:CP (colon non-encodé, évite 400 ODSQL)
-  try {
-    const r = await axios.get(
-      `https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/records?refine=cp:${cp}&limit=20`,
-      { timeout: 8000 }
-    );
-    const records = r.data.results || [];
-    if (records.length) {
-      const rec = records.find(x => stationName(x).includes(brandKey)) || records[0];
-      dlog(`[carburant] v2.1 ${cp}/${brandKey}: ${records.length} recs, sp95=${rec&&rec.sp95_prix}, go=${rec&&rec.gazole_prix}`);
-      if (rec) return extract(rec);
-    } else { dlog(`[carburant] v2.1 ${cp}/${brandKey}: 0 records`); }
-  } catch (err) { console.error(`[carburant] v2.1 ${cp}/${brandKey}:`, err.message); }
-
-  // Tentative 2 : API v1 (syntaxe refine.cp différente)
-  try {
-    const r = await axios.get(
-      `https://data.economie.gouv.fr/api/records/1.0/search/?dataset=prix-des-carburants-en-france-flux-instantane-v2&rows=20&refine.cp=${cp}`,
-      { timeout: 8000 }
-    );
-    const records = (r.data.records || []).map(rec => rec.fields || rec);
-    if (records.length) {
-      const rec = records.find(x => stationName(x).includes(brandKey)) || records[0];
-      dlog(`[carburant] v1 ${cp}/${brandKey}: ${records.length} recs, sp95=${rec&&rec.sp95_prix}, go=${rec&&rec.gazole_prix}`);
-      if (rec) return extract(rec);
-    } else { dlog(`[carburant] v1 ${cp}/${brandKey}: 0 records`); }
-  } catch (err) { console.error(`[carburant] v1 ${cp}/${brandKey}:`, err.message); }
-  return null;
-}
-
-app.get('/carburant', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  try {
-    const cached = await redisGet(CARBURANT_REDIS_KEY);
-    if (cached && cached._ts && Date.now() - cached._ts < CARBURANT_TTL_S * 1000) return res.json(cached);
-
-    const data = { _ts: Date.now() };
-    await Promise.all(CARBURANT_STATIONS.map(async s => {
-      try { data[s.key] = { label: s.label, ...(await fetchStationPrices(s.cp, s.brand)) }; }
-      catch (_) { data[s.key] = { label: s.label, sp95: null, gazole: null, maj: null }; }
-    }));
-    await redisSetex(CARBURANT_REDIS_KEY, CARBURANT_TTL_S, data);
-    res.json(data);
-  } catch(e) {
-    console.error('❌ /carburant:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ─── Environnement local — Open-Meteo Air Quality + Vigicrues Loire ────────
-const ENV_LOCAL_REDIS_KEY = 'mat:env-local:v4';
-const ENV_LOCAL_TTL_S     = 900; // 15 min
-const LAT_MEZIERES        = 47.79;
-const LON_MEZIERES        = 1.80;
-const LOIRE_STATIONS      = ['K441409001', 'K435001010']; // Meung-sur-Loire → Orléans
-
-function _aqiLabel(v) {
-  if (v == null) return null;
-  if (v < 20)  return 'Bon';
-  if (v < 40)  return 'Moyen';
-  if (v < 60)  return 'Dégradé';
-  if (v < 80)  return 'Mauvais';
-  if (v < 100) return 'Très mauvais';
-  return 'Extrêmement mauvais';
-}
-
-function _pollenLabel(v) {
-  if (v == null) return null;
-  if (v < 1)   return 'Nul';
-  if (v < 10)  return 'Faible';
-  if (v < 50)  return 'Modéré';
-  if (v < 100) return 'Élevé';
-  return 'Très élevé';
-}
-
-app.get('/env-local', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  try {
-    const cached = await redisGet(ENV_LOCAL_REDIS_KEY);
-    if (cached && cached._ts && Date.now() - cached._ts < ENV_LOCAL_TTL_S * 1000) return res.json(cached);
-
-    const data = { _ts: Date.now(), loire: null, aqi: null, pollen: null };
-
-    // Open-Meteo Air Quality — AQI européen + pollens
-    try {
-      const omRes = await axios.get(
-        `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${LAT_MEZIERES}&longitude=${LON_MEZIERES}&current=european_aqi,alder_pollen,birch_pollen,grass_pollen,olive_pollen,ragweed_pollen,mugwort_pollen&timezone=Europe%2FParis`,
-        { timeout: 8000 }
-      );
-      const c = (omRes.data || {}).current || {};
-      if (c.european_aqi != null) {
-        data.aqi = { label: _aqiLabel(c.european_aqi), valeur: Math.round(c.european_aqi) };
-      }
-      const pollens = ['alder_pollen','birch_pollen','grass_pollen','olive_pollen','ragweed_pollen','mugwort_pollen']
-        .map(k => c[k]).filter(v => v != null && !isNaN(v));
-      if (pollens.length) {
-        const max = Math.max.apply(null, pollens);
-        data.pollen = { label: _pollenLabel(max), niveau: Math.round(max * 10) / 10 };
-      }
-    } catch(e) { console.error('❌ Open-Meteo Air:', e.message); }
-
-    // Vigicrues — Meung-sur-Loire (K441409001) avec repli Orléans (K435001010)
-    for (const stCode of LOIRE_STATIONS) {
-      try {
-        const vR = await axios.get(
-          `https://www.vigicrues.gouv.fr/services/observations.json/index.php?CdStationHydro=${stCode}&GrdSerie=H&NbObsHydro=1&FormatDate=iso`,
-          { timeout: 8000 }
-        );
-        const serie = (vR.data || {}).Serie || {};
-        const obs = serie.ObssHydro || [];
-        const last = obs[obs.length - 1] || obs[0];
-        let value = null;
-        if (Array.isArray(last)) value = last[1];
-        else if (last && typeof last === 'object') value = last.ResObsHydro != null ? last.ResObsHydro : last.value;
-        if (value != null && !isNaN(value)) {
-          const seuils = {};
-          ['NivSeuil1','NivSeuil2','NivSeuil3','NivSeuil4'].forEach((k, i) => {
-            const v = serie[k]; if (v != null && !isNaN(v)) seuils['seuil' + (i + 1)] = Math.round(parseFloat(v) * 100) / 100;
-          });
-          data.loire = { hauteur: Math.round(value * 100) / 100, station: stCode, seuils: Object.keys(seuils).length ? seuils : null };
-          break;
-        }
-      } catch(e) { console.error(`❌ Vigicrues Loire ${stCode}:`, e.message); }
-    }
-
-    await redisSetex(ENV_LOCAL_REDIS_KEY, ENV_LOCAL_TTL_S, data);
-    res.json(data);
-  } catch(e) {
-    console.error('❌ /env-local:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ─── Événements locaux — OpenAgenda (3 agendas locaux) ───────────────────────
-const OPENAGENDA_KEY    = process.env.OPENAGENDA_API_KEY || '';
-const OA_AGENDA_UIDS    = [35710944, 6085217, 13827807]; // Orléans Métr., Val-de-Loire, Sportifs Loiret
-
-app.get('/events-locaux', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  if (!OPENAGENDA_KEY) return res.json({ events: [], nokey: true });
-  // La clé publique OpenAgenda requiert un Origin navigateur — on guide le client
-  return res.json({ clientSide: true, key: OPENAGENDA_KEY, agendas: OA_AGENDA_UIDS });
-});
+// ── Événements locaux OpenAgenda — voir routes/events-locaux.js ──
+app.use(require("./routes/events-locaux"));
 
 const _server = app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
