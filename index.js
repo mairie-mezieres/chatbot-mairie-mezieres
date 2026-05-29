@@ -291,6 +291,9 @@ app.use(require("./routes/meteo"));
 // ── Abonnements push — voir routes/push.js ─────────────────
 app.use(require("./routes/push"));
 
+// ── Notifications owner idées/signalements — voir routes/notify.js ──
+app.use(require("./routes/notify"));
+
 // ── Logs PWA + login admin — voir routes/logs.js ────────────
 app.use(require("./routes/logs"));
 
@@ -383,13 +386,6 @@ const _server = app.listen(PORT, async () => {
 });
 
 // ── Rappels déchets quotidiens à 18h (heure de Paris) ────────
-const FERIES_FIXES_B=['01-01','05-01','05-08','07-14','08-15','11-01','11-11','12-25'];
-const FERIES_DATES_B=['2025-04-21','2025-05-29','2025-06-09','2026-04-06','2026-05-14','2026-05-25','2027-03-29','2027-05-17'];
-function _isFerieDate(d){
-  const mm=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0');
-  const iso=d.getFullYear()+'-'+mm+'-'+dd;
-  return FERIES_FIXES_B.includes(mm+'-'+dd)||FERIES_DATES_B.includes(iso);
-}
 function _dechetsWeekNumber(d) {
   const j = new Date(d.getFullYear(), 0, 1);
   return Math.ceil((((d - j) / 86400000) + j.getDay() + 1) / 7);
