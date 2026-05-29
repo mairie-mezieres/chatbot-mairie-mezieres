@@ -175,7 +175,12 @@ async function _fetchTrelloSignalements() {
     const matRefMatch = (card.desc || '').match(/\nMAT-REF:\s*([a-f0-9-]{36})/i);
     const matRef = matRefMatch ? matRefMatch[1] : null;
     const descNoRef = (card.desc || '').replace(/\nMAT-REF:\s*[a-f0-9-]{36}/gi, '');
-    const item = { id: card.id, cat, desc: _anonymize(descNoRef), status, statusLabel, date: card.dateLastActivity, comments, photos, ...(matRef ? { matRef } : {}) };
+    // Coordonnées GPS extraites du lien OpenStreetMap inséré à la création
+    const geoMatch = (card.desc || '').match(/mlat=(-?\d+(?:\.\d+)?)&mlon=(-?\d+(?:\.\d+)?)/i);
+    const lat = geoMatch ? parseFloat(geoMatch[1]) : null;
+    const lon = geoMatch ? parseFloat(geoMatch[2]) : null;
+    const hasGeo = lat != null && lon != null && !isNaN(lat) && !isNaN(lon);
+    const item = { id: card.id, cat, desc: _anonymize(descNoRef), status, statusLabel, date: card.dateLastActivity, comments, photos, ...(matRef ? { matRef } : {}), ...(hasGeo ? { lat, lon } : {}) };
     if (isSig) result.signalements.push(item);
     else result.bugs.push(item);
   }
