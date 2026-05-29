@@ -1,0 +1,60 @@
+{
+  "ADMIN_PASSWORD": "",
+  "ANTHROPIC_API_KEY": "sk-ant-xxx",
+  "AUTO_POST_MIN_LEVEL": 4,
+  "AUTO_POST_WEATHER_ALERTS": true,
+  "AUTO_PUSH_WEATHER_MIN_LEVEL": 2,
+  "CLAUDE_PRICE_IN": 0.8,
+  "CLAUDE_PRICE_OUT": 4,
+  "CLOUDINARY_ENABLED": true,
+  "CLOUDINARY_KEY": "12345",
+  "CLOUDINARY_NAME": "democloud",
+  "CLOUDINARY_SECRET": "sekret",
+  "CRON_SECRET": "",
+  "DAILY_STATS_EMAIL": "fabrice.auffret45@gmail.com",
+  "EUR_PER_USD": 0.92,
+  "METEOFRANCE_VIGILANCE_URL": "https://fallback.example",
+  "MISTRAL_API_KEY": "",
+  "MISTRAL_BILLING_URL": "https://api.mistral.ai/v1/usage",
+  "MISTRAL_MODEL": "mistral-small-latest",
+  "MISTRAL_PRICE_IN": 0.1,
+  "MISTRAL_PRICE_OUT": 0.3,
+  "MISTRAL_URL": "https://api.mistral.ai/v1/chat/completions",
+  "OPEN_METEO_LAT": 48.5,
+  "OPEN_METEO_LON": 1.808,
+  "OPEN_METEO_TZ": "Europe/Paris",
+  "RESEND_API_KEY": "",
+  "TRELLO_KEY": "tkey",
+  "TRELLO_LIST_ID_BUG": "bug1",
+  "TRELLO_LIST_ID_DEMANDE": "",
+  "TRELLO_LIST_ID_SIG": "",
+  "TRELLO_NOTIFY": {
+    "bug": {
+      "listId": "bug1",
+      "memberIds": [
+        "a",
+        "b",
+        "c"
+      ],
+      "usernames": []
+    },
+    "signalement": {
+      "listId": "",
+      "memberIds": [],
+      "usernames": [
+        "jdoe"
+      ]
+    },
+    "demande": {
+      "listId": "",
+      "memberIds": [],
+      "usernames": []
+    }
+  },
+  "TRELLO_TOKEN": "ttok",
+  "UPSTASH_API_KEY": "",
+  "UPSTASH_EMAIL": "",
+  "UPSTASH_REDIS_DB_ID": "",
+  "VAPID_EMAIL": "mailto:mairie@mezieres-lez-clery.fr",
+  "WEATHER_CHECK_INTERVAL_MS": 60000
+}
