@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  ci:
+    name: Syntax & Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check (all JS)
+        run: |
+          find . -name '*.js' -not -path './node_modules/*' \
+            | sort | xargs -I{} node --check {}
+
+      - name: Golden-master tests
+        run: node --test test/*.test.js

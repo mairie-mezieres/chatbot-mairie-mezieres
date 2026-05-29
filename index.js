@@ -3,6 +3,16 @@
  * Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
  * Licence MIT — voir LICENSE
  */
+
+// ─── Sentry (init avant tout autre require pour instrumenter Express) ─
+if (process.env.SENTRY_DSN) {
+  require('@sentry/node').init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'production',
+    tracesSampleRate: 0,
+  });
+}
+
 const express   = require("express");
 const axios     = require("axios");
 const https     = require("https");
@@ -131,11 +141,13 @@ const { _isFerieDate } = require("./lib/dates");
 process.on('uncaughtException', (err) => {
   console.error('💥 uncaughtException:', err.message);
   logServerError('uncaughtException', err.message, err.stack?.slice(0, 100));
+  if (process.env.SENTRY_DSN) require('@sentry/node').captureException(err);
 });
 process.on('unhandledRejection', (reason) => {
   const msg = reason instanceof Error ? reason.message : String(reason);
   console.error('💥 unhandledRejection:', msg);
   logServerError('unhandledRejection', msg);
+  if (process.env.SENTRY_DSN) require('@sentry/node').captureException(reason instanceof Error ? reason : new Error(msg));
 });
 
 // ── Stats globales ────────────────────────────────────────────
@@ -353,6 +365,9 @@ app.use(require("./routes/env-local"));
 
 // ── Événements locaux OpenAgenda — voir routes/events-locaux.js ──
 app.use(require("./routes/events-locaux"));
+
+// ─── Sentry error handler Express (doit être après toutes les routes) ─
+if (process.env.SENTRY_DSN) require('@sentry/node').setupExpressErrorHandler(app);
 
 const _server = app.listen(PORT, async () => {
   console.log(`🚀 MAT Serveur v6.5 démarré sur le port ${PORT}`);
