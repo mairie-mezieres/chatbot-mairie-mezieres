@@ -495,6 +495,62 @@ services.push(await runCheck("facebook", "Facebook Page", "📘", async () => {
   };
 }));
 
+  // Webhook ENTRANT : c'est ce qui fait remonter les posts Facebook #MAT
+  // vers les actualités du PWA. Deux causes de panne silencieuse (aucun log) :
+  //  1) la Page n'est plus abonnée au champ "feed" (typique après
+  //     régénération du token) → Facebook n'appelle plus le webhook ;
+  //  2) FACEBOOK_APP_SECRET manquant → le handler rejette chaque appel en
+  //     503 avant tout log (cf. routes/webhook.js).
+  services.push(await runCheck("webhook", "Webhook Facebook (entrant)", "📡", async () => {
+    const hasAppSecret = !!process.env.FACEBOOK_APP_SECRET;
+    if (!PAGE_ACCESS_TOKEN) {
+      return {
+        status: "warn",
+        message: "Facebook non configuré (pas de token de page)",
+        details: { has_page_token: false, has_app_secret: hasAppSecret }
+      };
+    }
+
+    const pageId = await resolveFacebookPageId();
+    if (!pageId) throw new Error("Impossible de résoudre l'identifiant de page");
+
+    const subRes = await axios.get(
+      `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`,
+      { params: { access_token: PAGE_ACCESS_TOKEN }, timeout: 10000 }
+    );
+    const apps = subRes.data?.data || [];
+    const feedSubscribed = apps.some(a =>
+      (a.subscribed_fields || []).some(f => (typeof f === "string" ? f : f?.name) === "feed")
+    );
+
+    const details = {
+      subscribed_apps: apps.length,
+      app_names: apps.map(a => a.name).filter(Boolean),
+      feed_subscribed: feedSubscribed,
+      has_app_secret: hasAppSecret
+    };
+
+    if (!feedSubscribed) {
+      return {
+        status: "danger",
+        message: "Page NON abonnée au champ « feed » — les posts #MAT ne remontent pas. Ré-abonnement nécessaire (route /setup-webhook).",
+        details
+      };
+    }
+    if (!hasAppSecret) {
+      return {
+        status: "danger",
+        message: "Abonné au feed, mais FACEBOOK_APP_SECRET manquant → les appels Facebook sont rejetés en silence (503). Définir la variable sur Render.",
+        details
+      };
+    }
+    return {
+      status: "ok",
+      message: "Webhook abonné au « feed » — les posts #MAT peuvent remonter",
+      details
+    };
+  }));
+
   services.push(await runCheck("push", "Notifications push", "🔔", async () => {
     const subs = await readSubs();
     if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
