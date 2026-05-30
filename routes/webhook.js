@@ -2,9 +2,10 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
-const { VERIFY_TOKEN } = require("../config");
+const { VERIFY_TOKEN, PAGE_ACCESS_TOKEN } = require("../config");
 const { readSeenPosts, writeSeenPosts, readNews, writeNews, readSubs, writeSubs, recordPushHistory } = require("../lib/store");
 const webpush = require("../lib/webpush");
+const { uploadActuImageUrlToCloudinary, CLOUDINARY_ENABLED } = require("../lib/cloudinary");
 
 // ── Webhook Facebook (feed only) ──────────────────────────────
 router.get("/webhook", (req, res) => {
@@ -35,14 +36,15 @@ router.post("/webhook", async (req, res) => {
           const msg = change.value.message;
           const photo = change.value.photo || null;
           if (/#MAT\b/i.test(msg)) {
+            const postId = change.value.post_id || null;
             const postKey =
-              change.value.post_id ||
+              postId ||
               change.value.comment_id ||
               change.value.sender_id ||
               (msg.replace(/\s+/g, " ").trim() + "|" + (photo || ""));
 
             console.log("📰 Publication #MAT détectée", postKey);
-            await handleFacebookPublication(msg, photo, postKey);
+            await handleFacebookPublication(msg, photo, postKey, postId);
           }
         }
       }
@@ -50,14 +52,56 @@ router.post("/webhook", async (req, res) => {
   }
 });
 
+// ── Récupération full_picture + upload Cloudinary ───────────
+async function fetchAndHostPhoto(postId, fallbackUrl) {
+  // 1. Récupérer full_picture depuis l'API Graph (meilleure résolution)
+  let sourceUrl = fallbackUrl;
+  if (postId && PAGE_ACCESS_TOKEN) {
+    try {
+      const res = await fetch(
+        `https://graph.facebook.com/v21.0/${encodeURIComponent(postId)}?fields=full_picture&access_token=${encodeURIComponent(PAGE_ACCESS_TOKEN)}`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.full_picture) sourceUrl = data.full_picture;
+      }
+    } catch (e) {
+      console.warn("⚠️ Graph API full_picture:", e.message);
+    }
+  }
+
+  if (!sourceUrl) return null;
+
+  // 2. Uploader sur Cloudinary pour héberger l'image durablement
+  if (CLOUDINARY_ENABLED) {
+    try {
+      const result = await uploadActuImageUrlToCloudinary(sourceUrl);
+      if (result?.secure_url) {
+        console.log("📷 Photo hébergée sur Cloudinary:", result.secure_url);
+        return result.secure_url;
+      }
+    } catch (e) {
+      console.warn("⚠️ Upload Cloudinary:", e.message);
+    }
+  }
+
+  // 3. Fallback : URL Facebook directe (temporaire)
+  console.warn("⚠️ Photo non hébergée — URL Facebook temporaire utilisée");
+  return sourceUrl;
+}
+
 // ── Publication Facebook → stockage + push + anti-doublon ───
-async function handleFacebookPublication(msg, photoUrl, postKey) {
+async function handleFacebookPublication(msg, photoUrl, postKey, postId) {
   const seen = await readSeenPosts();
 
   if (postKey && seen[postKey]) {
     console.log(`⏭️ Publication déjà traitée: ${postKey}`);
     return { duplicate: true };
   }
+
+  // Remplacer l'URL temporaire Facebook par une URL Cloudinary pérenne
+  const hostedPhoto = await fetchAndHostPhoto(postId, photoUrl);
 
   // Texte complet du post, sans le hashtag
   const fullText = (msg || "").replace(/#(MAT\b|app-mezieres)/gi, "").trim();
@@ -72,7 +116,7 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   // Détection de doublon : même titre + même photo
   const alreadyInNews = actus.some(a =>
     (a.title || "").trim() === title &&
-    (a.photo || null) === (photoUrl || null)
+    (a.photo || null) === (hostedPhoto || null)
   );
 
   if (alreadyInNews) {
@@ -90,7 +134,7 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
     description,                        // NOUVEAU — texte complet après la 1ère ligne
     date: new Date().toLocaleDateString("fr-FR"),
     dateISO: new Date().toISOString().slice(0, 10),
-    photo: photoUrl || null,
+    photo: hostedPhoto || null,
     source: "facebook"
   };
 
@@ -118,8 +162,8 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
     title: `MAT — ${title.substring(0, 60)}`,
     body: notifBody,
     icon: "./icon-192.png",
-    badge: "./icon-192.png",
-    image: photoUrl || undefined,
+    badge: "./icon-badge.png",
+    image: hostedPhoto || undefined,
     data: { url: "./#notifs", listUrl: "./#notifs", open: "notifs" }
   });
 
