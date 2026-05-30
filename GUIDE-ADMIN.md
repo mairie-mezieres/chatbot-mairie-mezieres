@@ -16,7 +16,8 @@ push, agenda…) et le dépannage courant.
 | **Frontend** (`app-mezieres`) | PWA citoyenne + interface admin (`admin.html`) | Cloudflare Pages (statique) |
 | **Backend** (`chatbot-mairie-mezieres`) | API Express, IA MEL, intégrations, push | Render |
 | **Stockage** | Cache, abonnements push, actus, idées, stats | Upstash (Redis, région UE) |
-| **Photos signalements** | Hébergement images | Cloudinary |
+| **Images actus & entreprises** | Photos d'actualités (admin) et logos d'entreprises | Cloudinary |
+| **Signalements** | Carte de suivi + **photo en pièce jointe de la carte** | Trello |
 
 Le frontend appelle le backend (`https://chatbot-mairie-mezieres.onrender.com`).
 Aucune donnée citoyenne ne transite par un CDN tiers côté application.
@@ -87,8 +88,8 @@ Le fichier [`.env.example`](.env.example) liste tout en détail. Les **essentiel
 |----------|------|
 | `MISTRAL_API_KEY` | IA française MEL (souveraine, prioritaire) |
 | `SENTRY_DSN` | Suivi d'erreurs en production (voir §7) |
-| `CLOUDINARY_*` | Photos des signalements |
-| `TRELLO_*` | Signalements / bugs → cartes Trello |
+| `CLOUDINARY_*` | Images des **actualités** (admin) et **logos d'entreprises** |
+| `TRELLO_*` | Signalements / bugs → cartes Trello (**photo en pièce jointe de la carte**) |
 | `GOOGLE_CALENDAR_*` | Agenda public (lecture) et écriture |
 | `METEOFRANCE_VIGILANCE_URL` | Vigilance météo |
 | `RESEND_*` / `DAILY_STATS_EMAIL` | Rapport de stats quotidien par email |
