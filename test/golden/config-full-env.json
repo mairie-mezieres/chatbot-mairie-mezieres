@@ -1,5 +1,6 @@
 {
   "ADMIN_PASSWORD": "",
+  "ADMIN_PASSWORD2": "",
   "ANTHROPIC_API_KEY": "sk-ant-xxx",
   "AUTO_POST_MIN_LEVEL": 4,
   "AUTO_POST_WEATHER_ALERTS": true,

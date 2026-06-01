@@ -2,9 +2,12 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
+const axios = require("axios");
 const { VERIFY_TOKEN } = require("../config");
-const { readSeenPosts, writeSeenPosts, readNews, writeNews, readSubs, writeSubs, recordPushHistory } = require("../lib/store");
-const webpush = require("../lib/webpush");
+const { readSeenPosts, writeSeenPosts, readNews, writeNews } = require("../lib/store");
+const { sendActuPush } = require("../lib/actu");
+const { fetchFacebookFullPicture } = require("../lib/facebook");
+const { uploadActuImageToCloudinary, CLOUDINARY_ENABLED } = require("../lib/cloudinary");
 
 // ── Webhook Facebook (feed only) ──────────────────────────────
 router.get("/webhook", (req, res) => {
@@ -34,6 +37,7 @@ router.post("/webhook", async (req, res) => {
         if (change.field === "feed" && change.value?.message) {
           const msg = change.value.message;
           const photo = change.value.photo || null;
+          const postId = change.value.post_id || null;
           if (/#MAT\b/i.test(msg)) {
             const postKey =
               change.value.post_id ||
@@ -42,7 +46,7 @@ router.post("/webhook", async (req, res) => {
               (msg.replace(/\s+/g, " ").trim() + "|" + (photo || ""));
 
             console.log("📰 Publication #MAT détectée", postKey);
-            await handleFacebookPublication(msg, photo, postKey);
+            await handleFacebookPublication(msg, photo, postKey, postId);
           }
         }
       }
@@ -50,8 +54,37 @@ router.post("/webhook", async (req, res) => {
   }
 });
 
-// ── Publication Facebook → stockage + push + anti-doublon ───
-async function handleFacebookPublication(msg, photoUrl, postKey) {
+// ── Récupérer et persister l'image du post Facebook ──────────
+async function resolvePostImage(postId, fallbackPhoto) {
+  // Essai 1 : Graph API pour obtenir la full_picture
+  let fullPicture = null;
+  if (postId) {
+    fullPicture = await fetchFacebookFullPicture(postId);
+  }
+  const sourceUrl = fullPicture || fallbackPhoto;
+  if (!sourceUrl) return { photoUrl: null, photoPublicId: null };
+
+  // Essai 2 : upload Cloudinary si configuré
+  if (CLOUDINARY_ENABLED) {
+    try {
+      const imgResp = await axios.get(sourceUrl, { responseType: 'arraybuffer', timeout: 10000 });
+      const mimeType = (imgResp.headers['content-type'] || 'image/jpeg').split(';')[0];
+      const base64 = `data:${mimeType};base64,` + Buffer.from(imgResp.data).toString('base64');
+      const cloudResult = await uploadActuImageToCloudinary(base64);
+      if (cloudResult?.secure_url) {
+        return { photoUrl: cloudResult.secure_url, photoPublicId: cloudResult.public_id };
+      }
+    } catch (e) {
+      console.warn("⚠️ Upload Cloudinary image FB échoué, fallback URL directe:", e.message);
+    }
+  }
+
+  // Fallback : URL directe (full_picture ou change.value.photo)
+  return { photoUrl: sourceUrl, photoPublicId: null };
+}
+
+// ── Publication Facebook → stockage + push + anti-doublon ────
+async function handleFacebookPublication(msg, photoUrl, postKey, postId) {
   const seen = await readSeenPosts();
 
   if (postKey && seen[postKey]) {
@@ -84,20 +117,24 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
     return { duplicate: true };
   }
 
+  // Résolution de l'image (Graph API → Cloudinary ou URL directe)
+  const { photoUrl: finalPhotoUrl, photoPublicId } = await resolvePostImage(postId, photoUrl);
+
   const actu = {
     id: Date.now(),
     title,
-    description,                        // NOUVEAU — texte complet après la 1ère ligne
+    description,
     date: new Date().toLocaleDateString("fr-FR"),
     dateISO: new Date().toISOString().slice(0, 10),
-    photo: photoUrl || null,
+    photo: finalPhotoUrl || null,
+    ...(photoPublicId ? { photoPublicId } : {}),
     source: "facebook"
   };
 
   actus.unshift(actu);
   if (actus.length > 30) actus.splice(30);
   await writeNews(actus);
-  console.log(`💾 Actu FB stockée: "${title}" (${description ? description.length + ' car. desc' : 'sans description'})`);
+  console.log(`💾 Actu FB stockée: "${title}" (photo: ${finalPhotoUrl ? 'oui' : 'non'})`);
 
   if (postKey) {
     seen[postKey] = Date.now();
@@ -108,38 +145,8 @@ async function handleFacebookPublication(msg, photoUrl, postKey) {
   }
 
   // Envoi notification push
-  const subs = await readSubs();
-  console.log(`📱 Envoi push à ${subs.length} abonné(s)`);
-
-  // Body = description (si présente) ou titre, tronqué à 200 caractères
-  const notifBody = (description || title).substring(0, 200);
-
-  const payload = JSON.stringify({
-    title: `MAT — ${title.substring(0, 60)}`,
-    body: notifBody,
-    icon: "./icon-192.png",
-    badge: "./icon-badge.png",
-    image: photoUrl || undefined,
-    data: { url: "./#notifs", listUrl: "./#notifs", open: "notifs" }
-  });
-
-  const dead = [];
-  let sent = 0;
-  for (const sub of subs) {
-    try {
-      await webpush.sendNotification(sub, payload, { urgency: 'high', TTL: 86400 });
-      sent++;
-    } catch(e) {
-      if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
-    }
-  }
-
-  if (dead.length) {
-    const alive = subs.filter(s => !dead.includes(s.endpoint));
-    await writeSubs(alive);
-    console.log(`🗑️ ${dead.length} subscription(s) expirée(s) supprimée(s)`);
-  }
-  await recordPushHistory({ type: 'fb', title: title.substring(0, 80), sent, total: subs.length, dead: dead.length });
+  const pushResult = await sendActuPush(title, description, finalPhotoUrl, actu.id);
+  console.log(`📱 Push: ${pushResult.sent}/${pushResult.total} envoyés`);
 
   return { duplicate: false };
 }
