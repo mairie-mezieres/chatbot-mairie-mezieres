@@ -6,7 +6,7 @@ const axios = require("axios");
 const crypto = require("crypto");
 const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG } = require("../config");
 const { trelloStatusFromListName } = require("../lib/trello-status");
-const { sendSignalStatusPush, SIGNAL_STATUS_PUSH } = require("../lib/push-notify");
+const { sendSignalStatusPush, SIGNAL_STATUS_PUSH, sendDemandeStatusPush, sendDemandeCommentPush } = require("../lib/push-notify");
 const { adminAuth } = require("../lib/middleware");
 
 // Secret optionnel pour valider la signature HMAC-SHA1 envoyée par Trello.
@@ -41,7 +41,14 @@ router.post("/trello/webhook", async (req, res) => {
 });
 
 async function handleTrelloAction(action) {
-  if (!action || action.type !== "updateCard") return;
+  if (!action) return;
+
+  if (action.type === "commentCard") {
+    await handleTrelloComment(action);
+    return;
+  }
+
+  if (action.type !== "updateCard") return;
   const data = action.data || {};
   // On ne réagit qu'aux déplacements de carte d'une liste à une autre.
   if (!data.listBefore || !data.listAfter) return;
@@ -51,6 +58,7 @@ async function handleTrelloAction(action) {
   if (!SIGNAL_STATUS_PUSH[newStatus]) return;  // on ne notifie pas le retour "pending"
 
   const cardId = data.card && data.card.id;
+  const cardName = data.card && data.card.name;
   if (!cardId) return;
 
   // Le payload Trello ne contient pas la description : on la refetch pour
@@ -59,8 +67,27 @@ async function handleTrelloAction(action) {
   const m = (desc || "").match(/MAT-REF:\s*([a-f0-9-]{36})/i);
   if (!m) return; // carte non issue de MAT (ou ancienne, sans token)
 
-  const r = await sendSignalStatusPush(m[1], newStatus, cardId);
+  const isDemandeCard = cardName && cardName.startsWith("[Demande]");
+  const r = isDemandeCard
+    ? await sendDemandeStatusPush(m[1], newStatus, cardId)
+    : await sendSignalStatusPush(m[1], newStatus, cardId);
   console.log(`🔔 Trello ${prevStatus}→${newStatus} carte ${cardId} — push:`, r);
+}
+
+async function handleTrelloComment(action) {
+  const data = action.data || {};
+  const cardId = data.card && data.card.id;
+  const cardName = data.card && data.card.name;
+  // Uniquement pour les cartes de type [Demande]
+  if (!cardId || !cardName || !cardName.startsWith("[Demande]")) return;
+
+  const commentText = data.text || "";
+  const desc = await fetchCardDesc(cardId);
+  const m = (desc || "").match(/MAT-REF:\s*([a-f0-9-]{36})/i);
+  if (!m) return;
+
+  const r = await sendDemandeCommentPush(m[1], commentText, cardId);
+  console.log(`🔔 Trello commentaire demande ${cardId} — push:`, r);
 }
 
 async function fetchCardDesc(cardId) {
