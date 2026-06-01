@@ -260,8 +260,15 @@ router.post("/signal", signalLimiter, async (req, res) => {
     if (signalType === "bug") {
       cardName = `[BUG] ${String(cat || "").replace("[BUG]", "").trim() || "Non précisé"}`;
     } else if (signalType === "demande") {
-      cardName = `[Demande] ${String(desc || "").split("\
-")[0].substring(0, 80) || "Contact mairie"}`;
+      const _nameMatch = (desc || "").match(/^Nom\/pr[eé]nom\s*:\s*(.+)/m);
+      const _contactName = _nameMatch ? _nameMatch[1].trim() : null;
+      if (_contactName && _contactName !== "Non précisé") {
+        cardName = `[Demande] ${_contactName.substring(0, 80)}`;
+      } else {
+        const _msgMatch = (desc || "").match(/\n\nMessage\s*:\s*(.+)/);
+        const _msgLine = _msgMatch ? _msgMatch[1].trim().substring(0, 70) : "";
+        cardName = `[Demande] ${_msgLine || "Contact mairie"}`;
+      }
     } else {
       cardName = `[Signalement] ${cat || "Non précisé"}`;
     }
