@@ -4,7 +4,7 @@
 const router = require("express").Router();
 const axios = require("axios");
 const crypto = require("crypto");
-const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG } = require("../config");
+const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_LIST_ID_DEMANDE } = require("../config");
 const { trelloStatusFromListName } = require("../lib/trello-status");
 const { sendSignalStatusPush, SIGNAL_STATUS_PUSH, sendDemandeStatusPush, sendDemandeCommentPush } = require("../lib/push-notify");
 const { adminAuth } = require("../lib/middleware");
@@ -117,7 +117,7 @@ router.post("/admin/trello/register-webhook", adminAuth, async (req, res) => {
     process.env.TRELLO_WEBHOOK_CALLBACK || selfUrl;
   try {
     const boardIds = new Set();
-    for (const listId of [TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG]) {
+    for (const listId of [TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_LIST_ID_DEMANDE]) {
       if (listId) boardIds.add(await _boardIdForList(listId));
     }
     if (!boardIds.size) return res.status(400).json({ error: "Aucune liste SIG/BUG configurée" });
