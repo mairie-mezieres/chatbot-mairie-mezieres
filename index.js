@@ -348,6 +348,9 @@ app.use(require("./routes/docs"));
 // ── Sondages citoyens — voir routes/sondages.js ───────────────
 app.use(require("./routes/sondages"));
 
+// ── Réactions (likes actus, RSVP événements, config features) — voir routes/reactions.js ──
+app.use(require("./routes/reactions"));
+
 
 // ── Annuaire entreprises — voir routes/entreprises.js ────────
 app.use(require("./routes/entreprises"));

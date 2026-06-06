@@ -2,9 +2,14 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
-const { readSondages, writeSondages, readSondageResults, writeSondageResults } = require("../lib/store");
-const { redisDel } = require("../lib/redis");
+const { readSondages, writeSondages, readSondageResults, writeSondageResults, readAdminSettings } = require("../lib/store");
+const { redisDel, redisSismember, redisSadd } = require("../lib/redis");
 const { adminAuth } = require("../lib/middleware");
+
+function getDeviceId(req) {
+  const raw = (req.headers["x-device-id"] || "").toString().trim();
+  return /^[\w-]{4,100}$/.test(raw) ? raw : null;
+}
 
 router.get("/sondages", async (req, res) => {
   const all = await readSondages();
@@ -43,6 +48,19 @@ router.post("/sondages/:id/vote", async (req, res) => {
   if (!s || s.active === false || (s.endsAt && new Date(s.endsAt).getTime() <= Date.now())) {
     return res.status(400).json({ error: "Sondage non disponible" });
   }
+
+  // Déduplication par device — retourne 409 si déjà participé
+  const deviceId = getDeviceId(req);
+  if (deviceId) {
+    try {
+      const votedKey = "mat:voted:sondage:" + id;
+      const alreadyVoted = await redisSismember(votedKey, deviceId);
+      if (alreadyVoted) return res.status(409).json({ error: "Déjà participé", alreadyVoted: true });
+    } catch (e) {
+      console.warn("sondage dedup check:", e.message);
+    }
+  }
+
   const { reponse } = req.body || {};
   // Validate input before writing
   if (s.type === 'choix_unique') {
@@ -76,6 +94,16 @@ router.post("/sondages/:id/vote", async (req, res) => {
     }
   }
   await writeSondageResults(id, results);
+
+  // Enregistre le device comme ayant participé
+  if (deviceId) {
+    try {
+      await redisSadd("mat:voted:sondage:" + id, deviceId);
+    } catch (e) {
+      console.warn("sondage dedup sadd:", e.message);
+    }
+  }
+
   res.json({ ok: true, total: results.total, reponses: results.reponses, counts: results.counts, distribution: results.distribution, average: results.average });
 });
 router.get("/admin/sondages", adminAuth, async (req, res) => {
