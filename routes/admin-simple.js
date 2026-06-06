@@ -112,6 +112,7 @@ router.post("/admin/settings", adminAuth, async (req, res) => {
       appOpenStatsEnabled:   req.body?.appOpenStatsEnabled === true,
       melQuestionLogEnabled: req.body?.melQuestionLogEnabled === true,
       melEnabled:            req.body?.melEnabled !== false,
+      reactionsEnabled:      req.body?.reactionsEnabled !== false,
       melDisabledMessage:    String(req.body?.melDisabledMessage || '').substring(0, 300)
     };
     await writeAdminSettings(next);
