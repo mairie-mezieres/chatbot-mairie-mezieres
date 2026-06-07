@@ -355,7 +355,11 @@ async function _sendDechetsReminder() {
     catch(e) { if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint); }
   }
   if (dead.length) {
-    await writeDechetsSubs(subs.filter(s => !dead.includes(s.endpoint)));
+    // Nettoyage best-effort des abonnements expirés : ne doit jamais lancer,
+    // sinon l'appelant croirait l'envoi échoué et renverrait en double les
+    // notifications déjà parties. Les notifs étant déjà délivrées ici, toute
+    // erreur de purge est avalée.
+    await writeDechetsSubs(subs.filter(s => !dead.includes(s.endpoint))).catch(() => {});
     purgeEndpointsEverywhere(dead).catch(() => {});
   }
   console.log(`🗑️ Rappel déchets (${type}) → ${subs.length} abonnés`);
@@ -374,9 +378,13 @@ setInterval(async () => {
     if (_dechetsLastSent === today) return; // court-circuit en mémoire
     const lastSent = await redisGet('mat:dechets:lastSent');
     if (lastSent === today) { _dechetsLastSent = today; return; }
+    // Envoi AVANT de marquer la journée comme faite : si l'envoi échoue
+    // (Redis en hoquet, lecture des abonnés KO…), on n'écrit pas le dedup
+    // et on réessaie au prochain tick (toutes les 5 min, jusqu'à 21h) plutôt
+    // que de perdre définitivement le rappel du jour. Cohérent avec la météo.
+    await _sendDechetsReminder();
     _dechetsLastSent = today;
     await redisSet('mat:dechets:lastSent', today);
-    await _sendDechetsReminder();
   } catch(e) { console.warn('Dechets reminder:', e.message); }
 }, 5 * 60 * 1000);
 
@@ -391,9 +399,12 @@ app.get("/cron/dechets", async (req, res) => {
       const lastSent = await redisGet('mat:dechets:lastSent');
       if (lastSent === today) return res.json({ ok: true, skipped: true, reason: 'Déjà envoyé aujourd\'hui' });
     }
+    // Envoi AVANT le dedup : si _sendDechetsReminder lance, on ne marque pas
+    // la journée comme faite → cron-job.org pourra réessayer (et le 500 rendu
+    // ci-dessous alertera le monitoring du cron).
+    await _sendDechetsReminder();
     _dechetsLastSent = today;
     await redisSet('mat:dechets:lastSent', today);
-    await _sendDechetsReminder();
     res.json({ ok: true, sent: true });
   } catch(e) {
     console.error('❌ /cron/dechets:', e.message);
