@@ -361,12 +361,15 @@ async function _sendDechetsReminder() {
   console.log(`🗑️ Rappel déchets (${type}) → ${subs.length} abonnés`);
 }
 
-let _dechetsLastSent = null; // évite les Redis GETs répétés pendant l'heure 18h
+let _dechetsLastSent = null; // évite les Redis GETs répétés pendant la fenêtre du soir
 
 setInterval(async () => {
   try {
     const pNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
-    if (pNow.getHours() !== 18) return;
+    const h = pNow.getHours();
+    // Fenêtre élargie 18h–21h : si le serveur redémarre à 18h30 (redéploiement Render),
+    // la notification peut encore être envoyée jusqu'à 21h.
+    if (h < 18 || h > 21) return;
     const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
     if (_dechetsLastSent === today) return; // court-circuit en mémoire
     const lastSent = await redisGet('mat:dechets:lastSent');
@@ -376,6 +379,27 @@ setInterval(async () => {
     await _sendDechetsReminder();
   } catch(e) { console.warn('Dechets reminder:', e.message); }
 }, 5 * 60 * 1000);
+
+// Endpoint cron déchets — appelable par cron-job.org à 18h heure de Paris
+// URL : /cron/dechets?key=CRON_SECRET  (optionnel : &force=1 pour ignorer la dédup)
+app.get("/cron/dechets", async (req, res) => {
+  if (!CRON_SECRET || req.query.key !== CRON_SECRET)
+    return res.status(401).json({ error: 'Clé cron invalide' });
+  try {
+    const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
+    if (req.query.force !== '1') {
+      const lastSent = await redisGet('mat:dechets:lastSent');
+      if (lastSent === today) return res.json({ ok: true, skipped: true, reason: 'Déjà envoyé aujourd\'hui' });
+    }
+    _dechetsLastSent = today;
+    await redisSet('mat:dechets:lastSent', today);
+    await _sendDechetsReminder();
+    res.json({ ok: true, sent: true });
+  } catch(e) {
+    console.error('❌ /cron/dechets:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // ── Graceful shutdown ─────────────────────────────────────────
 // Render envoie SIGTERM ~30 s avant kill -9. On en profite pour :
