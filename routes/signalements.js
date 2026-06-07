@@ -7,7 +7,7 @@ const rateLimit = require("express-rate-limit");
 const { readSignals, writeSignals } = require("../lib/store");
 const { adminAuth } = require("../lib/middleware");
 const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_NOTIFY } = require("../config");
-const { registerNotifyToken, sendSignalStatusPush } = require("../lib/push-notify");
+const { registerNotifyToken, sendSignalStatusPush, sendDemandeStatusPush } = require("../lib/push-notify");
 const { trelloStatusFromListName } = require("../lib/trello-status");
 
 const signalLimiter = rateLimit({
@@ -358,7 +358,7 @@ router.patch("/admin/signals/:id", adminAuth, async (req, res) => {
   if (!validStatuses.includes(status)) return res.status(400).json({ error: "Statut invalide" });
   if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).json({ error: "Trello non configuré" });
   try {
-    const card = await _trelloGet(`/cards/${encodeURIComponent(cardId)}?fields=idBoard,idList,desc`);
+    const card = await _trelloGet(`/cards/${encodeURIComponent(cardId)}?fields=idBoard,idList,desc,name`);
     const lists = await _trelloGet(`/boards/${card.idBoard}/lists?fields=id,name&filter=open`);
     const target = lists.find(l => trelloStatusFromListName(l.name) === status);
     if (!target) return res.status(422).json({ error: `Aucune liste Trello ne correspond au statut « ${status} ». Renommez une liste (ex. « En cours », « Résolu ») ou créez-la.` });
@@ -374,7 +374,13 @@ router.patch("/admin/signals/:id", adminAuth, async (req, res) => {
     // Push au propriétaire si le statut change réellement (token = MAT-REF)
     if (prevStatus !== status) {
       const m = (card.desc || '').match(/MAT-REF:\s*([a-f0-9-]{36})/i);
-      if (m) sendSignalStatusPush(m[1], status, cardId).catch(() => {});
+      if (m) {
+        const isDemandeCard = (card.name || '').startsWith('[Demande]');
+        const pushFn = isDemandeCard ? sendDemandeStatusPush : sendSignalStatusPush;
+        pushFn(m[1], status, cardId).then(r => {
+          console.log(`🔔 PATCH ${cardId} ${prevStatus}→${status} push:`, r);
+        }).catch(() => {});
+      }
     }
     res.json({ ok: true, status });
   } catch (e) {

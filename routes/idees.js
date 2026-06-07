@@ -4,13 +4,16 @@
 const router = require("express").Router();
 const { readIdeas, writeIdeas, readNews, readAdminSettings } = require("../lib/store");
 const { registerNotifyToken } = require("../lib/push-notify");
-const { redisSismember, redisSadd, redisSrem } = require("../lib/redis");
+const { redisSismember, redisSadd, redisSrem, _isRedis429 } = require("../lib/redis");
 
 function getDeviceId(req) {
   const raw = (req.headers["x-device-id"] || "").toString().trim();
   return /^[\w-]{4,100}$/.test(raw) ? raw : null;
 }
 async function reactionsAllowed() {
+  // Quota Redis dépassé (429) : on coupe les votes pour éviter l'inflation du
+  // compteur sans déduplication (cf. reactions.js).
+  if (_isRedis429()) return false;
   try { const s = await readAdminSettings(); return s.reactionsEnabled !== false; }
   catch (e) { return true; }
 }
