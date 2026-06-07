@@ -4,7 +4,7 @@
 const router = require("express").Router();
 const axios = require("axios");
 const rateLimit = require("express-rate-limit");
-const { adminAuth } = require("../lib/middleware");
+const { adminAuth, safeEqual } = require("../lib/middleware");
 const { LOG_KEY, LOG_MAX, _logRateMap } = require("../lib/logger");
 const { REDIS_URL, REDIS_TOKEN, ADMIN_PASSWORD } = require("../config");
 
@@ -71,7 +71,7 @@ router.delete("/admin/logs", adminAuth, async (req, res) => {
 // ── Login admin ───────────────────────────────────────────────
 router.post("/admin/login", adminLoginLimiter, (req, res) => {
   const { password } = req.body || {};
-  if (ADMIN_PASSWORD && password === ADMIN_PASSWORD) {
+  if (ADMIN_PASSWORD && safeEqual(password, ADMIN_PASSWORD)) {
     res.json({ ok: true, token: ADMIN_PASSWORD });
   } else {
     res.status(401).json({ ok: false, error: "Mot de passe incorrect" });
