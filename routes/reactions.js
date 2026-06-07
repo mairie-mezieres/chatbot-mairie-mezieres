@@ -3,7 +3,7 @@
 "use strict";
 const router = require("express").Router();
 const { readAdminSettings, readNews, writeNews } = require("../lib/store");
-const { redisGet, redisSet, redisSismember, redisSadd, redisSrem } = require("../lib/redis");
+const { redisGet, redisSet, redisSismember, redisSadd, redisSrem, _isRedis429 } = require("../lib/redis");
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -14,6 +14,10 @@ function getDeviceId(req) {
 }
 
 async function reactionsAllowed() {
+  // Quota Redis dépassé (429) : on coupe les réactions pour éviter que les
+  // compteurs ne gonflent sans déduplication (sismember renvoie false en
+  // mode dégradé, ce qui ferait incrémenter à chaque clic sans pouvoir annuler).
+  if (_isRedis429()) return false;
   try {
     const s = await readAdminSettings();
     return s.reactionsEnabled !== false;
@@ -23,6 +27,7 @@ async function reactionsAllowed() {
 // ─── Config publique ─────────────────────────────────────────────────────────
 
 router.get("/config/features", async (req, res) => {
+  if (_isRedis429()) return res.json({ reactionsEnabled: false });
   try {
     const s = await readAdminSettings();
     res.json({ reactionsEnabled: s.reactionsEnabled !== false });

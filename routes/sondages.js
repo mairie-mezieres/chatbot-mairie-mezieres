@@ -3,7 +3,7 @@
 "use strict";
 const router = require("express").Router();
 const { readSondages, writeSondages, readSondageResults, writeSondageResults, readAdminSettings } = require("../lib/store");
-const { redisDel, redisSismember, redisSadd } = require("../lib/redis");
+const { redisDel, redisSismember, redisSadd, _isRedis429 } = require("../lib/redis");
 const { adminAuth } = require("../lib/middleware");
 
 function getDeviceId(req) {
@@ -48,6 +48,11 @@ router.post("/sondages/:id/vote", async (req, res) => {
   if (!s || s.active === false || (s.endsAt && new Date(s.endsAt).getTime() <= Date.now())) {
     return res.status(400).json({ error: "Sondage non disponible" });
   }
+
+  // Quota Redis dépassé (429) : la déduplication par device ne fonctionne plus
+  // (sismember renvoie false) → on refuse le vote pour éviter les doublons et
+  // l'inflation de results.total. Comportement cohérent avec les autres réactions.
+  if (_isRedis429()) return res.status(503).json({ error: "Réactions désactivées" });
 
   // Déduplication par device — retourne 409 si déjà participé
   const deviceId = getDeviceId(req);
