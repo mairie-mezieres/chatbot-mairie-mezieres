@@ -29,7 +29,7 @@ router.get("/status", async (req, res) => {
 
   res.json({
     status:  "MAT est en ligne 🌲",
-    version: "6.4 — Mistral principal + Claude secours + MEL améliorée",
+    version: "6.5 — Mistral principal + Claude secours + MEL améliorée",
     abonnes: subs.length,
     actus: news.length,
     idees: ideas.length,

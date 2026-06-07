@@ -294,7 +294,9 @@ router.post("/signal", signalLimiter, async (req, res) => {
 
 router.get("/signalements", async (req, res) => {
   const signals = await readSignals();
-  res.json({ signalements: signals, count: signals.length });
+  // Filtrer les champs sensibles (notifyToken = clé push privée de l'auteur)
+  const pub = signals.map(({ notifyToken: _nt, ...s }) => s);
+  res.json({ signalements: pub, count: pub.length });
 });
 
 router.get('/api/signalements', async (req, res) => {

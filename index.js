@@ -150,6 +150,16 @@ process.on('unhandledRejection', (reason) => {
   if (process.env.SENTRY_DSN) require('@sentry/node').captureException(reason instanceof Error ? reason : new Error(msg));
 });
 
+// Flush des stats mémoire vers Redis avant arrêt (SIGTERM = redéploiement Render,
+// SIGINT = Ctrl+C en dev). Sans ça, jusqu'à 5 min de stats MEL/accès sont perdues.
+async function _gracefulShutdown(signal) {
+  console.log(`\n🛑 ${signal} reçu — flush stats avant arrêt…`);
+  try { await flushStatsNow(); console.log('✅ Stats flushées'); } catch (e) { console.warn('⚠️ Flush stats:', e.message); }
+  process.exit(0);
+}
+process.on('SIGTERM', () => _gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => _gracefulShutdown('SIGINT'));
+
 // ── Stats globales ────────────────────────────────────────────
 // ── Admin dashboard — voir routes/admin-dashboard.js ────────
 app.use(require("./routes/admin-dashboard"));
@@ -174,124 +184,8 @@ app.use(require("./routes/mel"));
 // ── Signalements citoyens + Trello — voir routes/signalements.js ──
 app.use(require("./routes/signalements"));
 
-// ── Suivi public des signalements via Trello ──────────────────
-function _anonymize(text) {
-  if (!text) return '';
-  let t = text
-    .replace(/\n+📱[^\n]*/g, '')
-    .replace(/\n+🏷️[^\n]*/g, '')
-    .replace(/\n+Appareil\s*:[^\n]*/g, '')
-    .replace(/\n+Modèle\s*:[^\n]*/g, '')
-    .replace(/\n+OS\s*:[^\n]*/g, '')
-    .replace(/\n+Navigateur\s*:[^\n]*/g, '')
-    .replace(/\n+Écran\s*:[^\n]*/g, '')
-    .replace(/\n+PWA\s*:[^\n]*/g, '')
-    .replace(/\n+MAT\s*:[^\n]*/g, '')
-    .replace(/\n+Description\s*:\n*/g, '\n')
-    .trim();
-  return t
-    .replace(/\b0[1-9](?:[\s.\-]?\d{2}){4}\b/g, '[tél. masqué]')
-    .replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, '[email masqué]');
-}
-
-async function _trelloGet(path) {
-  if (!TRELLO_KEY || !TRELLO_TOKEN) throw new Error('Trello non configuré');
-  const sep = path.includes('?') ? '&' : '?';
-  const url = `https://api.trello.com/1${path}${sep}key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
-  const r = await axios.get(url, { timeout: 8000 });
-  return r.data;
-}
-
-const _trelloBoardIdCache = {};
-async function _trelloBoardIdFor(listId) {
-  if (_trelloBoardIdCache[listId]) return _trelloBoardIdCache[listId];
-  const list = await _trelloGet(`/lists/${listId}?fields=idBoard`);
-  _trelloBoardIdCache[listId] = list.idBoard;
-  return list.idBoard;
-}
-
-function _trelloStatusFromListName(name) {
-  const n = (name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (/resolu|termine|done|ferme|clos/.test(n)) return 'resolved';
-  if (/cours|progress|traitement/.test(n)) return 'in_progress';
-  return 'pending';
-}
-
-const _attachmentUrlMap = new Map();
-let _sigTrackCache = null, _sigTrackCacheAt = 0;
-
-async function _fetchTrelloSignalements() {
-  if (_sigTrackCache && Date.now() - _sigTrackCacheAt < 5 * 60 * 1000) return _sigTrackCache;
-  if (!TRELLO_KEY || !TRELLO_TOKEN) return { signalements: [], bugs: [] };
-  // Support SIG et BUG sur des boards Trello séparés
-  const boardIds = new Set();
-  if (TRELLO_LIST_ID_SIG) boardIds.add(await _trelloBoardIdFor(TRELLO_LIST_ID_SIG));
-  if (TRELLO_LIST_ID_BUG) boardIds.add(await _trelloBoardIdFor(TRELLO_LIST_ID_BUG));
-  if (!boardIds.size) return { signalements: [], bugs: [] };
-  const listStatusMap = {}, listNameMap = {};
-  const allCards = [];
-  await Promise.all([...boardIds].map(async bid => {
-    const [lists, cards] = await Promise.all([
-      _trelloGet(`/boards/${bid}/lists?fields=id,name&filter=open`),
-      _trelloGet(`/boards/${bid}/cards?filter=open&fields=id,name,desc,idList,dateLastActivity&attachments=true&actions=commentCard`),
-    ]);
-    for (const l of lists) { listStatusMap[l.id] = _trelloStatusFromListName(l.name); listNameMap[l.id] = l.name; }
-    allCards.push(...cards);
-  }));
-  // Compatibility: replace local cards variable reference
-  const cards = allCards;
-  const result = { signalements: [], bugs: [] };
-  for (const card of cards) {
-    const isSig = card.name.startsWith('[Signalement]');
-    const isBug = card.name.startsWith('[BUG]');
-    if (!isSig && !isBug) continue;
-    const cat = card.name.replace(/^\[(Signalement|BUG)\]\s*/, '');
-    const status = listStatusMap[card.idList] || 'pending';
-    const statusLabel = listNameMap[card.idList] || 'À traiter';
-    const comments = ((card.actions || [])
-      .filter(a => a.type === 'commentCard')
-      .map(a => ({ text: _anonymize(a.data.text), date: a.date }))
-    ).reverse();
-    const photos = (card.attachments || [])
-      .filter(a => a.id && a.url && (!a.mimeType || a.mimeType.startsWith('image/')))
-      .map(a => {
-        _attachmentUrlMap.set(`${card.id}/${a.id}`, { trelloUrl: a.url, mimeType: a.mimeType || 'image/jpeg' });
-        return { url: `https://chatbot-mairie-mezieres.onrender.com/api/signalements/photo/${card.id}/${a.id}` };
-      });
-    const item = { id: card.id, cat, desc: _anonymize(card.desc), status, statusLabel, date: card.dateLastActivity, comments, photos };
-    if (isSig) result.signalements.push(item);
-    else result.bugs.push(item);
-  }
-  result.signalements.sort((a, b) => b.date.localeCompare(a.date));
-  result.bugs.sort((a, b) => b.date.localeCompare(a.date));
-  _sigTrackCache = result; _sigTrackCacheAt = Date.now();
-  return result;
-}
-
-app.get('/api/signalements', async (req, res) => {
-  try { res.json(await _fetchTrelloSignalements()); }
-  catch(e) {
-    console.error('api/signalements:', e.message);
-    res.status(502).json({ signalements: [], bugs: [], error: 'Service temporairement indisponible' });
-  }
-});
-
-app.get('/api/signalements/photo/:cardId/:attachId', async (req, res) => {
-  try {
-    const { cardId, attachId } = req.params;
-    if (!/^[a-zA-Z0-9]+$/.test(cardId) || !/^[a-zA-Z0-9]+$/.test(attachId)) return res.status(400).end();
-    if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).end();
-    let entry = _attachmentUrlMap.get(`${cardId}/${attachId}`);
-    if (!entry) { await _fetchTrelloSignalements(); entry = _attachmentUrlMap.get(`${cardId}/${attachId}`); }
-    if (!entry) return res.status(404).end();
-    const sep = entry.trelloUrl.includes('?') ? '&' : '?';
-    const authedUrl = `${entry.trelloUrl}${sep}key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
-    const r = await axios.get(authedUrl, { responseType: 'stream', maxRedirects: 10, timeout: 20000 });
-    res.setHeader('Content-Type', r.headers['content-type'] || entry.mimeType);
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    r.data.pipe(res);
-  } catch(e) { console.error('photo proxy:', e.message); res.status(502).end(); }
-});
+// Les routes /api/signalements et /api/signalements/photo/:cardId/:attachId
+// sont gérées par routes/signalements.js (monté ci-dessus).
 
 // ── Boîte à idées partagées ──────────────────────────────────
 // ── Idées citoyennes + actualités — voir routes/idees.js ─────
