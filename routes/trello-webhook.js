@@ -27,7 +27,8 @@ router.post("/trello/webhook", async (req, res) => {
       `${req.protocol}://${req.get("host")}/trello/webhook`;
     const base = (req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {})) + callback;
     const expected = crypto.createHmac("sha1", TRELLO_WEBHOOK_SECRET).update(base).digest("base64");
-    if (!sig || sig !== expected) {
+    const sigBuf = sig ? Buffer.from(sig) : null; const expBuf = Buffer.from(expected);
+    if (!sigBuf || sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
       console.warn("⚠️ Trello webhook: signature invalide");
       return res.sendStatus(401);
     }

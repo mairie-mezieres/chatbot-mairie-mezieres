@@ -27,7 +27,8 @@ router.post("/webhook", async (req, res) => {
   if (!sig) return res.sendStatus(403);
   const crypto = require('crypto');
   const expected = 'sha256=' + crypto.createHmac('sha256', appSecret).update(req.rawBody || Buffer.from('')).digest('hex');
-  if (sig !== expected) return res.sendStatus(403);
+  const sigBuf = Buffer.from(sig); const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return res.sendStatus(403);
   res.status(200).send("EVENT_RECEIVED");
   const body = req.body;
 
