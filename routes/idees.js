@@ -27,11 +27,17 @@ router.post("/idee", async (req, res) => {
   const { id, text, cat, date, notifyToken, sub } = req.body || {};
   if (!text) return res.status(400).json({ error: "text requis" });
 
+  // L'id vient du client : on le contraint à un entier positif sûr. Tout id
+  // non numérique (tentative d'injection dans l'onclick du front) retombe sur
+  // un timestamp serveur — jamais stocké tel quel.
+  const _id = Number(id);
+  const ideaId = (Number.isSafeInteger(_id) && _id > 0) ? _id : Date.now();
+
   const ideas = await readIdeas();
-  if (ideas.find(i => i.id === id)) return res.json({ success:true, duplicate:true });
+  if (ideas.find(i => i.id === ideaId)) return res.json({ success:true, duplicate:true });
 
   const idea = {
-    id: id || Date.now(),
+    id: ideaId,
     text: text.substring(0,500),
     cat: (cat ? String(cat).substring(0, 100) : null) || "💡 Autre",
     votes: 0,
