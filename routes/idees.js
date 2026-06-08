@@ -33,7 +33,7 @@ router.post("/idee", async (req, res) => {
   const idea = {
     id: id || Date.now(),
     text: text.substring(0,500),
-    cat: cat || "💡 Autre",
+    cat: (cat ? String(cat).substring(0, 100) : null) || "💡 Autre",
     votes: 0,
     date: date || new Date().toLocaleDateString("fr-FR"),
     ...(notifyToken ? { notifyToken } : {})

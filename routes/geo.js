@@ -90,14 +90,6 @@ router.get("/api/chemins", async (req, res) => {
 router.post("/api/parcours", melLimiter, async (req, res) => {
   const { mode, distance, style } = req.body || {};
 
-  if (!mode || !distance) {
-    return res.status(400).json({ error: "mode et distance requis" });
-  }
-
-  if (!MISTRAL_API_KEY) {
-    return res.status(500).json({ error: "MISTRAL_API_KEY manquante" });
-  }
-
   const modeLabels = { pied: "à pied", velo: "à vélo", cheval: "à cheval" };
   const styleLabels = {
     nature:     "nature & chemins de terre",
@@ -105,6 +97,15 @@ router.post("/api/parcours", melLimiter, async (req, res) => {
     vignes:     "vignes & campagne agricole",
     mixte:      "mixte et varié"
   };
+
+  if (!modeLabels[mode]) return res.status(400).json({ error: "mode invalide (pied|velo|cheval)" });
+  const distanceNum = parseFloat(distance);
+  if (!distanceNum || distanceNum < 1 || distanceNum > 50) return res.status(400).json({ error: "distance invalide (1–50 km)" });
+  if (style && !styleLabels[style]) return res.status(400).json({ error: "style invalide" });
+
+  if (!MISTRAL_API_KEY) {
+    return res.status(500).json({ error: "MISTRAL_API_KEY manquante" });
+  }
 
   const systemPrompt = `Tu es un expert local en randonnée pour la commune de Mézières-lez-Cléry (Loiret, 45370, Centre-Val de Loire).
 La commune est traversée par 3 types de voies :
@@ -126,7 +127,7 @@ Réponds UNIQUEMENT en JSON valide, sans texte avant ni après, sans balises mar
   "waypoints": [[lat,lng],[lat,lng],...]
 }
 
-Les waypoints doivent former une boucle réaliste de ~${distance} km au départ du parking (47.8185,1.8095), avec 8 à 14 points. Adapte le tracé au mode ${modeLabels[mode] || mode} et à l'ambiance ${styleLabels[style] || style}. Pour le vélo, privilégie routes et chemins larges. Pour le cheval, évite les routes principales.`;
+Les waypoints doivent former une boucle réaliste de ~${distanceNum} km au départ du parking (47.8185,1.8095), avec 8 à 14 points. Adapte le tracé au mode ${modeLabels[mode]} et à l'ambiance ${styleLabels[style] || styleLabels.mixte}. Pour le vélo, privilégie routes et chemins larges. Pour le cheval, évite les routes principales.`;
 
   try {
     const r = await axios.post(
@@ -137,7 +138,7 @@ Les waypoints doivent former une boucle réaliste de ~${distance} km au départ 
         max_tokens: 600,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `Génère un parcours ${modeLabels[mode] || mode} de ${distance} km, ambiance ${styleLabels[style] || style}.` }
+          { role: "user", content: `Génère un parcours ${modeLabels[mode]} de ${distanceNum} km, ambiance ${styleLabels[style] || styleLabels.mixte}.` }
         ]
       },
       {

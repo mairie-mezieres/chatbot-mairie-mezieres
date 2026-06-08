@@ -14,8 +14,9 @@ const {
 
 // ── Stats usage ──────────────────────────────────────────────
 router.post("/stats/track", async (req, res) => {
-  const { service, device } = req.body || {};
+  let { service, device } = req.body || {};
   if (!service) return res.status(400).json({ error: "service requis" });
+  service = String(service).substring(0, 60);
 
   const settings = await readAdminSettings();
   const trackService = shouldTrackService(service, settings);
@@ -38,7 +39,8 @@ router.post("/stats/track", async (req, res) => {
   }
 
   // ── 2) Visiteurs uniques : TOUJOURS gardés
-  const deviceId = req.headers["x-device-id"] || req.body?.deviceId || null;
+  const _rawDev = req.headers["x-device-id"] || req.body?.deviceId || null;
+  const deviceId = _rawDev ? String(_rawDev).substring(0, 100) : null;
   if (deviceId) {
     try {
       if (!stats.uniqueUsers) {
