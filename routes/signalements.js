@@ -217,10 +217,20 @@ async function _fetchTrelloAdmin() {
 
 // ── Signalement citoyen → Redis + Trello ─────────────────────
 router.post("/signal", signalLimiter, async (req, res) => {
-  const { cat, desc, lat, lon, photoB64, type } = req.body || {};
+  let { cat, desc, lat, lon, photoB64, type } = req.body || {};
 
-  const mapsLink = (lat && lon)
-    ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=18`
+  // Plafonds/validation des entrées citoyennes (cohérent avec /idee) : évite de
+  // gonfler Redis (mat:signals) et l'email quotidien via un POST abusif, et
+  // empêche d'injecter autre chose que des coordonnées dans le lien carte.
+  cat  = String(cat  || "").substring(0, 200);
+  desc = String(desc || "").substring(0, 5000);
+  const _nLat = Number(lat), _nLon = Number(lon);
+  const _hasGeo = Number.isFinite(_nLat) && Number.isFinite(_nLon);
+  lat = _hasGeo ? _nLat : null;
+  lon = _hasGeo ? _nLon : null;
+
+  const mapsLink = _hasGeo
+    ? `https://www.openstreetmap.org/?mlat=${_nLat}&mlon=${_nLon}&zoom=18`
     : null;
 
   const isBug     = (type === "bug" || (cat || "").startsWith("[BUG]"));
