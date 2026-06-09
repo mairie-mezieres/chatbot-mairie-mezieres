@@ -36,9 +36,10 @@ router.post("/mel", melLimiter, async (req, res) => {
   }
 
   const deviceId = _melDeviceId(req);
+  const clientIp = req.ip;
 
-  // Vérification quota + blocage
-  const access = await _checkMelAccess(deviceId);
+  // Vérification quota + blocage (quota par device + backstop par IP)
+  const access = await _checkMelAccess(deviceId, clientIp);
   if (!access.ok) {
     if (access.reason === "blocked")
       return res.status(403).json({ error:"blocked", reply:"Votre accès au chat a été suspendu pour utilisation abusive. Contactez la mairie si nécessaire : 02 38 45 61 76 😊" });
@@ -62,7 +63,7 @@ router.post("/mel", melLimiter, async (req, res) => {
       return res.status(403).json({ error:"blocked", reply:"Votre accès au chat a été suspendu. Contactez la mairie si nécessaire : 02 38 45 61 76 😊" });
     }
 
-    await _recordMelUse(deviceId);
+    await _recordMelUse(deviceId, clientIp);
     await trackMelStats(lastUser);
     const result = await generateMelReply(lastUser, history, category || "autre", extraCtx || "");
     await trackMelQuestion(lastUser, category, result.reply);
