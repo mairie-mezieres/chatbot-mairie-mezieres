@@ -136,6 +136,33 @@ router.delete("/photos/:id/vote", async (req, res) => {
   }
 });
 
+router.delete("/photos/:id", async (req, res) => {
+  const deviceId = getDeviceId(req);
+  if (!deviceId) return res.status(400).json({ error: "device-id requis" });
+
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: "id invalide" });
+
+  try {
+    const photos = await readPhotos();
+    const idx = photos.findIndex(p => p.id === id);
+    if (idx < 0) return res.status(404).json({ error: "Photo non trouvée" });
+    if (photos[idx].deviceId !== deviceId) return res.status(403).json({ error: "Non autorisé" });
+
+    const [removed] = photos.splice(idx, 1);
+    await writePhotos(photos);
+    if (removed.publicId) {
+      deleteGaleriePhotoFromCloudinary(removed.publicId).catch(e =>
+        console.warn("⚠️ Suppression Cloudinary échouée:", e.message));
+    }
+    console.log(`🗑️ Photo galerie #${id} supprimée par son auteur`);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("DELETE /photos/:id:", e.message);
+    res.status(500).json({ error: "Erreur serveur" });
+  }
+});
+
 // ── Admin (modération) ────────────────────────────────────────
 
 router.get("/admin/photos", adminAuth, async (req, res) => {
