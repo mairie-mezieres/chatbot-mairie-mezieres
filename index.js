@@ -40,6 +40,7 @@ app.use((req, res, next) => {
 function _isLargeBodyRoute(p) {
   if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
   if (p === "/signal") return true;
+  if (p === "/photos") return true;
   if (p === "/admin/actus/add") return true;
   if (p === "/admin/entreprises" || p.startsWith("/admin/entreprises/")) return true;
   return false;
@@ -190,6 +191,9 @@ app.use(require("./routes/signalements"));
 // ── Boîte à idées partagées ──────────────────────────────────
 // ── Idées citoyennes + actualités — voir routes/idees.js ─────
 app.use(require("./routes/idees"));
+
+// ── Galerie photos communautaires — voir routes/photos.js ────
+app.use(require("./routes/photos"));
 
 // ── Routes météo — voir routes/meteo.js ────────────────────
 app.use(require("./routes/meteo"));
