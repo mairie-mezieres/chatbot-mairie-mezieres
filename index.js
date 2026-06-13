@@ -43,6 +43,7 @@ function _isLargeBodyRoute(p) {
   if (p === "/photos") return true;
   if (p === "/admin/actus/add") return true;
   if (p === "/admin/entreprises" || p.startsWith("/admin/entreprises/")) return true;
+  if (p === "/admin/mascotte") return true;
   return false;
 }
 const _jsonSmall = express.json({ limit: "256kb", verify: (req, res, buf) => { req.rawBody = buf; } });
@@ -261,6 +262,9 @@ app.use(require("./routes/admin-email"));
 
 // ── Sauvegarde Upstash → base cible — voir routes/cron-backup.js ────────
 app.use(require("./routes/cron-backup"));
+
+// ── Photo MAT & MEL personnalisable — voir routes/mascotte.js ────────
+app.use(require("./routes/mascotte"));
 
 // ─── Prix carburant — 3 stations locales ─────────────────────────────────────
 // ── Prix carburants — voir routes/carburant.js ────────────────
