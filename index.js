@@ -257,6 +257,9 @@ app.use(require("./routes/entreprises"));
 // ── Email stats + cron — voir routes/admin-email.js ────────
 app.use(require("./routes/admin-email"));
 
+// ── Sauvegarde Upstash → base cible — voir routes/cron-backup.js ────────
+app.use(require("./routes/cron-backup"));
+
 // ─── Prix carburant — 3 stations locales ─────────────────────────────────────
 // ── Prix carburants — voir routes/carburant.js ────────────────
 app.use(require("./routes/carburant"));
