@@ -266,6 +266,7 @@ app.use(require("./routes/cron-backup"));
 // ── Photo MAT & MEL personnalisable — voir routes/mascotte.js ────────
 app.use(require("./routes/mascotte"));
 
+
 // ─── Prix carburant — 3 stations locales ─────────────────────────────────────
 // ── Prix carburants — voir routes/carburant.js ────────────────
 app.use(require("./routes/carburant"));
