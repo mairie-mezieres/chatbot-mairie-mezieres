@@ -175,6 +175,9 @@ app.use(require("./routes/admin-dashboard"));
 // ── Banderole info + overlay migration — voir routes/info-banner.js ──
 app.use(require("./routes/info-banner"));
 
+// ── Horaires exceptionnels (mairie & déchetterie) — voir routes/horaires.js ──
+app.use(require("./routes/horaires"));
+
 
 
 // ── Route : visiteurs uniques// ── Route : visiteurs uniques ─────────────────────────────────────────────────
