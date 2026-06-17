@@ -11,81 +11,48 @@ const { getGoogleCalendarClient, upsertGoogleCalendarEvent } = require("../lib/c
 
 const PUSH_HISTORY_KEY = 'mat:push:history';
 
-// ── Route : publier une actualité (multi-canal) ─────────────
-router.post("/admin/actus/add", adminAuth, async (req, res) => {
+// ── Cœur de publication multi-canal (réutilisé : immédiat + programmé) ──
+// Publie une actu sur les canaux choisis. Lève une erreur taguée (er.cloudFail /
+// er.fbFail) en cas d'échec atomique, avec rollback de l'image Cloudinary si elle
+// vient d'être uploadée. imageBase64 = upload + post photo multipart ; imageUrl =
+// image déjà hébergée (post photo par URL — cas des publications programmées).
+async function publishActu(opts) {
   const {
-    title,
-    description,
-    imageBase64,           // data URL : "data:image/jpeg;base64,..."
-    imageUrl,              // URL externe (fallback si pas d'upload)
-    eventDate,             // ISO : "2026-05-15T18:30" ou "2026-05-15"
-    eventLocation,
-    publishFacebook = true,
-    sendPush = true,
-    createCalendar = true  // automatiquement false si pas de eventDate
-  } = req.body || {};
-
-  if (!title || !String(title).trim()) {
-    return res.status(400).json({ error: "title requis" });
-  }
-
-  if (publishFacebook && !imageBase64) {
-    return res.status(400).json({ error: "imageBase64 requis pour publier sur Facebook avec image" });
-  }
+    title, description,
+    imageBase64 = null, imageUrl = null, photoPublicId = null,
+    eventDate = null, eventLocation = null,
+    publishFacebook = true, sendPush = true, createCalendar = true
+  } = opts || {};
 
   const cleanTitle = String(title).trim().substring(0, 150);
   const cleanDescription = String(description || "").trim().substring(0, 3000);
+  const result = { ok: true, actu: null, facebook: null, cloudinary: null, push: null, calendar: null, warnings: [] };
 
-  const result = {
-    ok: true,
-    actu: null,
-    facebook: null,
-    cloudinary: null,
-    push: null,
-    calendar: null,
-    warnings: []
-  };
-
-  // 1. Uploader l'image vers Cloudinary en premier pour stocker une URL stable + public_id supprimable
+  // 1. Image : upload Cloudinary si base64 fourni (sinon URL déjà hébergée).
   let finalPhotoUrl = imageUrl || null;
-  let finalPhotoPublicId = null;
+  let finalPhotoPublicId = photoPublicId || null;
   if (imageBase64) {
     try {
       const upload = await uploadActuImageToCloudinary(imageBase64);
       finalPhotoUrl = upload.secure_url || upload.url || finalPhotoUrl;
-      finalPhotoPublicId = upload.public_id || null;
-      result.cloudinary = {
-        ok: true,
-        public_id: upload.public_id,
-        asset_id: upload.asset_id || null,
-        secure_url: upload.secure_url || upload.url || null
-      };
+      finalPhotoPublicId = upload.public_id || finalPhotoPublicId;
+      result.cloudinary = { ok: true, public_id: upload.public_id, asset_id: upload.asset_id || null, secure_url: upload.secure_url || upload.url || null };
     } catch (e) {
-      return res.status(500).json({ ok: false, error: "Cloudinary: " + e.message });
+      const er = new Error("Cloudinary: " + e.message); er.cloudFail = true; throw er;
     }
   }
 
-  // 2. Publier sur Facebook avec image quand imageBase64 est fourni.
-  //    Si l'image Facebook échoue, on annule la création pour éviter une actu partielle.
+  // 2. Facebook (atomique : rollback de l'image fraîchement uploadée si échec).
   if (publishFacebook) {
     try {
-      const fbResult = await publishActuToFacebook(
-        cleanTitle,
-        cleanDescription,
-        imageBase64,
-        eventDate,
-        eventLocation
-      );
-      result.facebook = fbResult;
+      result.facebook = await publishActuToFacebook(cleanTitle, cleanDescription, imageBase64, eventDate, eventLocation, finalPhotoUrl);
     } catch (e) {
-      if (finalPhotoPublicId) {
-        try { await deleteActuImageFromCloudinary(finalPhotoPublicId); } catch (_) {}
-      }
-      return res.status(502).json({ ok: false, error: "Facebook: " + e.message });
+      if (imageBase64 && finalPhotoPublicId) { try { await deleteActuImageFromCloudinary(finalPhotoPublicId); } catch (_) {} }
+      const er = new Error("Facebook: " + e.message); er.fbFail = true; throw er;
     }
   }
 
-  // 3. Stocker l'actu dans Redis (pour affichage dans la PWA)
+  // 3. Stockage Redis (affichage PWA).
   const actus = await readNews();
   const actu = {
     id: Date.now(),
@@ -104,32 +71,44 @@ router.post("/admin/actus/add", adminAuth, async (req, res) => {
   await writeNews(actus);
   result.actu = actu;
 
-  // 4. Envoyer notification push
+  // 4. Push.
   if (sendPush) {
-    try {
-      result.push = await sendActuPush(cleanTitle, cleanDescription, finalPhotoUrl, actu.id);
-    } catch (e) {
-      result.warnings.push("Push: " + e.message);
-      result.push = { ok: false, error: e.message };
-    }
+    try { result.push = await sendActuPush(cleanTitle, cleanDescription, finalPhotoUrl, actu.id); }
+    catch (e) { result.warnings.push("Push: " + e.message); result.push = { ok: false, error: e.message }; }
   }
 
-  // 5. Créer/remplacer événement Google Agenda
+  // 5. Google Agenda.
   if (createCalendar && eventDate) {
-    try {
-      result.calendar = await upsertGoogleCalendarEvent(
-        cleanTitle,
-        cleanDescription,
-        eventDate,
-        eventLocation
-      );
-    } catch (e) {
-      result.warnings.push("Calendar: " + e.message);
-      result.calendar = { ok: false, error: e.message };
-    }
+    try { result.calendar = await upsertGoogleCalendarEvent(cleanTitle, cleanDescription, eventDate, eventLocation); }
+    catch (e) { result.warnings.push("Calendar: " + e.message); result.calendar = { ok: false, error: e.message }; }
   }
 
-  res.json(result);
+  return result;
+}
+
+// ── Route : publier une actualité (multi-canal, immédiat) ───
+router.post("/admin/actus/add", adminAuth, async (req, res) => {
+  const {
+    title, description, imageBase64, imageUrl,
+    eventDate, eventLocation,
+    publishFacebook = true, sendPush = true, createCalendar = true
+  } = req.body || {};
+
+  if (!title || !String(title).trim()) {
+    return res.status(400).json({ error: "title requis" });
+  }
+  if (publishFacebook && !imageBase64) {
+    return res.status(400).json({ error: "imageBase64 requis pour publier sur Facebook avec image" });
+  }
+
+  try {
+    const result = await publishActu({ title, description, imageBase64, imageUrl, eventDate, eventLocation, publishFacebook, sendPush, createCalendar });
+    res.json(result);
+  } catch (e) {
+    if (e.cloudFail) return res.status(500).json({ ok: false, error: e.message });
+    if (e.fbFail) return res.status(502).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ── Modifier une actu (titre, desc, date, lieu + re-publication optionnelle) ──
@@ -269,6 +248,121 @@ setInterval(async () => {
     const remaining = scheduled.filter(n => (!n.sent && !n.failed) || new Date(n.scheduledAt).getTime() > cutoff);
     await redisSet('mat:push:scheduled', remaining);
   } catch (e) { console.warn('Cron push schedulé:', e.message); }
+}, 60 * 1000);
+
+// ── Publications programmées (différées) ────────────────────
+const ACTUS_SCHEDULED_KEY = 'mat:actus:scheduled';
+const ACTUS_SCHEDULED_MAX_RETRIES = 3;
+
+// Programmer une publication : l'image est hébergée maintenant (Cloudinary), la
+// diffusion (Facebook + push + agenda, selon les canaux) a lieu à la date choisie.
+router.post("/admin/actus/schedule", adminAuth, async (req, res) => {
+  const {
+    title, description, imageBase64, imageUrl,
+    eventDate, eventLocation,
+    publishFacebook = true, sendPush = true, createCalendar = true,
+    scheduledAt
+  } = req.body || {};
+
+  if (!title || !String(title).trim()) return res.status(400).json({ error: "title requis" });
+  if (!scheduledAt) return res.status(400).json({ error: "scheduledAt requis" });
+  const when = new Date(scheduledAt);
+  if (isNaN(when.getTime())) return res.status(400).json({ error: "scheduledAt invalide" });
+  if (when.getTime() <= Date.now()) return res.status(400).json({ error: "La date de programmation doit être dans le futur" });
+
+  // Héberger l'image dès maintenant (évite de stocker du base64 lourd en Redis).
+  let photoUrl = imageUrl || null;
+  let photoPublicId = null;
+  if (imageBase64) {
+    try {
+      const up = await uploadActuImageToCloudinary(imageBase64);
+      photoUrl = up.secure_url || up.url || photoUrl;
+      photoPublicId = up.public_id || null;
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: "Cloudinary: " + e.message });
+    }
+  }
+
+  const scheduled = (await redisGet(ACTUS_SCHEDULED_KEY)) || [];
+  const draft = {
+    id: Date.now(),
+    scheduledAt: when.toISOString(),
+    title: String(title).trim().substring(0, 150),
+    description: String(description || "").trim().substring(0, 3000),
+    photoUrl, photoPublicId,
+    eventDate: eventDate || null,
+    eventLocation: eventLocation ? String(eventLocation).substring(0, 200) : null,
+    publishFacebook: !!publishFacebook,
+    sendPush: !!sendPush,
+    createCalendar: !!createCalendar,
+    status: 'pending',
+    retries: 0,
+    createdAt: new Date().toISOString()
+  };
+  scheduled.push(draft);
+  if (scheduled.length > 50) scheduled.splice(0, scheduled.length - 50);
+  await redisSet(ACTUS_SCHEDULED_KEY, scheduled);
+  res.json({ ok: true, scheduled: draft });
+});
+
+// Lister les publications programmées (en attente + échecs).
+router.get("/admin/actus/scheduled", adminAuth, async (req, res) => {
+  const scheduled = (await redisGet(ACTUS_SCHEDULED_KEY)) || [];
+  const list = scheduled
+    .filter(s => s.status !== 'sent')
+    .sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  res.json({ scheduled: list });
+});
+
+// Annuler une publication programmée (+ nettoyage de l'image hébergée).
+router.delete("/admin/actus/scheduled/:id", adminAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const scheduled = (await redisGet(ACTUS_SCHEDULED_KEY)) || [];
+  const target = scheduled.find(s => s.id === id);
+  if (target && target.photoPublicId) {
+    try { await deleteActuImageFromCloudinary(target.photoPublicId); } catch (_) {}
+  }
+  await redisSet(ACTUS_SCHEDULED_KEY, scheduled.filter(s => s.id !== id));
+  res.json({ ok: true, deleted: id });
+});
+
+// ── Cron : diffusion des publications programmées (toutes les minutes) ──
+setInterval(async () => {
+  try {
+    const now = Date.now();
+    const scheduled = (await redisGet(ACTUS_SCHEDULED_KEY)) || [];
+    const due = scheduled.filter(s => s.status === 'pending' && new Date(s.scheduledAt).getTime() <= now);
+    if (!due.length) return;
+    for (const draft of due) {
+      // Marquer "envoyé" AVANT la diffusion pour éviter une double publication.
+      draft.status = 'sent';
+      draft.sentAt = new Date().toISOString();
+      try {
+        await publishActu({
+          title: draft.title, description: draft.description,
+          imageUrl: draft.photoUrl, photoPublicId: draft.photoPublicId,
+          eventDate: draft.eventDate, eventLocation: draft.eventLocation,
+          publishFacebook: draft.publishFacebook, sendPush: draft.sendPush, createCalendar: draft.createCalendar
+        });
+        console.log(`📅 Publication programmée diffusée : "${draft.title}"`);
+      } catch (e) {
+        draft.status = 'pending';
+        draft.sentAt = null;
+        draft.retries = (draft.retries || 0) + 1;
+        if (draft.retries >= ACTUS_SCHEDULED_MAX_RETRIES) {
+          draft.status = 'failed';
+          draft.failedAt = new Date().toISOString();
+          draft.failedReason = String((e && e.message) || e).slice(0, 200);
+          console.warn(`Publication programmée abandonnée: "${draft.title}" — ${draft.failedReason}`);
+        } else {
+          console.warn(`Publication programmée erreur (tentative ${draft.retries}/${ACTUS_SCHEDULED_MAX_RETRIES}):`, e.message);
+        }
+      }
+    }
+    const cutoff = now - 7 * 24 * 60 * 60 * 1000;
+    const remaining = scheduled.filter(s => s.status !== 'sent' || new Date(s.scheduledAt).getTime() > cutoff);
+    await redisSet(ACTUS_SCHEDULED_KEY, remaining);
+  } catch (e) { console.warn('Cron publication programmée:', e.message); }
 }, 60 * 1000);
 
 module.exports = router;
