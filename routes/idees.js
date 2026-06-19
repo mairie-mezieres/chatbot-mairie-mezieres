@@ -2,13 +2,65 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
-const { readIdeas, writeIdeas, readNews, readAdminSettings } = require("../lib/store");
+const { readIdeas, writeIdeas, readNews, readAdminSettings, readIdeaFilters, writeIdeaFilters } = require("../lib/store");
 const { registerNotifyToken } = require("../lib/push-notify");
 const { redisSismember, redisSadd, redisSrem, _isRedis429 } = require("../lib/redis");
+const { adminAuth } = require("../lib/middleware");
 
 function getDeviceId(req) {
   const raw = (req.headers["x-device-id"] || "").toString().trim();
   return /^[\w-]{4,100}$/.test(raw) ? raw : null;
+}
+
+// ── Filtres anti-doublon (« sujets déjà proposés ») ──────────
+// Normalise un texte pour la comparaison : minuscules, sans accents, espaces
+// compactés. Permet à « École » de correspondre à « ecole ».
+function _normalizeIdea(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Un filtre bloque l'idée si le texte contient TOUS ses mots-clés (logique ET).
+// La mairie crée un filtre par sujet ; pour des synonymes, plusieurs filtres.
+function _matchIdeaFilter(text, filters) {
+  const norm = _normalizeIdea(text);
+  if (!norm) return null;
+  for (const f of filters || []) {
+    const kws = (Array.isArray(f.keywords) ? f.keywords : [])
+      .map(_normalizeIdea).filter(Boolean);
+    if (kws.length && kws.every((k) => norm.includes(k))) return f;
+  }
+  return null;
+}
+
+// Valide/normalise la liste de filtres reçue de l'admin.
+function _sanitizeIdeaFilters(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const kwSource = Array.isArray(raw.keywords)
+      ? raw.keywords
+      : String(raw.keywords || "").split(",");
+    const keywords = kwSource
+      .map((k) => String(k || "").trim().substring(0, 50))
+      .filter(Boolean)
+      .slice(0, 10);
+    if (!keywords.length) continue;
+    out.push({
+      id: Number(raw.id) || (Date.now() + out.length),
+      label: String(raw.label || "").substring(0, 100),
+      keywords,
+      message: String(raw.message || "").substring(0, 300) ||
+        "Une idée sur ce sujet a déjà été proposée. Consultez les idées existantes et votez pour celle qui vous correspond.",
+      createdAt: raw.createdAt || new Date().toISOString(),
+    });
+    if (out.length >= 30) break;
+  }
+  return out;
 }
 async function reactionsAllowed() {
   // Quota Redis dépassé (429) : on coupe les votes pour éviter l'inflation du
@@ -26,6 +78,23 @@ router.get("/idees", async (req, res) => {
 router.post("/idee", async (req, res) => {
   const { id, text, cat, date, notifyToken, sub } = req.body || {};
   if (!text) return res.status(400).json({ error: "text requis" });
+
+  // Filtre anti-doublon : la mairie peut déclarer des sujets déjà proposés
+  // (ex. climatisation de l'école). Une nouvelle idée correspondante est
+  // refusée avec un message explicatif, sans être stockée.
+  try {
+    const filters = await readIdeaFilters();
+    if (filters.length) {
+      const hit = _matchIdeaFilter(text, filters);
+      if (hit) {
+        console.log(`🚫 Idée bloquée (filtre "${hit.label || hit.keywords.join("+")}")`);
+        return res.status(409).json({ blocked: true, message: hit.message, label: hit.label || "" });
+      }
+    }
+  } catch (e) {
+    // En cas d'erreur de lecture des filtres, on ne bloque jamais la soumission.
+    console.warn("⚠️ Lecture filtres idées:", e.message);
+  }
 
   // L'id vient du client : on le contraint à un entier positif sûr. Tout id
   // non numérique (tentative d'injection dans l'onclick du front) retombe sur
@@ -109,6 +178,21 @@ router.delete("/idee/:id/vote", async (req, res) => {
     console.error("DELETE /idee/:id/vote:", e.message);
     res.status(500).json({ error: "Erreur serveur" });
   }
+});
+
+// ── Filtres anti-doublon : administration ────────────────────
+// Lecture admin uniquement : la liste des mots-clés bloquants n'est pas
+// exposée publiquement (le citoyen ne reçoit qu'un message lors de la soumission).
+router.get("/admin/idees/filtres", adminAuth, async (req, res) => {
+  const filtres = await readIdeaFilters();
+  res.json({ filtres });
+});
+
+// Remplace l'ensemble de la liste (validée/normalisée).
+router.post("/admin/idees/filtres", adminAuth, async (req, res) => {
+  const filtres = _sanitizeIdeaFilters((req.body && req.body.filtres) || []);
+  await writeIdeaFilters(filtres);
+  res.json({ ok: true, filtres });
 });
 
 // ── Actualités (publications stockées) ───────────────────────
