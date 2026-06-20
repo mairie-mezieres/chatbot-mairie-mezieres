@@ -15,7 +15,7 @@ const {
 const { calcIaCost } = require("../lib/stats");
 const {
   fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance,
-  sendWeatherPush, isSameWeatherAlert
+  sendWeatherPush, claimWeatherPush, releaseWeatherPushClaim
 } = require("../lib/meteo");
 
 // ═══════════════════════════════════════════════════════════════
@@ -318,13 +318,19 @@ router.get("/cron/meteo", async (req, res) => {
       return res.json({ ok: true, status: "no-alert", level: vigilance?.level ?? null });
     }
 
-    const lastPush = await redisGet("mat:weather:last:push");
-    if (!force && isSameWeatherAlert(lastPush, vigilance)) {
+    // Réservation atomique anti-doublon (partagée avec /meteo/alertes/check).
+    if (!await claimWeatherPush(vigilance, force)) {
       return res.json({ ok: true, status: "duplicate", level: vigilance.level, upcoming: vigilance.upcoming ?? false });
     }
 
-    const pushResult = await sendWeatherPush(vigilance);
-    await redisSet("mat:weather:last:push", { ...vigilance, pushedAt: new Date().toISOString() });
+    let pushResult;
+    try {
+      pushResult = await sendWeatherPush(vigilance);
+      await redisSet("mat:weather:last:push", { ...vigilance, pushedAt: new Date().toISOString() });
+    } catch (pe) {
+      await releaseWeatherPushClaim(vigilance); // libère pour réessayer
+      throw pe;
+    }
 
     res.json({
       ok: true,
