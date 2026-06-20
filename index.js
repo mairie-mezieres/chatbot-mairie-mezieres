@@ -154,15 +154,8 @@ process.on('unhandledRejection', (reason) => {
   if (process.env.SENTRY_DSN) require('@sentry/node').captureException(reason instanceof Error ? reason : new Error(msg));
 });
 
-// Flush des stats mémoire vers Redis avant arrêt (SIGTERM = redéploiement Render,
-// SIGINT = Ctrl+C en dev). Sans ça, jusqu'à 5 min de stats MEL/accès sont perdues.
-async function _gracefulShutdown(signal) {
-  console.log(`\n🛑 ${signal} reçu — flush stats avant arrêt…`);
-  try { await flushStatsNow(); console.log('✅ Stats flushées'); } catch (e) { console.warn('⚠️ Flush stats:', e.message); }
-  process.exit(0);
-}
-process.on('SIGTERM', () => _gracefulShutdown('SIGTERM'));
-process.on('SIGINT',  () => _gracefulShutdown('SIGINT'));
+// Arrêt gracieux (flush stats + fermeture serveur) : voir _gracefulShutdown
+// défini plus bas, avec les enregistrements SIGTERM / SIGINT.
 
 // ── Stats globales ────────────────────────────────────────────
 // ── Admin dashboard — voir routes/admin-dashboard.js ────────

@@ -310,7 +310,7 @@ router.get("/cron/meteo", async (req, res) => {
   if (!CRON_SECRET || req.query.key !== CRON_SECRET)
     return res.status(401).json({ error: 'Clé cron invalide' });
   try {
-    const force = req.query.force === "1";
+    const force = req.query.force === "1" || req.query.force === "true";
     const raw = await fetchMeteoFranceVigilanceRaw();
     const vigilance = extractDepartmentVigilance(raw, "45");
 

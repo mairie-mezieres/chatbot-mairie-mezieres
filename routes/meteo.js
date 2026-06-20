@@ -2,7 +2,7 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
-const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance, sendWeatherPush, publishWeatherAlertToFacebook, isSameWeatherAlert, claimWeatherPush, releaseWeatherPushClaim } = require("../lib/meteo");
+const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance, sendWeatherPush, publishWeatherAlertToFacebook, isSameWeatherAlert, claimWeatherPush, releaseWeatherPushClaim, claimWeatherFacebookPost, releaseWeatherFacebookPost } = require("../lib/meteo");
 const { readLastWeatherAlert, writeLastWeatherAlert } = require("../lib/store");
 const { redisSet } = require("../lib/redis");
 const { AUTO_POST_WEATHER_ALERTS, AUTO_POST_MIN_LEVEL, AUTO_PUSH_WEATHER_MIN_LEVEL } = require("../config");
@@ -47,7 +47,7 @@ router.get("/meteo/commune", async (req, res) => {
 
 router.get("/meteo/alertes/check", async (req, res) => {
   try {
-    const force = req.query.force === "true";
+    const force = req.query.force === "1" || req.query.force === "true";
     const raw = await fetchMeteoFranceVigilanceRaw();
     const vigilance = extractDepartmentVigilance(raw, "45");
 
@@ -75,6 +75,7 @@ router.get("/meteo/alertes/check", async (req, res) => {
       return res.json({ status: "below-threshold", vigilance, push: pushResult });
     }
 
+    // Pré-contrôle rapide (non bloquant) : évite du travail si l'alerte est connue.
     const last = await readLastWeatherAlert();
     if (!force && isSameWeatherAlert(last, vigilance)) {
       return res.json({ status: "duplicate", vigilance, push: pushResult });
@@ -84,11 +85,25 @@ router.get("/meteo/alertes/check", async (req, res) => {
     let message = null;
 
     if (AUTO_POST_WEATHER_ALERTS || force) {
-      message = await publishWeatherAlertToFacebook(vigilance);
-      published = true;
+      // Réservation atomique du post Facebook : empêche deux vérifications
+      // concurrentes de poster deux fois la même alerte (le pré-contrôle
+      // isSameWeatherAlert ci-dessus n'est PAS atomique — deux appels peuvent le
+      // franchir ensemble). Verrou distinct de celui du push.
+      if (!await claimWeatherFacebookPost(vigilance, force)) {
+        return res.json({ status: "duplicate", vigilance, push: pushResult });
+      }
+      try {
+        message = await publishWeatherAlertToFacebook(vigilance);
+        published = true;
+        await writeLastWeatherAlert(vigilance);
+      } catch (pubErr) {
+        // Échec du post : libère la réservation pour réessayer au prochain tick.
+        await releaseWeatherFacebookPost(vigilance);
+        throw pubErr;
+      }
+    } else {
+      await writeLastWeatherAlert(vigilance);
     }
-
-    await writeLastWeatherAlert(vigilance);
 
     res.json({
       status: published ? "published" : "stored",
