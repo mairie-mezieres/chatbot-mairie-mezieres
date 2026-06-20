@@ -2,9 +2,9 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
-const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance, sendWeatherPush, publishWeatherAlertToFacebook, isSameWeatherAlert } = require("../lib/meteo");
+const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance, sendWeatherPush, publishWeatherAlertToFacebook, isSameWeatherAlert, claimWeatherPush, releaseWeatherPushClaim } = require("../lib/meteo");
 const { readLastWeatherAlert, writeLastWeatherAlert } = require("../lib/store");
-const { redisGet, redisSet } = require("../lib/redis");
+const { redisSet } = require("../lib/redis");
 const { AUTO_POST_WEATHER_ALERTS, AUTO_POST_MIN_LEVEL, AUTO_PUSH_WEATHER_MIN_LEVEL } = require("../config");
 
 router.get('/meteo/forecast', async (req, res) => {
@@ -58,13 +58,14 @@ router.get("/meteo/alertes/check", async (req, res) => {
     // Notification push pour niveau >= AUTO_PUSH_WEATHER_MIN_LEVEL (2 = jaune par défaut)
     let pushResult = null;
     if (Number(vigilance.level) >= AUTO_PUSH_WEATHER_MIN_LEVEL) {
-      const lastPush = await redisGet("mat:weather:last:push");
-      if (force || !isSameWeatherAlert(lastPush, vigilance)) {
+      // Réservation atomique : empêche deux crons concurrents de doubler le push.
+      if (await claimWeatherPush(vigilance, force)) {
         try {
           pushResult = await sendWeatherPush(vigilance);
           await redisSet("mat:weather:last:push", { ...vigilance, pushedAt: new Date().toISOString() });
         } catch (pe) {
           console.warn("Weather push error:", pe.message);
+          await releaseWeatherPushClaim(vigilance); // libère pour réessayer au prochain tick
         }
       }
     }
