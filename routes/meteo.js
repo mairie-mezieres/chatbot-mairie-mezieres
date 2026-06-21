@@ -2,7 +2,7 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
-const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance, sendWeatherPush, publishWeatherAlertToFacebook, isSameWeatherAlert, claimWeatherPush, releaseWeatherPushClaim, claimWeatherFacebookPost, releaseWeatherFacebookPost } = require("../lib/meteo");
+const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance, sendWeatherPush, publishWeatherAlertToFacebook, weatherAlertSignature, claimWeatherPush, releaseWeatherPushClaim, claimWeatherFacebookPost, releaseWeatherFacebookPost } = require("../lib/meteo");
 const { readLastWeatherAlert, writeLastWeatherAlert } = require("../lib/store");
 const { redisSet } = require("../lib/redis");
 const { AUTO_POST_WEATHER_ALERTS, AUTO_POST_MIN_LEVEL, AUTO_PUSH_WEATHER_MIN_LEVEL } = require("../config");
@@ -75,9 +75,12 @@ router.get("/meteo/alertes/check", async (req, res) => {
       return res.json({ status: "below-threshold", vigilance, push: pushResult });
     }
 
-    // Pré-contrôle rapide (non bloquant) : évite du travail si l'alerte est connue.
+    // Déduplication durable du post Facebook : on ne reposte QUE si l'alerte a
+    // réellement changé (signature niveau+phénomène+fin différente de la dernière
+    // postée). Pas de fenêtre temporelle → une alerte inchangée qui dure plusieurs
+    // jours n'est postée qu'une fois (contrairement au push, rappelé toutes les 12h).
     const last = await readLastWeatherAlert();
-    if (!force && isSameWeatherAlert(last, vigilance)) {
+    if (!force && last && weatherAlertSignature(last) === weatherAlertSignature(vigilance)) {
       return res.json({ status: "duplicate", vigilance, push: pushResult });
     }
 
@@ -86,9 +89,9 @@ router.get("/meteo/alertes/check", async (req, res) => {
 
     if (AUTO_POST_WEATHER_ALERTS || force) {
       // Réservation atomique du post Facebook : empêche deux vérifications
-      // concurrentes de poster deux fois la même alerte (le pré-contrôle
-      // isSameWeatherAlert ci-dessus n'est PAS atomique — deux appels peuvent le
-      // franchir ensemble). Verrou distinct de celui du push.
+      // concurrentes de poster deux fois la même alerte (la comparaison de
+      // signature ci-dessus n'est PAS atomique — deux appels peuvent la franchir
+      // ensemble avant que mat:weather:last soit écrit). Verrou distinct du push.
       if (!await claimWeatherFacebookPost(vigilance, force)) {
         return res.json({ status: "duplicate", vigilance, push: pushResult });
       }
