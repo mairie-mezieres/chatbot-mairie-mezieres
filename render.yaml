@@ -1,0 +1,94 @@
+# ⚙️ Render Blueprint — backend MAT (déploiement « 1-clic »)
+# ──────────────────────────────────────────────────────────────────────────────
+# Déploiement : sur https://dashboard.render.com → New + → Blueprint → connectez
+# ce dépôt GitHub. Render lit ce fichier, crée le service, et VOUS DEMANDE de
+# saisir les variables marquées « sync: false » (les secrets ne sont jamais dans
+# le dépôt). Laissez vides celles dont vous n'avez pas besoin (intégrations
+# optionnelles) — vous pourrez les ajouter plus tard dans Dashboard → Environment.
+#
+# Voir .env.example pour le détail de chaque variable, et docs/DEPLOIEMENT.md
+# (dépôt app-mezieres) pour le guide complet de création des comptes.
+services:
+  - type: web
+    name: chatbot-mairie-mezieres
+    runtime: node
+    plan: free                 # 750 h/mois ; passez à « starter » pour éviter la mise en veille
+    region: frankfurt          # UE (souveraineté / RGPD)
+    branch: main
+    buildCommand: npm ci
+    startCommand: node index.js
+    healthCheckPath: /health
+    autoDeploy: true           # redéploie à chaque push sur main
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+
+      # ── REQUIS (minimum pour un portail fonctionnel) ───────────────────────
+      - key: ADMIN_PASSWORD              # mot de passe de l'admin (admin.html)
+        sync: false
+      - key: CRON_SECRET                 # clé des tâches planifiées (/cron/*)
+        generateValue: true             # Render génère une valeur aléatoire sûre
+      - key: UPSTASH_REDIS_REST_URL      # base Redis (console.upstash.com)
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: VAPID_PUBLIC_KEY            # notifications push — `npx web-push generate-vapid-keys`
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+
+      # ── ASSISTANT MEL (au moins une des deux IA) ───────────────────────────
+      - key: ANTHROPIC_API_KEY           # console.anthropic.com
+        sync: false
+      - key: MISTRAL_API_KEY             # console.mistral.ai (repli / alternative)
+        sync: false
+
+      # ── MÉTÉO (recommandé) ─────────────────────────────────────────────────
+      - key: METEOFRANCE_VIGILANCE_URL   # portail-api.meteofrance.fr
+        sync: false
+      - key: OPEN_METEO_LAT              # coordonnées de la commune (défauts = Mézières)
+        sync: false
+      - key: OPEN_METEO_LON
+        sync: false
+
+      # ── PUBLICATION FACEBOOK (optionnel) ───────────────────────────────────
+      - key: PAGE_ACCESS_TOKEN           # developers.facebook.com (token de Page longue durée)
+        sync: false
+      - key: FACEBOOK_PAGE_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET         # validation des webhooks entrants
+        sync: false
+      - key: VERIFY_TOKEN
+        sync: false
+
+      # ── PHOTOS (optionnel — Cloudinary) ────────────────────────────────────
+      - key: CLOUDINARY_NAME             # cloudinary.com
+        sync: false
+      - key: CLOUDINARY_KEY
+        sync: false
+      - key: CLOUDINARY_SECRET
+        sync: false
+
+      # ── SIGNALEMENTS / DEMANDES (optionnel — Trello) ───────────────────────
+      - key: TRELLO_KEY                  # trello.com/app-key
+        sync: false
+      - key: TRELLO_TOKEN
+        sync: false
+      - key: TRELLO_LIST_ID_SIG
+        sync: false
+
+      # ── AGENDA (optionnel — Google Calendar) ───────────────────────────────
+      - key: GOOGLE_CALENDAR_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_B64  # compte de service (JSON encodé base64)
+        sync: false
+
+      # ── EMAILS / STATS (optionnel — Resend) ────────────────────────────────
+      - key: RESEND_API_KEY              # resend.com
+        sync: false
+      - key: DAILY_STATS_EMAIL
+        sync: false
+
+      # ── SUIVI D'ERREURS (optionnel — Sentry) ───────────────────────────────
+      - key: SENTRY_DSN                  # sentry.io
+        sync: false
