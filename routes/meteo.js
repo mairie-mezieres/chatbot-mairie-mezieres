@@ -4,7 +4,7 @@
 const router = require("express").Router();
 const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance, sendWeatherPush, publishWeatherAlertToFacebook, weatherAlertSignature, claimWeatherPush, releaseWeatherPushClaim, claimWeatherFacebookPost, releaseWeatherFacebookPost } = require("../lib/meteo");
 const { readLastWeatherAlert, writeLastWeatherAlert } = require("../lib/store");
-const { redisSet } = require("../lib/redis");
+const { redisGet, redisSet } = require("../lib/redis");
 const { AUTO_POST_WEATHER_ALERTS, AUTO_POST_MIN_LEVEL, AUTO_PUSH_WEATHER_MIN_LEVEL } = require("../config");
 
 router.get('/meteo/forecast', async (req, res) => {
@@ -58,8 +58,13 @@ router.get("/meteo/alertes/check", async (req, res) => {
     // Notification push pour niveau >= AUTO_PUSH_WEATHER_MIN_LEVEL (2 = jaune par défaut)
     let pushResult = null;
     if (Number(vigilance.level) >= AUTO_PUSH_WEATHER_MIN_LEVEL) {
-      // Réservation atomique : empêche deux crons concurrents de doubler le push.
-      if (await claimWeatherPush(vigilance, force)) {
+      // Une seule notification par alerte distincte : on ne re-pousse que si la
+      // signature (niveau+phénomène+fin) diffère de la dernière poussée. Les
+      // habitants ne sont pas re-notifiés d'une alerte inchangée qu'ils connaissent.
+      const lastPush = await redisGet("mat:weather:last:push");
+      const alreadyPushed = !force && lastPush && weatherAlertSignature(lastPush) === weatherAlertSignature(vigilance);
+      // claimWeatherPush = garde anti-course (deux crons concurrents).
+      if (!alreadyPushed && await claimWeatherPush(vigilance, force)) {
         try {
           pushResult = await sendWeatherPush(vigilance);
           await redisSet("mat:weather:last:push", { ...vigilance, pushedAt: new Date().toISOString() });
