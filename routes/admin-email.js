@@ -15,7 +15,7 @@ const {
 const { calcIaCost } = require("../lib/stats");
 const {
   fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance,
-  sendWeatherPush, claimWeatherPush, releaseWeatherPushClaim
+  sendWeatherPush, weatherAlertSignature, claimWeatherPush, releaseWeatherPushClaim
 } = require("../lib/meteo");
 
 // ═══════════════════════════════════════════════════════════════
@@ -318,7 +318,13 @@ router.get("/cron/meteo", async (req, res) => {
       return res.json({ ok: true, status: "no-alert", level: vigilance?.level ?? null });
     }
 
-    // Réservation atomique anti-doublon (partagée avec /meteo/alertes/check).
+    // Une seule notification par alerte distincte : pas de re-push tant que la
+    // signature (niveau+phénomène+fin) ne change pas. Partagé avec /meteo/alertes/check
+    // via mat:weather:last:push ; claimWeatherPush = garde anti-course.
+    const lastPush = await redisGet("mat:weather:last:push");
+    if (!force && lastPush && weatherAlertSignature(lastPush) === weatherAlertSignature(vigilance)) {
+      return res.json({ ok: true, status: "duplicate", level: vigilance.level, upcoming: vigilance.upcoming ?? false });
+    }
     if (!await claimWeatherPush(vigilance, force)) {
       return res.json({ ok: true, status: "duplicate", level: vigilance.level, upcoming: vigilance.upcoming ?? false });
     }
