@@ -336,13 +336,21 @@ function _dechetsTomorrowType() {
   return null;
 }
 
-async function _sendDechetsReminder() {
-  const type = _dechetsTomorrowType();
-  if (!type) return;
+// opts.test : envoi d'une notif de diagnostic à la liste déchets, quel que
+// soit le jour (ignore _dechetsTomorrowType). Sert à vérifier que la liste
+// d'abonnés mat:subs:dechets est vivante sans attendre une veille de collecte.
+// Retourne toujours un objet {type, total, sent, dead, transientFails} pour
+// que l'appelant (cron, monitoring) sache ce qui s'est *réellement* passé.
+async function _sendDechetsReminder(opts = {}) {
+  const type = opts.test ? 'test' : _dechetsTomorrowType();
+  if (!type) return { type: null, total: 0, sent: 0, dead: 0, transientFails: 0 };
   const subs = await readDechetsSubs();
-  if (!subs.length) return;
+  if (!subs.length) return { type, total: 0, sent: 0, dead: 0, transientFails: 0 };
   let title, body;
-  if (type === 'both') {
+  if (type === 'test') {
+    title = 'MAT — Test rappel collecte';
+    body = '🧪 Test : si vous voyez ceci, vos rappels poubelles fonctionnent !';
+  } else if (type === 'both') {
     title = 'MAT — Collecte ordures + recyclables demain';
     body = '🗑️♻️ Pensez à sortir vos bacs noir et jaune ce soir !';
   } else if (type === 'noir') {
@@ -373,13 +381,16 @@ async function _sendDechetsReminder() {
     await writeDechetsSubs(subs.filter(s => !dead.includes(s.endpoint))).catch(() => {});
     purgeEndpointsEverywhere(dead).catch(() => {});
   }
-  console.log(`🗑️ Rappel déchets (${type}) → ${sent}/${subs.length} abonnés`);
+  console.log(`🗑️ Rappel déchets (${type}) → ${sent}/${subs.length} abonnés (${dead.length} expiré(s), ${transientFails} échec(s) transitoire(s))`);
+  // Traçabilité : sans cet historique, une nuit ratée est une boîte noire.
+  recordPushHistory({ kind: 'dechets', type, total: subs.length, sent, dead: dead.length, transientFails }).catch(() => {});
   // Erreur transitoire (réseau, FCM…) sur TOUS les envois : on lève pour
   // bloquer l'écriture de la dédup Redis — l'appelant réessaiera au prochain
   // tick (toutes les 5 min jusqu'à 21h) ou via le cron externe /cron/dechets.
   if (sent === 0 && transientFails > 0) {
     throw new Error(`Push déchets: ${transientFails} erreur(s) transitoire(s)`);
   }
+  return { type, total: subs.length, sent, dead: dead.length, transientFails };
 }
 
 let _dechetsLastSent = null; // évite les Redis GETs répétés pendant la fenêtre du soir
@@ -406,11 +417,19 @@ setInterval(async () => {
 }, 5 * 60 * 1000);
 
 // Endpoint cron déchets — appelable par cron-job.org à 18h heure de Paris
-// URL : /cron/dechets?key=CRON_SECRET  (optionnel : &force=1 pour ignorer la dédup)
+// URL : /cron/dechets?key=CRON_SECRET
+//   &force=1 → ignore la dédup journalière (renvoie quand même selon le jour)
+//   &test=1  → envoi de diagnostic à la liste déchets quel que soit le jour
+//              (n'écrit pas la dédup : c'est une sonde, pas un vrai rappel)
 app.get("/cron/dechets", async (req, res) => {
   if (!CRON_SECRET || req.query.key !== CRON_SECRET)
     return res.status(401).json({ error: 'Clé cron invalide' });
   try {
+    // Mode sonde : sait dire si mat:subs:dechets est vivante ou vide.
+    if (req.query.test === '1') {
+      const r = await _sendDechetsReminder({ test: true });
+      return res.json({ ok: true, test: true, ...r });
+    }
     const today = new Intl.DateTimeFormat('sv', { timeZone: 'Europe/Paris' }).format(new Date());
     if (req.query.force !== '1') {
       const lastSent = await redisGet('mat:dechets:lastSent');
@@ -419,10 +438,12 @@ app.get("/cron/dechets", async (req, res) => {
     // Envoi AVANT le dedup : si _sendDechetsReminder lance, on ne marque pas
     // la journée comme faite → cron-job.org pourra réessayer (et le 500 rendu
     // ci-dessous alertera le monitoring du cron).
-    await _sendDechetsReminder();
+    const r = await _sendDechetsReminder();
     _dechetsLastSent = today;
     await redisSet('mat:dechets:lastSent', today);
-    res.json({ ok: true, sent: true });
+    // Réponse honnête : type=null + sent=0 un jour sans collecte, ou si la
+    // liste d'abonnés est vide — le monitoring ne croit plus à un faux succès.
+    res.json({ ok: true, ...r });
   } catch(e) {
     console.error('❌ /cron/dechets:', e.message);
     res.status(500).json({ ok: false, error: e.message });
