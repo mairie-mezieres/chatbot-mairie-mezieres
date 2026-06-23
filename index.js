@@ -344,13 +344,13 @@ async function _sendDechetsReminder() {
   let title, body;
   if (type === 'both') {
     title = 'MAT — Collecte ordures + recyclables demain';
-    body = '🗑️♻️ Pensez à sortir vos bacs noir et jaune ce soir !';
+    body = '🗑️♻️ Pensez à sortir vos bacs noir et jaune ce soir !';
   } else if (type === 'noir') {
     title = 'MAT — Collecte ordures ménagères demain';
-    body = '🗑️ Pensez à sortir votre bac noir ce soir !';
+    body = '🗑️ Pensez à sortir votre bac noir ce soir !';
   } else {
     title = 'MAT — Collecte recyclables demain';
-    body = '♻️ Pensez à sortir votre bac jaune ce soir !';
+    body = '♻️ Pensez à sortir votre bac jaune ce soir !';
   }
   const payload = JSON.stringify({
     title,
@@ -360,19 +360,26 @@ async function _sendDechetsReminder() {
     data: { url: './#dechets', open: 'dechets' }
   });
   const dead = [];
+  let sent = 0;
+  let transientFails = 0;
   for (const sub of subs) {
-    try { await webpush.sendNotification(sub, payload); }
-    catch(e) { if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint); }
+    try { await webpush.sendNotification(sub, payload); sent++; }
+    catch(e) {
+      if (e.statusCode === 410 || e.statusCode === 404) dead.push(sub.endpoint);
+      else transientFails++;
+    }
   }
   if (dead.length) {
-    // Nettoyage best-effort des abonnements expirés : ne doit jamais lancer,
-    // sinon l'appelant croirait l'envoi échoué et renverrait en double les
-    // notifications déjà parties. Les notifs étant déjà délivrées ici, toute
-    // erreur de purge est avalée.
     await writeDechetsSubs(subs.filter(s => !dead.includes(s.endpoint))).catch(() => {});
     purgeEndpointsEverywhere(dead).catch(() => {});
   }
-  console.log(`🗑️ Rappel déchets (${type}) → ${subs.length} abonnés`);
+  console.log(`🗑️ Rappel déchets (${type}) → ${sent}/${subs.length} abonnés`);
+  // Erreur transitoire (réseau, FCM…) sur TOUS les envois : on lève pour
+  // bloquer l'écriture de la dédup Redis — l'appelant réessaiera au prochain
+  // tick (toutes les 5 min jusqu'à 21h) ou via le cron externe /cron/dechets.
+  if (sent === 0 && transientFails > 0) {
+    throw new Error(`Push déchets: ${transientFails} erreur(s) transitoire(s)`);
+  }
 }
 
 let _dechetsLastSent = null; // évite les Redis GETs répétés pendant la fenêtre du soir

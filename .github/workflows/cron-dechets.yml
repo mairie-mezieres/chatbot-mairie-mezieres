@@ -1,0 +1,32 @@
+name: Cron — Rappels collecte déchets
+
+on:
+  schedule:
+    - cron: '0 16 * * *'   # 18h Paris (été UTC+2)
+    - cron: '0 17 * * *'   # 18h Paris (hiver UTC+1)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Forcer l'envoi (ignorer la dédup journalière)"
+        type: boolean
+        default: false
+
+jobs:
+  rappel-dechets:
+    name: Rappel collecte déchets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Appel /cron/dechets
+        run: |
+          FORCE_PARAM=""
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            FORCE_PARAM="&force=1"
+          fi
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            "${{ secrets.BACKEND_URL }}/cron/dechets?key=${{ secrets.CRON_SECRET }}${FORCE_PARAM}")
+          echo "HTTP $STATUS"
+          cat /tmp/response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Erreur HTTP $STATUS"
+            exit 1
+          fi
