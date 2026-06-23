@@ -98,6 +98,14 @@ router.post('/push/unsubscribe/dechets', async (req, res) => {
   res.json({ success: true });
 });
 
+// Diagnostic public : nombre d'abonnés par canal (sans données privées).
+router.get('/push/count', async (req, res) => {
+  try {
+    const [actus, dechets, meteo] = await Promise.all([readSubs(), readDechetsSubs(), readMeteoSubs()]);
+    res.json({ actus: actus.length, dechets: dechets.length, meteo: meteo.length });
+  } catch(e) { res.status(500).json({ error: 'Redis indisponible' }); }
+});
+
 // ── Alertes météo push ────────────────────────────────────────
 router.post('/push/subscribe/meteo', subscribeLimiter, async (req, res) => {
   const sub = req.body;
