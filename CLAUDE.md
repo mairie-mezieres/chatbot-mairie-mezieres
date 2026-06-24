@@ -16,6 +16,7 @@ Règle d'or : **vérifier qu'une fonctionnalité n'existe pas déjà (code + UI 
 | Présentation du backend, architecture, routes, démarrage | `README.md` |
 | Conformité de l'assistant MEL (AI Act, RGPD, sécurité) | `docs/note-conformite-MEL.md` |
 | Sécurité, signalement de vulnérabilité, données personnelles | `SECURITY.md` |
+| **Décisions d'architecture** (pourquoi Trello, pourquoi les tokens individuels, pourquoi `sub=null` sur 410…) | `docs/adr/` — un fichier par décision |
 | **Côté app / PWA / Service Worker / affichage habitant** | repo `app-mezieres` → son `CLAUDE.md` puis `docs/guide-technique.md` |
 
 > ⚠️ Avant d'ajouter quoi que ce soit au diagnostic `/admin/services/test` ou à
