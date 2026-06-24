@@ -6,7 +6,7 @@ const axios = require("axios");
 const crypto = require("crypto");
 const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_LIST_ID_DEMANDE } = require("../config");
 const { trelloStatusFromListName } = require("../lib/trello-status");
-const { sendSignalStatusPush, SIGNAL_STATUS_PUSH, sendDemandeStatusPush, sendDemandeCommentPush } = require("../lib/push-notify");
+const { sendSignalStatusPush, SIGNAL_STATUS_PUSH, sendDemandeStatusPush, sendDemandeCommentPush, sendSignalCommentPush } = require("../lib/push-notify");
 const { adminAuth } = require("../lib/middleware");
 
 // Secret optionnel pour valider la signature HMAC-SHA1 envoyée par Trello.
@@ -79,16 +79,19 @@ async function handleTrelloComment(action) {
   const data = action.data || {};
   const cardId = data.card && data.card.id;
   const cardName = data.card && data.card.name;
-  // Uniquement pour les cartes de type [Demande]
-  if (!cardId || !cardName || !cardName.startsWith("[Demande]")) return;
+  if (!cardId || !cardName) return;
+  const isDemandeCard = cardName.startsWith("[Demande]");
+  const isSignalCard = cardName.startsWith("[Signalement]") || cardName.startsWith("[BUG]");
+  if (!isDemandeCard && !isSignalCard) return;
 
   const commentText = data.text || "";
   const desc = await fetchCardDesc(cardId);
   const m = (desc || "").match(/MAT-REF:\s*([a-f0-9-]{36})/i);
   if (!m) return;
 
-  const r = await sendDemandeCommentPush(m[1], commentText, cardId);
-  console.log(`🔔 Trello commentaire demande ${cardId} — push:`, r);
+  const pushFn = isDemandeCard ? sendDemandeCommentPush : sendSignalCommentPush;
+  const r = await pushFn(m[1], commentText, cardId);
+  console.log(`🔔 Trello commentaire ${cardName.split("]")[0]}] ${cardId} — push:`, r);
 }
 
 async function fetchCardDesc(cardId) {
