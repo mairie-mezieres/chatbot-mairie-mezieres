@@ -449,55 +449,6 @@ services.push(await runCheck("trello", "Trello notifications", "📌", async () 
   };
 }));
 
-  services.push(await runCheck("trello_webhook", "Trello Webhook (entrant)", "🔗", async () => {
-    if (!TRELLO_KEY || !TRELLO_TOKEN) {
-      return { status: "warn", message: "Trello non configuré", details: { has_key: !!TRELLO_KEY, has_token: !!TRELLO_TOKEN } };
-    }
-    const whUrl = `https://api.trello.com/1/tokens/${encodeURIComponent(TRELLO_TOKEN)}/webhooks` +
-      `?key=${encodeURIComponent(TRELLO_KEY)}&token=${encodeURIComponent(TRELLO_TOKEN)}`;
-    const r = await axios.get(whUrl, { timeout: 10000 });
-    const webhooks = r.data || [];
-    const expectedCallback = process.env.TRELLO_WEBHOOK_CALLBACK || null;
-
-    if (!webhooks.length) {
-      return {
-        status: "danger",
-        message: "Aucun webhook Trello enregistré — les changements de statut et commentaires ne notifient pas les citoyens. Appeler POST /admin/trello/register-webhook.",
-        details: { webhook_count: 0, expected_callback: expectedCallback }
-      };
-    }
-
-    const active = webhooks.filter(w => w.active);
-    const matchingUrl = expectedCallback
-      ? webhooks.filter(w => w.callbackURL === expectedCallback)
-      : null;
-
-    if (expectedCallback && matchingUrl.length === 0) {
-      return {
-        status: "warn",
-        message: `${webhooks.length} webhook(s) enregistré(s), mais aucun ne pointe vers TRELLO_WEBHOOK_CALLBACK.`,
-        details: {
-          webhook_count: webhooks.length,
-          active_count: active.length,
-          registered_urls: webhooks.map(w => ({ id: w.id, callbackURL: w.callbackURL, active: w.active })),
-          expected_callback: expectedCallback
-        }
-      };
-    }
-
-    return {
-      status: active.length ? "ok" : "warn",
-      message: active.length
-        ? `${active.length} webhook(s) actif(s) — notifications Trello opérationnelles`
-        : `${webhooks.length} webhook(s) enregistré(s) mais aucun actif`,
-      details: {
-        webhook_count: webhooks.length,
-        active_count: active.length,
-        webhooks: webhooks.map(w => ({ id: w.id, callbackURL: w.callbackURL, active: w.active, description: w.description }))
-      }
-    };
-  }));
-
   services.push(await runCheck("mistral", "Mistral", "🤖", async () => {
     if (!MISTRAL_API_KEY) {
       return { status: "warn", message: "Mistral non configuré", details: { has_api_key: false, model: MISTRAL_MODEL } };
