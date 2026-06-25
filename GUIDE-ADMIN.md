@@ -131,10 +131,24 @@ Depuis mai 2026, le webhook **valide la signature HMAC** de Facebook :
    ou la photo.
 3. Le `#MAT` doit être dans le **texte** du post (un post photo seule sans
    légende n'est pas détecté).
+4. **Les logs ne montrent rien du tout** : Facebook n'a pas envoyé d'événement
+   webhook pour ce post. Causes fréquentes : Story, Reel, ou **transfert/partage**
+   publié depuis un profil personnel (pas depuis la Page elle-même). Seuls les
+   posts **publiés directement sur la Page** avec `#MAT` dans le texte déclenchent
+   l'actu. Un partage depuis la Page peut fonctionner si vous ajoutez `#MAT` dans
+   le texte d'accompagnement du partage.
 
-> Vérité terrain : les **logs Render** (live tail) affichent
-> `📰 Publication #MAT détectée` à la réception, puis `💾 Actu FB stockée` ou
-> `⏭️ Actualité déjà présente`.
+> **Logs Render** (onglet 🪲 Logs) — référence rapide :
+>
+> | Log | Signification |
+> |-----|--------------|
+> | `📡 Webhook Facebook : feed reçu sans message (item=share)` | Transfert/partage sans légende — ignoré (normal) |
+> | `📡 Webhook Facebook : feed reçu sans #MAT (item=photo)` | Photo/post sans `#MAT` dans le texte |
+> | `⚠️ Webhook Facebook : signature HMAC invalide` | `FACEBOOK_APP_SECRET` incorrect ou périmé |
+> | `❌ Webhook Facebook : FACEBOOK_APP_SECRET manquant` | Variable absente de Render |
+> | `📰 Publication #MAT détectée` | Post reconnu, traitement en cours |
+> | `💾 Actu FB stockée` | Actualité créée avec succès |
+> | `⏭️ Actualité déjà présente` | Doublon détecté (même titre + même photo) |
 
 ---
 
