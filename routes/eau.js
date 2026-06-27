@@ -10,7 +10,7 @@
 // briques actu existantes. Calqué sur routes/meteo.js (dédup signature + verrou).
 
 const router = require("express").Router();
-const { fetchVigieauStatus, vigieauSignature, buildDroughtActu } = require("../lib/vigieau");
+const { fetchVigieauStatus, vigieauSignature, buildDroughtActu, droughtImageUrl } = require("../lib/vigieau");
 const { readNews, writeNews } = require("../lib/store");
 const { sendActuPush, publishActuToFacebook } = require("../lib/actu");
 const { redisGet, redisSet, redisSetex, redisSetNxEx, redisDel } = require("../lib/redis");
@@ -33,6 +33,7 @@ async function _release(sig) { try { await redisDel(_claimKey(sig)); } catch (_)
 // Crée l'actualité sécheresse (liste actus) + push + Facebook.
 async function _publishDroughtActu(status) {
   const { title, description } = buildDroughtActu(status);
+  const imageUrl = droughtImageUrl(status.level); // carte 1200×630 par niveau (ou « fin »)
   const actus = await readNews();
   const actu = {
     id: Date.now(),
@@ -40,22 +41,22 @@ async function _publishDroughtActu(status) {
     description,
     date: new Date().toLocaleDateString("fr-FR"),
     dateISO: new Date().toISOString().slice(0, 10),
-    photo: null,
+    photo: imageUrl,
     source: "vigieau",
   };
   actus.unshift(actu);
   if (actus.length > 30) actus.splice(30);
   await writeNews(actus);
 
-  const push = await sendActuPush(title, description, null, actu.id).catch((e) => {
+  const push = await sendActuPush(title, description, imageUrl, actu.id).catch((e) => {
     console.warn("Sécheresse push:", e.message);
     return null;
   });
 
   let fb = null;
   if (AUTO_POST_DROUGHT_ALERTS) {
-    // Texte seul (pas d'image) → publié sans #MAT, donc pas de ré-ingestion par le webhook.
-    fb = await publishActuToFacebook(title, description).catch((e) => {
+    // Image par URL (pas de #MAT dans le texte) → pas de ré-ingestion par le webhook.
+    fb = await publishActuToFacebook(title, description, null, null, null, imageUrl).catch((e) => {
       console.warn("Sécheresse Facebook:", e.message);
       return null;
     });

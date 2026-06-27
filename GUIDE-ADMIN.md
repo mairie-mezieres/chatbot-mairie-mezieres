@@ -191,6 +191,11 @@ La **vigilance Météo-France** (orages, canicule…) et les **restrictions séc
 - Au **retour sous le seuil**, une actu « fin des restrictions » est publiée.
 - **Déduplication** : on ne reposte que si le niveau OU l'arrêté change (Redis
   `mat:vigieau:last` + verrou anti-course `mat:vigieau:claim:*`).
+- **Visuels** : chaque niveau a sa carte 1200×630 (`img/secheresse/secheresse-{vigilance,alerte,alerte-renforcee,crise,fin}.png`
+  côté app), illustrant l'actu / le push / le post Facebook — comme les visuels de
+  vigilance météo. Régénérables via `node scripts/generate-secheresse-cards.js`
+  (repo `app-mezieres`). URL de base surchargeable par `DROUGHT_IMG_BASE` (défaut :
+  `https://mezieres-lez-clery.fr/img/secheresse`).
 
 ### Dépannage
 | Symptôme | Piste |
