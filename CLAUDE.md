@@ -17,6 +17,7 @@ Règle d'or : **vérifier qu'une fonctionnalité n'existe pas déjà (code + UI 
 | Présentation du backend, architecture, routes, démarrage | `README.md` |
 | Conformité de l'assistant MEL (AI Act, RGPD, sécurité) | `docs/note-conformite-MEL.md` |
 | Sécurité, signalement de vulnérabilité, données personnelles | `SECURITY.md` |
+| **Décisions d'architecture** (pourquoi Trello, pourquoi les tokens individuels, pourquoi `sub=null` sur 410…) | `docs/adr/` — un fichier par décision |
 | **Côté app / PWA / Service Worker / affichage habitant** | repo `app-mezieres` → son `CLAUDE.md` puis `docs/guide-technique.md` |
 
 > ⚠️ Avant d'ajouter quoi que ce soit au diagnostic `/admin/services/test` ou à
@@ -24,6 +25,19 @@ Règle d'or : **vérifier qu'une fonctionnalité n'existe pas déjà (code + UI 
 > (webhook Trello, webhook Facebook, listes Trello, push…) existent déjà.
 
 Quand tu crées une doc durable, ajoute-la à ce tableau pour rester aiguillable.
+
+## Règle de mise à jour de la documentation
+
+**À chaque correction ou évolution du code**, avant de fermer la PR :
+1. Identifier quelle(s) doc(s) décrivent la zone touchée (voir tableau ci-dessus).
+2. Mettre à jour ces docs dans la **même PR** que le code.
+3. Si une décision structurante est prise ou un bug non-évident corrigé → créer un ADR dans `docs/adr/`.
+
+Cas typiques :
+- Modification du comportement des push citoyens → `GUIDE-ADMIN.md` §5bis + ce `CLAUDE.md`
+- Nouveau check dans le diagnostic Services → `GUIDE-ADMIN.md` §6
+- Nouvelle variable d'env → `GUIDE-ADMIN.md` §4
+- Décision « pourquoi on ne fait pas X » → ADR
 
 ## Notifications push citoyens (signalements / demandes / bugs)
 

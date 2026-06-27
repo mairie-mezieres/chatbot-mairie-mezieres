@@ -206,6 +206,44 @@ La **vigilance Météo-France** (orages, canicule…) et les **restrictions séc
 
 ---
 
+## 5bis. Notifications push citoyens (signalements / demandes / bugs)
+
+### Comment ça marche
+
+Quand un citoyen soumet un signalement, une demande ou un bug depuis l'app :
+
+1. Le backend génère un UUID (`notifyToken`) et écrit `MAT-REF: {uuid}` dans la description de la carte Trello — c'est le lien carte ↔ citoyen.
+2. Le frontend stocke l'UUID en `localStorage` et enregistre l'abonnement push du citoyen via `POST /notify/register-token`.
+3. Quand vous **déplacez la carte** dans Trello (changement de statut) ou **ajoutez un commentaire**, le webhook Trello en est notifié et envoie automatiquement un push au citoyen.
+
+> Les deux onglets admin **🚨 Signalements** et **🔔 Push** permettent aussi d'envoyer manuellement un push (via `PATCH /admin/signals/:id`).
+
+### Tableau de routage
+
+| Type de carte | Changement de statut | Commentaire mairie | Ouvre dans l'app |
+|---|---|---|---|
+| `[Signalement]` | ✅ push | ✅ push | Onglet Signalements |
+| `[BUG]` | ✅ push | ✅ push | Onglet Bugs |
+| `[Demande]` | ✅ push | ✅ push | Onglet Contact |
+
+> ⚠️ Le push ne fonctionne que si la carte contient `MAT-REF: {uuid}` dans sa description. Les cartes créées **manuellement** dans Trello (sans passer par l'app) ne notifient personne.
+
+### Prérequis
+
+- Variables `TRELLO_KEY`, `TRELLO_TOKEN`, `TRELLO_LIST_ID_SIG`, `TRELLO_LIST_ID_BUG`, `TRELLO_LIST_ID_DEMANDE` définies sur Render.
+- Le **webhook Trello** enregistré sur le board (onglet 🧪 Services → bouton « Activer le webhook Trello », ou `POST /admin/trello/register-webhook`).
+
+### Si les notifications ne partent pas
+
+| Symptôme | Piste |
+|---|---|
+| Aucun push à la création de la carte | `MAT-REF:` absent dans la description → la carte a peut-être été créée manuellement |
+| Aucun push au changement de statut | Vérifier que le webhook Trello est actif (onglet 🧪 Services) |
+| Aucun push au commentaire | Vérifier que le nom de la carte commence par `[Signalement]`, `[BUG]` ou `[Demande]` |
+| Push partait avant, plus maintenant | L'endpoint push du citoyen a expiré ; il se re-synchronisera automatiquement à la prochaine ouverture de l'app |
+
+---
+
 ## 6. Le diagnostic des services (onglet 🧪 Services)
 
 Lance un test en direct de chaque brique. Statuts : 🟢 OK · 🟡 attention · 🔴 problème.
@@ -261,7 +299,8 @@ simplement désactivé (l'app fonctionne normalement).
 | Sécheresse : « Vigilance » affichée mais on ne se sent pas concerné | Normal : la vigilance n'impose aucune interdiction (voir §5ter). Notification seulement à partir d'Alerte |
 | Pas d'alerte sécheresse alors qu'il y a des restrictions | Voir §5ter : niveau ≥ Alerte requis ; vérifier 🧪 Services 🚱 et `AUTO_POST_DROUGHT_ALERTS` |
 | « Cache bus présent mais en erreur » | PDF horaires momentanément indisponible ; auto-réparé au prochain accès. Si persistant, vérifier le lien du PDF |
-| Aucune notification push reçue | Onglet 🔔 Push : abonnés présents ? Clés VAPID définies ? Sur iPhone, l'app doit être **installée** (iOS 16.4+) |
+| Aucune notification push reçue (actus/déchets) | Onglet 🔔 Push : abonnés présents ? Clés VAPID définies ? Sur iPhone, l'app doit être **installée** (iOS 16.4+) |
+| Citoyen ne reçoit pas de push sur son signalement | Voir §5bis — vérifier webhook Trello actif + `MAT-REF:` présent dans la carte |
 | L'admin renvoie « 401 » | `ADMIN_PASSWORD` absent sur Render, ou mauvais mot de passe |
 | Une intégration est 🔴 dans Services | La variable d'environnement correspondante manque ou est invalide (voir §4) |
 | Le site ne se met pas à jour | Vider le cache / forcer le rafraîchissement ; vérifier que `CACHE` a bien été incrémenté |
