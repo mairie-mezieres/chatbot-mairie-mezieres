@@ -22,34 +22,49 @@ router.get("/webhook", (req, res) => {
 router.post("/webhook", async (req, res) => {
   // Vérification HMAC-SHA256 Facebook
   const appSecret = process.env.FACEBOOK_APP_SECRET;
-  if (!appSecret) return res.sendStatus(503); // fail closed si secret manquant
+  if (!appSecret) {
+    console.error("❌ Webhook Facebook : FACEBOOK_APP_SECRET manquant — rejet 503");
+    return res.sendStatus(503);
+  }
   const sig = req.headers['x-hub-signature-256'];
-  if (!sig) return res.sendStatus(403);
+  if (!sig) {
+    console.warn("⚠️ Webhook Facebook : en-tête x-hub-signature-256 absent — rejet 403");
+    return res.sendStatus(403);
+  }
   const crypto = require('crypto');
   const expected = 'sha256=' + crypto.createHmac('sha256', appSecret).update(req.rawBody || Buffer.from('')).digest('hex');
   const sigBuf = Buffer.from(sig); const expBuf = Buffer.from(expected);
-  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return res.sendStatus(403);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    console.warn("⚠️ Webhook Facebook : signature HMAC invalide — rejet 403");
+    return res.sendStatus(403);
+  }
   res.status(200).send("EVENT_RECEIVED");
   const body = req.body;
 
   if (body.object === "page") {
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
-        if (change.field === "feed" && change.value?.message) {
-          const msg = change.value.message;
-          const photo = change.value.photo || null;
-          const postId = change.value.post_id || null;
-          if (/#MAT\b/i.test(msg)) {
-            const postKey =
-              change.value.post_id ||
-              change.value.comment_id ||
-              change.value.sender_id ||
-              (msg.replace(/\s+/g, " ").trim() + "|" + (photo || ""));
-
-            console.log("📰 Publication #MAT détectée", postKey);
-            await handleFacebookPublication(msg, photo, postKey, postId);
-          }
+        if (change.field !== "feed") continue;
+        const msg = change.value?.message || null;
+        const item = change.value?.item || "inconnu";
+        if (!msg) {
+          console.log(`📡 Webhook Facebook : feed reçu sans message (item=${item}) — ignoré`);
+          continue;
         }
+        if (!/#MAT\b/i.test(msg)) {
+          console.log(`📡 Webhook Facebook : feed reçu sans #MAT (item=${item}) — ignoré`);
+          continue;
+        }
+        const photo = change.value.photo || null;
+        const postId = change.value.post_id || null;
+        const postKey =
+          change.value.post_id ||
+          change.value.comment_id ||
+          change.value.sender_id ||
+          (msg.replace(/\s+/g, " ").trim() + "|" + (photo || ""));
+
+        console.log("📰 Publication #MAT détectée", postKey);
+        await handleFacebookPublication(msg, photo, postKey, postId);
       }
     }
   }

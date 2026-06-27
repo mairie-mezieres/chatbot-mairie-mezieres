@@ -83,6 +83,13 @@ Le fichier [`.env.example`](.env.example) liste tout en détail. Les **essentiel
 | **`FACEBOOK_APP_SECRET`** | **Validation des webhooks entrants — sans elle, les posts `#MAT` ne remontent pas (voir §5)** |
 | `VERIFY_TOKEN` | Token de vérification du webhook (valeur libre) |
 
+### Sécheresse / Restrictions VigiEau (séparé de la vigilance météo)
+| Variable | Rôle |
+|----------|------|
+| `AUTO_POST_DROUGHT_ALERTS` | `true` pour publier automatiquement sur Facebook quand le niveau sécheresse ≥ Alerte (le push citoyen + l'actu partent dans tous les cas). Défaut `false`. |
+| `VIGIEAU_COMMUNE_INSEE` | Code INSEE surveillé sur `api.vigieau.gouv.fr` (défaut `45203`). |
+| `DROUGHT_CHECK_INTERVAL_MS` | Intervalle de vérification (défaut 6 h — la sécheresse évolue lentement). |
+
 ### Autres intégrations
 | Variable | Rôle |
 |----------|------|
@@ -131,10 +138,71 @@ Depuis mai 2026, le webhook **valide la signature HMAC** de Facebook :
    ou la photo.
 3. Le `#MAT` doit être dans le **texte** du post (un post photo seule sans
    légende n'est pas détecté).
+4. **Les logs ne montrent rien du tout** : Facebook n'a pas envoyé d'événement
+   webhook pour ce post. Causes fréquentes : Story, Reel, ou **transfert/partage**
+   publié depuis un profil personnel (pas depuis la Page elle-même). Seuls les
+   posts **publiés directement sur la Page** avec `#MAT` dans le texte déclenchent
+   l'actu. Un partage depuis la Page peut fonctionner si vous ajoutez `#MAT` dans
+   le texte d'accompagnement du partage.
 
-> Vérité terrain : les **logs Render** (live tail) affichent
-> `📰 Publication #MAT détectée` à la réception, puis `💾 Actu FB stockée` ou
-> `⏭️ Actualité déjà présente`.
+> **Logs Render** (onglet 🪲 Logs) — référence rapide :
+>
+> | Log | Signification |
+> |-----|--------------|
+> | `📡 Webhook Facebook : feed reçu sans message (item=share)` | Transfert/partage sans légende — ignoré (normal) |
+> | `📡 Webhook Facebook : feed reçu sans #MAT (item=photo)` | Photo/post sans `#MAT` dans le texte |
+> | `⚠️ Webhook Facebook : signature HMAC invalide` | `FACEBOOK_APP_SECRET` incorrect ou périmé |
+> | `❌ Webhook Facebook : FACEBOOK_APP_SECRET manquant` | Variable absente de Render |
+> | `📰 Publication #MAT détectée` | Post reconnu, traitement en cours |
+> | `💾 Actu FB stockée` | Actualité créée avec succès |
+> | `⏭️ Actualité déjà présente` | Doublon détecté (même titre + même photo) |
+
+---
+
+## 5ter. Alertes sécheresse (VigiEau) — séparées de la vigilance météo
+
+### Pourquoi un flux distinct
+La **vigilance Météo-France** (orages, canicule…) et les **restrictions sécheresse**
+(VigiEau) sont deux choses différentes. Elles sont **volontairement séparées** :
+- la vigilance météo occupe le **bandeau de vigilance** en haut de l'app ;
+- la sécheresse ne touche **jamais** ce bandeau. Elle se matérialise par une
+  **actualité distincte** (badge « source VigiEau ») + la ligne « Restrictions » de
+  la section 💧 Eau de l'overlay météo.
+
+### Les 4 niveaux VigiEau (croissants)
+| Niveau | Sens | Notifie les habitants ? |
+|--------|------|--------------------------|
+| 🟡 Vigilance | Aucune interdiction, économies recommandées | **Non** (affiché dans l'app seulement) |
+| 🟠 Alerte | Premières restrictions réelles | **Oui** (actu + push, Facebook si activé) |
+| 🔴 Alerte renforcée | Restrictions durcies | Oui |
+| 🟣 Crise | Usages prioritaires uniquement | Oui |
+
+> Le niveau **Vigilance** est le plus bas : il n'impose aucune interdiction. C'est
+> normal de le voir affiché sans se sentir « concerné ». Le seuil de notification est
+> volontairement fixé à **Alerte** pour éviter la lassitude.
+
+### Fonctionnement
+- Le backend interroge `api.vigieau.gouv.fr` toutes les `DROUGHT_CHECK_INTERVAL_MS`
+  (route interne `GET /eau/restrictions/check`, polling lancé par `index.js`).
+- Au passage à **Alerte ou plus** (ou changement d'arrêté), il crée une **actualité**
+  `source: vigieau`, envoie un **push** aux abonnés actus, et publie sur **Facebook**
+  si `AUTO_POST_DROUGHT_ALERTS=true`. Les consignes clés (usages interdits/réduits)
+  sont incluses, avec un lien vers `vigieau.gouv.fr`.
+- Au **retour sous le seuil**, une actu « fin des restrictions » est publiée.
+- **Déduplication** : on ne reposte que si le niveau OU l'arrêté change (Redis
+  `mat:vigieau:last` + verrou anti-course `mat:vigieau:claim:*`).
+- **Visuels** : chaque niveau a sa carte 1200×630 (`img/secheresse/secheresse-{vigilance,alerte,alerte-renforcee,crise,fin}.png`
+  côté app), illustrant l'actu / le push / le post Facebook — comme les visuels de
+  vigilance météo. Régénérables via `node scripts/generate-secheresse-cards.js`
+  (repo `app-mezieres`). URL de base surchargeable par `DROUGHT_IMG_BASE` (défaut :
+  `https://mezieres-lez-clery.fr/img/secheresse`).
+
+### Dépannage
+| Symptôme | Piste |
+|---|---|
+| Niveau 🟡 « indéterminé » dans 🧪 Services | API VigiEau injoignable ou commune multi-zones (409) — réessai au prochain cycle |
+| Pas de post Facebook en Alerte | `AUTO_POST_DROUGHT_ALERTS` ≠ `true` sur Render (le push + l'actu partent quand même) |
+| Forcer un test | `GET /eau/restrictions/check?force=1` (recrée l'actu même sans changement) |
 
 ---
 
@@ -193,6 +261,7 @@ Lance un test en direct de chaque brique. Statuts : 🟢 OK · 🟡 attention ·
 | 🤖 Mistral | L'IA française répond |
 | 📘 Facebook Page | Token de page valide (sortant) |
 | 📡 **Webhook Facebook (entrant)** | Abonnement au `feed` + présence de `FACEBOOK_APP_SECRET` (voir §5) |
+| 🚱 **Restrictions sécheresse (VigiEau)** | Niveau sécheresse courant de la commune (voir §5ter) |
 | 🔔 Notifications push | Clés VAPID + nombre d'abonnés |
 
 ---
@@ -227,6 +296,8 @@ simplement désactivé (l'app fonctionne normalement).
 | Symptôme | Piste |
 |----------|-------|
 | Un post `#MAT` ne remonte pas | Voir §5 (webhook / `FACEBOOK_APP_SECRET` / doublon) |
+| Sécheresse : « Vigilance » affichée mais on ne se sent pas concerné | Normal : la vigilance n'impose aucune interdiction (voir §5ter). Notification seulement à partir d'Alerte |
+| Pas d'alerte sécheresse alors qu'il y a des restrictions | Voir §5ter : niveau ≥ Alerte requis ; vérifier 🧪 Services 🚱 et `AUTO_POST_DROUGHT_ALERTS` |
 | « Cache bus présent mais en erreur » | PDF horaires momentanément indisponible ; auto-réparé au prochain accès. Si persistant, vérifier le lien du PDF |
 | Aucune notification push reçue (actus/déchets) | Onglet 🔔 Push : abonnés présents ? Clés VAPID définies ? Sur iPhone, l'app doit être **installée** (iOS 16.4+) |
 | Citoyen ne reçoit pas de push sur son signalement | Voir §5bis — vérifier webhook Trello actif + `MAT-REF:` présent dans la carte |
