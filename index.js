@@ -66,6 +66,7 @@ const {
   METEOFRANCE_VIGILANCE_URL, METEOFRANCE_API_TOKEN, AUTO_POST_WEATHER_ALERTS, AUTO_POST_MIN_LEVEL, AUTO_PUSH_WEATHER_MIN_LEVEL,
   RESEND_API_KEY, DAILY_STATS_EMAIL, CRON_SECRET, FACEBOOK_PAGE_ID,
   OPEN_METEO_LAT, OPEN_METEO_LON, OPEN_METEO_TZ, WEATHER_CHECK_INTERVAL_MS,
+  DROUGHT_CHECK_INTERVAL_MS,
 } = require("./config");
 
 if (!ADMIN_PASSWORD) {
@@ -197,6 +198,9 @@ app.use(require("./routes/photos"));
 // ── Routes météo — voir routes/meteo.js ────────────────────
 app.use(require("./routes/meteo"));
 
+// ── Restrictions sécheresse VigiEau — voir routes/eau.js ───
+app.use(require("./routes/eau"));
+
 // ── Abonnements push — voir routes/push.js ─────────────────
 app.use(require("./routes/push"));
 
@@ -308,6 +312,21 @@ const _server = app.listen(PORT, async () => {
       }
     }, WEATHER_CHECK_INTERVAL_MS);
   }, 30000);
+
+  // Sécheresse VigiEau — check initial après 40s, puis polling lent (la sécheresse
+  // évolue au plus une fois par jour). Flux séparé de la vigilance météo.
+  setTimeout(() => {
+    axios.get(`http://127.0.0.1:${PORT}/eau/restrictions/check`)
+      .catch(e => console.warn("Sécheresse check initial:", e.message));
+
+    setInterval(async () => {
+      try {
+        await axios.get(`http://127.0.0.1:${PORT}/eau/restrictions/check`);
+      } catch (e) {
+        console.warn("Sécheresse check auto:", e.message);
+      }
+    }, DROUGHT_CHECK_INTERVAL_MS);
+  }, 40000);
 });
 
 // ── Rappels déchets quotidiens à 18h (heure de Paris) ────────

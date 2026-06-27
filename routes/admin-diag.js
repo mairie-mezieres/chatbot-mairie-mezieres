@@ -8,11 +8,12 @@ const {
   REDIS_URL, REDIS_TOKEN, METEOFRANCE_VIGILANCE_URL, OPEN_METEO_TZ,
   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, TRELLO_KEY, TRELLO_TOKEN,
   TRELLO_LIST_ID_BUG, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_DEMANDE,
-  GOOGLE_CALENDAR_ICAL
+  GOOGLE_CALENDAR_ICAL, AUTO_POST_DROUGHT_ALERTS
 } = require("../config");
 const { adminAuth } = require("../lib/middleware");
 const { getGoogleCalendarClient } = require("../lib/calendar");
 const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance } = require("../lib/meteo");
+const { fetchVigieauStatus } = require("../lib/vigieau");
 const { resolveFacebookPageId } = require("../lib/facebook");
 const { redisGet, redisSet, _isRedis429 } = require("../lib/redis");
 const { readSubs } = require("../lib/store");
@@ -564,6 +565,24 @@ services.push(await runCheck("facebook", "Facebook Page", "📘", async () => {
       status: subs.length ? "ok" : "warn",
       message: subs.length ? `${subs.length} abonné(s) push enregistrés` : "Configuration OK mais aucun abonné push",
       details: { subscribers: subs.length }
+    };
+  }));
+
+  // Restrictions sécheresse VigiEau (flux séparé de la vigilance Météo-France).
+  services.push(await runCheck("vigieau", "Restrictions sécheresse (VigiEau)", "🚱", async () => {
+    const status = await fetchVigieauStatus();
+    if (status.level == null) {
+      return {
+        status: "warn",
+        message: `Statut indéterminé (${status.reason || "?"}) — API VigiEau injoignable ou ambiguë`,
+        details: { reason: status.reason || null, ambiguous: !!status.ambiguous }
+      };
+    }
+    const labels = { 0: "Aucune restriction", 1: "Vigilance", 2: "Alerte", 3: "Alerte renforcée", 4: "Crise" };
+    return {
+      status: "ok",
+      message: `Niveau : ${labels[status.level] || status.level}${status.level >= 2 ? " — actu/push/Facebook actifs" : " (pas de notification à ce niveau)"}`,
+      details: { level: status.level, zones: (status.zones || []).length, consignes: (status.consignes || []).length, auto_post: AUTO_POST_DROUGHT_ALERTS }
     };
   }));
 
