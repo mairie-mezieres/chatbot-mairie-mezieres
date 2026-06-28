@@ -65,6 +65,17 @@ Architecture à connaître avant toute modification des notifications :
   le token — on met seulement `entry.sub = null`. Le frontend le re-lie au prochain
   chargement via `_registerPendingNotifyTokens()`.
 
+## Structure & tests
+
+- **`app.js`** construit l'app Express (middleware + montage des routes + route `/cron/dechets`).
+  **`index.js`** ne fait que l'exécuter (`app.listen`, polling météo/sécheresse, rappels déchets,
+  arrêt gracieux). → Toute **nouvelle route se monte dans `app.js`**, pas `index.js`. Voir ADR-0006.
+- **Tests de routes** : `test/routes.test.js` importe `app.js`, fait `app.listen(0)` et tape via
+  `fetch` natif (aucune dépendance). `npm test` = `node --test --test-force-exit` (le force-exit
+  est requis car des modules enregistrent des `setInterval` au niveau module).
+- Couvrir en priorité les chemins **sans appel réseau sortant réel** (validation HMAC, auth admin,
+  santé, CORS) ou mocker, pour rester déterministe hors-ligne.
+
 ## Robustesse Redis
 
 - Toujours tolérer un Redis en mode dégradé (429 Upstash) : voir `_isRedis429` et les
