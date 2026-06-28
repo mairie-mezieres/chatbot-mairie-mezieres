@@ -5,6 +5,7 @@ const router = require("express").Router();
 const { readSondages, writeSondages, readSondageResults, writeSondageResults, readAdminSettings } = require("../lib/store");
 const { redisDel, redisSismember, redisSadd, _isRedis429 } = require("../lib/redis");
 const { adminAuth } = require("../lib/middleware");
+const { logAudit } = require("../lib/logger");
 
 function getDeviceId(req) {
   const raw = (req.headers["x-device-id"] || "").toString().trim();
@@ -143,6 +144,7 @@ router.delete("/admin/sondages/:id", adminAuth, async (req, res) => {
   const sondages = (await readSondages()).filter(s => s.id !== id);
   await writeSondages(sondages);
   await redisDel("mat:sondage:results:" + id);
+  logAudit("Suppression sondage", `id=${id}`).catch(() => {});
   res.json({ ok: true, sondages });
 });
 router.get("/admin/sondages/:id/results", adminAuth, async (req, res) => {

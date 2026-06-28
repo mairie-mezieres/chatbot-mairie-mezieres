@@ -7,6 +7,7 @@ const { readAdminSettings, writeAdminSettings, readMelTreeConfig, writeMelTreeCo
 const { redisLRange } = require("../lib/redis");
 const { deleteActuImageFromCloudinary } = require("../lib/cloudinary");
 const { sendPushToToken } = require("../lib/push-notify");
+const { logAudit } = require("../lib/logger");
 
 const IDEA_STATUS_PUSH = {
   studying: { title: "🔍 Votre idée est en cours d'étude", body: "La mairie étudie votre proposition." },
@@ -174,6 +175,7 @@ router.delete("/admin/ideas/:id", adminAuth, async (req, res) => {
   const filtered = ideas.filter(i => i.id !== id);
   if (filtered.length === ideas.length) return res.status(404).json({ error: "Idée non trouvée" });
   await writeIdeas(filtered);
+  logAudit("Suppression idée", `id=${id}`).catch(() => {});
   res.json({ ok: true, deleted: id });
 });
 
@@ -228,6 +230,7 @@ router.delete("/admin/actus/:id", adminAuth, async (req, res) => {
 
   const filtered = actus.filter(a => a.id !== id);
   await writeNews(filtered);
+  logAudit("Suppression actualité", `id=${id} — "${String(actu.title || "").slice(0, 60)}"`).catch(() => {});
   res.json({ ok: true, deleted: id, cloudinary: cloudinaryResult });
 });
 

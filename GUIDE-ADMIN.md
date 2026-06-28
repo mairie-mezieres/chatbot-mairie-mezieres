@@ -58,7 +58,7 @@ Aucune donnée citoyenne ne transite par un CDN tiers côté application.
 | 🧪 **Services** | **Diagnostic** de tous les services (voir §6) |
 | 🚨 **Migration** | Outils de migration de données |
 | 🗑️ **Purge** | Nettoyage des anciennes données (actus, etc.) |
-| 🪲 **Logs** | Journaux serveur récents |
+| 🪲 **Logs** | Journaux serveur récents — inclut le **journal d'audit** des actions admin destructrices (lignes `audit` : suppression actu/idée/sondage/photo, purge) |
 
 ---
 
@@ -254,7 +254,7 @@ Lance un test en direct de chaque brique. Statuts : 🟢 OK · 🟡 attention ·
 | 🗄️ Redis / Upstash | Lecture/écriture du stockage |
 | 🌤️ Open-Meteo | Récupération météo de la commune |
 | ⚠️ Vigilance Météo-France | Flux vigilance du département 45 |
-| 🚌 Bus Rémi (cache) | Horaires bus (PDF → IA). Si « en erreur » : le PDF source était indisponible ; **auto-réparable** au prochain rafraîchissement |
+| 🚌 Bus Rémi (cache) | Horaires bus (PDF → IA). En cas d'échec, le **dernier bon horaire est conservé** (pas de « en erreur » qui écrase le cache) et un rafraîchissement **périodique automatique** (toutes les 30 min, backoff 1 h après échec) retente sans intervention |
 | 📅 Agenda public | Lecture du calendrier Google (iCal) |
 | 🗓️ Google Calendar (écriture) | Création/suppression d'un événement test |
 | 📌 Trello | Listes bug/signalement/demande accessibles |
@@ -298,7 +298,7 @@ simplement désactivé (l'app fonctionne normalement).
 | Un post `#MAT` ne remonte pas | Voir §5 (webhook / `FACEBOOK_APP_SECRET` / doublon) |
 | Sécheresse : « Vigilance » affichée mais on ne se sent pas concerné | Normal : la vigilance n'impose aucune interdiction (voir §5ter). Notification seulement à partir d'Alerte |
 | Pas d'alerte sécheresse alors qu'il y a des restrictions | Voir §5ter : niveau ≥ Alerte requis ; vérifier 🧪 Services 🚱 et `AUTO_POST_DROUGHT_ALERTS` |
-| « Cache bus présent mais en erreur » | PDF horaires momentanément indisponible ; auto-réparé au prochain accès. Si persistant, vérifier le lien du PDF |
+| « Cache bus présent mais en erreur » | Ne devrait plus rester bloqué : le dernier bon horaire est conservé et un refresh périodique (30 min) retente seul. Si l'état persiste plusieurs heures, vérifier le lien du PDF source |
 | Aucune notification push reçue (actus/déchets) | Onglet 🔔 Push : abonnés présents ? Clés VAPID définies ? Sur iPhone, l'app doit être **installée** (iOS 16.4+) |
 | Citoyen ne reçoit pas de push sur son signalement | Voir §5bis — vérifier webhook Trello actif + `MAT-REF:` présent dans la carte |
 | L'admin renvoie « 401 » | `ADMIN_PASSWORD` absent sur Render, ou mauvais mot de passe |

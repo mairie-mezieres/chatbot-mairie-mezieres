@@ -16,7 +16,7 @@ const axios = require("axios");
 const { logServerError } = require("./lib/logger");
 const { redisGet, redisSet } = require("./lib/redis");
 const { initEntreprisesIfEmpty, flushStatsNow } = require("./lib/store");
-const { refreshCalendarCache, refreshRemiCache, flushMelQuotas } = require("./lib/mel");
+const { refreshCalendarCache, refreshRemiCache, remiNeedsRefresh, flushMelQuotas } = require("./lib/mel");
 const { WEATHER_CHECK_INTERVAL_MS, DROUGHT_CHECK_INTERVAL_MS } = require("./config");
 
 // ── Capture des erreurs Node.js non gérées → logs admin + Sentry ─────
@@ -52,6 +52,15 @@ const _server = app.listen(PORT, async () => {
     refreshCalendarCache().catch(e => console.warn("Calendar cache init:", e.message));
     refreshRemiCache().catch(e => console.warn("Remi cache init:", e.message));
   }, 20000);
+
+  // Rafraîchissement périodique du cache bus : si l'init a échoué (PDF source
+  // momentanément indisponible), on réessaie tout seul (backoff REMI_RETRY_MS géré
+  // par remiNeedsRefresh) au lieu d'attendre une requête transport ou 7 jours.
+  setInterval(() => {
+    if (remiNeedsRefresh()) {
+      refreshRemiCache().catch(e => console.warn("Remi cache refresh:", e.message));
+    }
+  }, 30 * 60 * 1000);
 
   // Weather check initial après 30s (DNS + réseau garantis stables)
   setTimeout(() => {

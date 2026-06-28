@@ -32,3 +32,10 @@ jobs:
 
       - name: Tests (golden-master + routes d'intégration)
         run: npm test
+
+      # Audit de sécurité des dépendances — non bloquant : signale les avis de
+      # niveau « high »+ sans empêcher la fusion (un avis transitif non corrigeable
+      # ne doit pas bloquer une PR fonctionnelle). Dependabot ouvre les correctifs.
+      - name: Audit npm (sécurité, non bloquant)
+        run: npm audit --audit-level=high
+        continue-on-error: true
