@@ -96,3 +96,36 @@ test("POST /webhook signature valide, feed sans #MAT → 200 EVENT_RECEIVED (ign
   assert.equal(await r.text(), "EVENT_RECEIVED");
   delete process.env.FACEBOOK_APP_SECRET;
 });
+
+// ── Contrat de validation des entrées (chemins de rejet, sans réseau) ──
+async function postJson(path, body) {
+  return fetch(base + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+test("POST /idee sans texte → 400", async () => {
+  const r = await postJson("/idee", {});
+  assert.equal(r.status, 400);
+});
+
+test("POST /photos sans photoB64 → 400", async () => {
+  const r = await postJson("/photos", {});
+  assert.equal(r.status, 400);
+});
+
+test("POST /photos avec photoB64 non-image → 400", async () => {
+  const r = await postJson("/photos", { photoB64: "pas-une-image" });
+  assert.equal(r.status, 400);
+});
+
+test("PATCH /admin/signals/:id sans token → 401", async () => {
+  const r = await fetch(base + "/admin/signals/abc", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "resolved" }),
+  });
+  assert.equal(r.status, 401);
+});

@@ -74,7 +74,10 @@ Architecture à connaître avant toute modification des notifications :
   `fetch` natif (aucune dépendance). `npm test` = `node --test --test-force-exit` (le force-exit
   est requis car des modules enregistrent des `setInterval` au niveau module).
 - Couvrir en priorité les chemins **sans appel réseau sortant réel** (validation HMAC, auth admin,
-  santé, CORS) ou mocker, pour rester déterministe hors-ligne.
+  santé, CORS, rejets de validation) ou mocker, pour rester déterministe hors-ligne.
+- **Validation des entrées** : helpers sans dépendance dans `lib/validate.js`
+  (`capStr`, `finiteNum`, `safeId`, `inEnum`, `geoPoint`). Utiliser ces helpers pour plafonner /
+  normaliser les entrées citoyennes plutôt que de réécrire `String(x).substring(...)` à la main.
 
 ## Robustesse Redis
 

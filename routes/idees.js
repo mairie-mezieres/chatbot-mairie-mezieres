@@ -6,6 +6,7 @@ const { readIdeas, writeIdeas, readNews, readAdminSettings, readIdeaFilters, wri
 const { registerNotifyToken } = require("../lib/push-notify");
 const { redisSismember, redisSadd, redisSrem, _isRedis429 } = require("../lib/redis");
 const { adminAuth } = require("../lib/middleware");
+const { capStr, safeId } = require("../lib/validate");
 
 function getDeviceId(req) {
   const raw = (req.headers["x-device-id"] || "").toString().trim();
@@ -99,16 +100,15 @@ router.post("/idee", async (req, res) => {
   // L'id vient du client : on le contraint à un entier positif sûr. Tout id
   // non numérique (tentative d'injection dans l'onclick du front) retombe sur
   // un timestamp serveur — jamais stocké tel quel.
-  const _id = Number(id);
-  const ideaId = (Number.isSafeInteger(_id) && _id > 0) ? _id : Date.now();
+  const ideaId = safeId(id, Date.now());
 
   const ideas = await readIdeas();
   if (ideas.find(i => i.id === ideaId)) return res.json({ success:true, duplicate:true });
 
   const idea = {
     id: ideaId,
-    text: text.substring(0,500),
-    cat: (cat ? String(cat).substring(0, 100) : null) || "💡 Autre",
+    text: capStr(text, 500),
+    cat: capStr(cat, 100) || "💡 Autre",
     votes: 0,
     date: date || new Date().toLocaleDateString("fr-FR"),
     ...(notifyToken ? { notifyToken } : {})
