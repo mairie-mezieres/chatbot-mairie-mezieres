@@ -1,0 +1,24 @@
+# Dependabot — mises à jour automatiques des dépendances.
+# Ouvre une pull request quand une nouvelle version (ou un correctif de
+# sécurité) est disponible. Regroupé par écosystème pour limiter le nombre de PR.
+version: 2
+updates:
+  # Versions des actions utilisées dans les workflows (.github/workflows/*)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # Dépendances npm du serveur (express, axios, web-push, googleapis…)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      backend:
+        patterns: ["*"]

@@ -10,6 +10,7 @@ const { readPhotos, writePhotos, readAdminSettings } = require("../lib/store");
 const { adminAuth } = require("../lib/middleware");
 const { redisSismember, redisSadd, redisSrem, _isRedis429 } = require("../lib/redis");
 const { CLOUDINARY_ENABLED, uploadGaleriePhotoToCloudinary, deleteGaleriePhotoFromCloudinary } = require("../lib/cloudinary");
+const { logAudit } = require("../lib/logger");
 
 const MAX_PHOTOS = 300;
 
@@ -195,6 +196,7 @@ router.delete("/admin/photos/:id", adminAuth, async (req, res) => {
       console.warn("⚠️ Suppression Cloudinary échouée:", e.message));
   }
   console.log(`🗑️ Photo galerie #${id} supprimée`);
+  logAudit("Suppression photo galerie", `id=${id}`).catch(() => {});
   res.json({ success: true });
 });
 

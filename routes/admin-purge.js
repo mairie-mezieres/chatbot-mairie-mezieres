@@ -6,6 +6,7 @@ const { adminAuth } = require("../lib/middleware");
 const { readNews, writeNews, readSignals, writeSignals, readStats, writeStats, readIaStats, writeIaStats } = require("../lib/store");
 const { deleteActuImageFromCloudinary } = require("../lib/cloudinary");
 const { redisDel } = require("../lib/redis");
+const { logAudit } = require("../lib/logger");
 
 // ── Route : purge données par date ───────────────────────────
 router.post("/admin/purge", adminAuth, async (req, res) => {
@@ -129,6 +130,7 @@ router.post("/admin/purge", adminAuth, async (req, res) => {
       return res.status(400).json({ error: "type inconnu" });
     }
 
+    logAudit("Purge données", `type=${type} avant=${beforeDate} → ${deleted} supprimé(s)`).catch(() => {});
     const extra = cloudinaryResults.length ? { cloudinary: cloudinaryResults } : {};
     res.json({ ok: true, deleted, ...extra });
 

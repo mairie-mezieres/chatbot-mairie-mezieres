@@ -79,6 +79,12 @@ Architecture à connaître avant toute modification des notifications :
   (`capStr`, `finiteNum`, `safeId`, `inEnum`, `geoPoint`). Utiliser ces helpers pour plafonner /
   normaliser les entrées citoyennes plutôt que de réécrire `String(x).substring(...)` à la main.
 
+## Journal d'audit admin
+
+- Toute **action admin destructrice** (suppression actu/idée/sondage/photo, purge) doit appeler
+  `logAudit(action, detail)` de `lib/logger.js` (même flux que les logs serveur, **sans** la
+  limitation de débit). Les entrées apparaissent dans l'onglet 🪲 Logs (module `audit`).
+
 ## Robustesse Redis
 
 - Toujours tolérer un Redis en mode dégradé (429 Upstash) : voir `_isRedis429` et les
