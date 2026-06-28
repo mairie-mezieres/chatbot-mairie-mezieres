@@ -20,11 +20,15 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Syntax check (all JS)
         run: |
           find . -name '*.js' -not -path './node_modules/*' \
             | sort | xargs -I{} node --check {}
 
-      - name: Golden-master tests
-        run: node --test test/*.test.js
+      - name: Tests (golden-master + routes d'intégration)
+        run: npm test
