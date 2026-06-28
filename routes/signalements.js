@@ -9,6 +9,7 @@ const { adminAuth } = require("../lib/middleware");
 const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_NOTIFY } = require("../config");
 const { registerNotifyToken, sendSignalStatusPush, sendDemandeStatusPush } = require("../lib/push-notify");
 const { trelloStatusFromListName } = require("../lib/trello-status");
+const { capStr, geoPoint, inEnum } = require("../lib/validate");
 
 const signalLimiter = rateLimit({
   windowMs: 60 * 1000, max: 10,
@@ -222,15 +223,15 @@ router.post("/signal", signalLimiter, async (req, res) => {
   // Plafonds/validation des entrées citoyennes (cohérent avec /idee) : évite de
   // gonfler Redis (mat:signals) et l'email quotidien via un POST abusif, et
   // empêche d'injecter autre chose que des coordonnées dans le lien carte.
-  cat  = String(cat  || "").substring(0, 200);
-  desc = String(desc || "").substring(0, 5000);
-  const _nLat = Number(lat), _nLon = Number(lon);
-  const _hasGeo = Number.isFinite(_nLat) && Number.isFinite(_nLon);
-  lat = _hasGeo ? _nLat : null;
-  lon = _hasGeo ? _nLon : null;
+  cat  = capStr(cat, 200);
+  desc = capStr(desc, 5000);
+  // Coordonnées bornées (lat −90..90, lon −180..180) : tout point hors plage ou
+  // non numérique est ignoré (pas de lien carte), jamais injecté dans l'URL.
+  ({ lat, lon } = geoPoint(lat, lon));
+  const _hasGeo = lat !== null && lon !== null;
 
   const mapsLink = _hasGeo
-    ? `https://www.openstreetmap.org/?mlat=${_nLat}&mlon=${_nLon}&zoom=18`
+    ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=18`
     : null;
 
   const isBug     = (type === "bug" || (cat || "").startsWith("[BUG]"));
@@ -366,8 +367,7 @@ router.get("/admin/signals", adminAuth, async (req, res) => {
 router.patch("/admin/signals/:id", adminAuth, async (req, res) => {
   const cardId = req.params.id;
   const { status } = req.body || {};
-  const validStatuses = ["pending", "in_progress", "resolved"];
-  if (!validStatuses.includes(status)) return res.status(400).json({ error: "Statut invalide" });
+  if (!inEnum(status, ["pending", "in_progress", "resolved"])) return res.status(400).json({ error: "Statut invalide" });
   if (!TRELLO_KEY || !TRELLO_TOKEN) return res.status(503).json({ error: "Trello non configuré" });
   try {
     const card = await _trelloGet(`/cards/${encodeURIComponent(cardId)}?fields=idBoard,idList,desc,name`);
