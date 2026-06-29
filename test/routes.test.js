@@ -121,6 +121,11 @@ test("POST /photos avec photoB64 non-image → 400", async () => {
   assert.equal(r.status, 400);
 });
 
+test("POST /admin/meteo/test-push sans token → 401", async () => {
+  const r = await postJson("/admin/meteo/test-push", {});
+  assert.equal(r.status, 401);
+});
+
 test("PATCH /admin/signals/:id sans token → 401", async () => {
   const r = await fetch(base + "/admin/signals/abc", {
     method: "PATCH",
