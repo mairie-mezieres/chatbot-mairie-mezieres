@@ -13,7 +13,7 @@ push, agenda…) et le dépannage courant.
 
 | Brique | Rôle | Hébergeur |
 |--------|------|-----------|
-| **Frontend** (`app-mezieres`) | PWA citoyenne + interface admin (`admin.html`) | Cloudflare Pages (statique) |
+| **Frontend** (`app-mezieres`) | PWA citoyenne + interface admin (`admin.html`) | GitHub Pages (statique) |
 | **Backend** (`chatbot-mairie-mezieres`) | API Express, IA MEL, intégrations, push | Render |
 | **Stockage** | Cache, abonnements push, actus, idées, stats | Upstash (Redis, région UE) |
 | **Images actus & entreprises** | Photos d'actualités (admin) et logos d'entreprises | Cloudinary |
@@ -277,7 +277,7 @@ simplement désactivé (l'app fonctionne normalement).
 
 ## 8. Déploiement & intégration continue
 
-- **Frontend** : pousser sur `main` de `app-mezieres` → Cloudflare Pages
+- **Frontend** : pousser sur `main` de `app-mezieres` → GitHub Pages
   redéploie automatiquement (site statique, aucun build).
 - **Backend** : pousser sur `main` de `chatbot-mairie-mezieres` → Render
   redéploie automatiquement.
