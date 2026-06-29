@@ -6,6 +6,7 @@ const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentV
 const { readLastWeatherAlert, writeLastWeatherAlert } = require("../lib/store");
 const { redisGet, redisSet } = require("../lib/redis");
 const { AUTO_POST_WEATHER_ALERTS, AUTO_POST_MIN_LEVEL, AUTO_PUSH_WEATHER_MIN_LEVEL } = require("../config");
+const { adminAuth } = require("../lib/middleware");
 
 router.get('/meteo/forecast', async (req, res) => {
   try {
@@ -138,6 +139,20 @@ router.get("/meteo/alertes/check", async (req, res) => {
       error: "Contrôle alerte impossible",
       details: e.response?.data || e.message
     });
+  }
+});
+
+// ── Test push météo (admin) ──────────────────────────────────
+// Envoie une notification de TEST clairement étiquetée aux abonnés météo, pour
+// vérifier la réception sans attendre (ni simuler) une vraie vigilance. Niveau 2
+// (jaune) → atteint tous les abonnés, quel que soit leur seuil choisi.
+router.post("/admin/meteo/test-push", adminAuth, async (req, res) => {
+  try {
+    const result = await sendWeatherPush({ level: 2, color_label: "jaune" }, { test: true });
+    res.json({ ok: true, test: true, ...result });
+  } catch (e) {
+    console.error("❌ /admin/meteo/test-push:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
