@@ -85,6 +85,16 @@ Architecture à connaître avant toute modification des notifications :
   `logAudit(action, detail)` de `lib/logger.js` (même flux que les logs serveur, **sans** la
   limitation de débit). Les entrées apparaissent dans l'onglet 🪲 Logs (module `audit`).
 
+## Associations (grounding MEL)
+
+- MEL ne doit JAMAIS inventer d'association : la liste officielle est la constante `ASSOCIATIONS`
+  de `lib/mel.js`, injectée dans son contexte pour le topic `associations` + garde-fou dans le
+  prompt système (règle 7).
+- ⚠️ **Double source à garder en phase** : `lib/mel.js` `ASSOCIATIONS` (connaissance de MEL) et
+  `app-mezieres/js/mat-associations.js` (affichage habitant). Les **catégories** (sport, animation…)
+  viennent de la mairie et ne se déduisent pas des descriptions. (Évolution possible : un
+  `data/associations.json` partagé pour supprimer la double source.)
+
 ## Robustesse Redis
 
 - Toujours tolérer un Redis en mode dégradé (429 Upstash) : voir `_isRedis429` et les
