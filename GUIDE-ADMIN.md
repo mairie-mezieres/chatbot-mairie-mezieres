@@ -304,6 +304,7 @@ simplement désactivé (l'app fonctionne normalement).
 | L'admin renvoie « 401 » | `ADMIN_PASSWORD` absent sur Render, ou mauvais mot de passe |
 | Une intégration est 🔴 dans Services | La variable d'environnement correspondante manque ou est invalide (voir §4) |
 | Le site ne se met pas à jour | Vider le cache / forcer le rafraîchissement ; vérifier que `CACHE` a bien été incrémenté |
+| Consommation Redis élevée dans le mail quotidien (milliers de commandes) | Anormal : l'attendu est de quelques centaines/jour (~3–5 % du quota Upstash). Chercher un cron qui interroge Redis à chaque tick — les listes programmées passent par un miroir mémoire (ADR-0007) |
 
 ---
 

@@ -100,3 +100,9 @@ Architecture à connaître avant toute modification des notifications :
 - Toujours tolérer un Redis en mode dégradé (429 Upstash) : voir `_isRedis429` et les
   `.catch(() => {})` sur les écritures non critiques. Ne jamais faire dépendre une
   réponse HTTP d'une écriture Redis best-effort.
+- **Quota (10 000 commandes/jour, plan gratuit)** : aucun cron fréquent ne doit
+  interroger Redis à chaque tick. Pattern à suivre : cache mémoire mis à jour par les
+  routes d'écriture + re-synchro Redis périodique (voir `readScheduled`/`writeScheduled`
+  dans `routes/admin-actus.js`, le buffer stats de `lib/store.js`, et l'ADR-0007).
+  La consommation attendue est de quelques centaines de commandes/jour — si le mail
+  quotidien annonce des milliers, chercher un polling Redis dans un `setInterval`.

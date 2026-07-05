@@ -3,13 +3,35 @@
 "use strict";
 const router = require("express").Router();
 const { adminAuth } = require("../lib/middleware");
-const { readNews, writeNews, readSubs } = require("../lib/store");
+const { readNews, writeNews, readSubs, memGet, memSet } = require("../lib/store");
 const { redisGet, redisSet } = require("../lib/redis");
 const { uploadActuImageToCloudinary, deleteActuImageFromCloudinary } = require("../lib/cloudinary");
 const { publishActuToFacebook, sendActuPush } = require("../lib/actu");
 const { getGoogleCalendarClient, upsertGoogleCalendarEvent } = require("../lib/calendar");
 
 const PUSH_HISTORY_KEY = 'mat:push:history';
+const PUSH_SCHEDULED_KEY = 'mat:push:scheduled';
+
+// ── Miroir mémoire des listes programmées (push + actus) ─────
+// Les deux crons ci-dessous tournent toutes les minutes (précision d'envoi à
+// la minute), mais leurs listes sont vides l'immense majorité du temps :
+// relire Redis à chaque tick coûtait ~2 880 commandes/jour à lui seul
+// (~29 % du quota Upstash gratuit). On lit donc un miroir mémoire, mis à
+// jour immédiatement par les routes admin qui créent/annulent une
+// programmation (instance unique), et re-synchronisé depuis Redis toutes
+// les SCHED_MEM_TTL pour couvrir un redémarrage ou une écriture perdue.
+const SCHED_MEM_TTL = 10 * 60 * 1000;
+async function readScheduled(key) {
+  const c = memGet(key);
+  if (c !== undefined) return c;
+  const v = (await redisGet(key)) || [];
+  memSet(key, v, SCHED_MEM_TTL);
+  return v;
+}
+async function writeScheduled(key, d) {
+  memSet(key, d, SCHED_MEM_TTL);
+  await redisSet(key, d);
+}
 
 // ── Cœur de publication multi-canal (réutilisé : immédiat + programmé) ──
 // Publie une actu sur les canaux choisis. Lève une erreur taguée (er.cloudFail /
@@ -145,7 +167,7 @@ router.patch("/admin/actus/:id", adminAuth, async (req, res) => {
 router.post("/admin/push/schedule", adminAuth, async (req, res) => {
   const { title, body, photoUrl, scheduledAt, actuId } = req.body || {};
   if (!title || !scheduledAt) return res.status(400).json({ error: "title et scheduledAt requis" });
-  const scheduled = (await redisGet('mat:push:scheduled')) || [];
+  const scheduled = await readScheduled(PUSH_SCHEDULED_KEY);
   const notif = {
     id: Date.now(),
     actuId: actuId || null,
@@ -157,14 +179,14 @@ router.post("/admin/push/schedule", adminAuth, async (req, res) => {
     sentAt: null
   };
   scheduled.push(notif);
-  await redisSet('mat:push:scheduled', scheduled);
+  await writeScheduled(PUSH_SCHEDULED_KEY, scheduled);
   res.json({ ok: true, notif });
 });
 
 router.delete("/admin/push/schedule/:id", adminAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const scheduled = (await redisGet('mat:push:scheduled')) || [];
-  await redisSet('mat:push:scheduled', scheduled.filter(n => n.id !== id));
+  const scheduled = await readScheduled(PUSH_SCHEDULED_KEY);
+  await writeScheduled(PUSH_SCHEDULED_KEY, scheduled.filter(n => n.id !== id));
   res.json({ ok: true });
 });
 
@@ -217,7 +239,7 @@ const PUSH_SCHEDULED_MAX_RETRIES = 3;
 setInterval(async () => {
   try {
     const now = Date.now();
-    const scheduled = (await redisGet('mat:push:scheduled')) || [];
+    const scheduled = await readScheduled(PUSH_SCHEDULED_KEY);
     const due = scheduled.filter(n => !n.sent && !n.failed && new Date(n.scheduledAt).getTime() <= now);
     if (!due.length) return;
     for (const notif of due) {
@@ -246,7 +268,7 @@ setInterval(async () => {
     }
     const cutoff = now - 7 * 24 * 60 * 60 * 1000;
     const remaining = scheduled.filter(n => (!n.sent && !n.failed) || new Date(n.scheduledAt).getTime() > cutoff);
-    await redisSet('mat:push:scheduled', remaining);
+    await writeScheduled(PUSH_SCHEDULED_KEY, remaining);
   } catch (e) { console.warn('Cron push schedulé:', e.message); }
 }, 60 * 1000);
 
@@ -283,7 +305,7 @@ router.post("/admin/actus/schedule", adminAuth, async (req, res) => {
     }
   }
 
-  const scheduled = (await redisGet(ACTUS_SCHEDULED_KEY)) || [];
+  const scheduled = await readScheduled(ACTUS_SCHEDULED_KEY);
   const draft = {
     id: Date.now(),
     scheduledAt: when.toISOString(),
@@ -301,13 +323,13 @@ router.post("/admin/actus/schedule", adminAuth, async (req, res) => {
   };
   scheduled.push(draft);
   if (scheduled.length > 50) scheduled.splice(0, scheduled.length - 50);
-  await redisSet(ACTUS_SCHEDULED_KEY, scheduled);
+  await writeScheduled(ACTUS_SCHEDULED_KEY, scheduled);
   res.json({ ok: true, scheduled: draft });
 });
 
 // Lister les publications programmées (en attente + échecs).
 router.get("/admin/actus/scheduled", adminAuth, async (req, res) => {
-  const scheduled = (await redisGet(ACTUS_SCHEDULED_KEY)) || [];
+  const scheduled = await readScheduled(ACTUS_SCHEDULED_KEY);
   const list = scheduled
     .filter(s => s.status !== 'sent')
     .sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
@@ -317,12 +339,12 @@ router.get("/admin/actus/scheduled", adminAuth, async (req, res) => {
 // Annuler une publication programmée (+ nettoyage de l'image hébergée).
 router.delete("/admin/actus/scheduled/:id", adminAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const scheduled = (await redisGet(ACTUS_SCHEDULED_KEY)) || [];
+  const scheduled = await readScheduled(ACTUS_SCHEDULED_KEY);
   const target = scheduled.find(s => s.id === id);
   if (target && target.photoPublicId) {
     try { await deleteActuImageFromCloudinary(target.photoPublicId); } catch (_) {}
   }
-  await redisSet(ACTUS_SCHEDULED_KEY, scheduled.filter(s => s.id !== id));
+  await writeScheduled(ACTUS_SCHEDULED_KEY, scheduled.filter(s => s.id !== id));
   res.json({ ok: true, deleted: id });
 });
 
@@ -330,7 +352,7 @@ router.delete("/admin/actus/scheduled/:id", adminAuth, async (req, res) => {
 setInterval(async () => {
   try {
     const now = Date.now();
-    const scheduled = (await redisGet(ACTUS_SCHEDULED_KEY)) || [];
+    const scheduled = await readScheduled(ACTUS_SCHEDULED_KEY);
     const due = scheduled.filter(s => s.status === 'pending' && new Date(s.scheduledAt).getTime() <= now);
     if (!due.length) return;
     for (const draft of due) {
@@ -361,7 +383,7 @@ setInterval(async () => {
     }
     const cutoff = now - 7 * 24 * 60 * 60 * 1000;
     const remaining = scheduled.filter(s => s.status !== 'sent' || new Date(s.scheduledAt).getTime() > cutoff);
-    await redisSet(ACTUS_SCHEDULED_KEY, remaining);
+    await writeScheduled(ACTUS_SCHEDULED_KEY, remaining);
   } catch (e) { console.warn('Cron publication programmée:', e.message); }
 }, 60 * 1000);
 
