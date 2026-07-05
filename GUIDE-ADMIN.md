@@ -46,7 +46,7 @@ Aucune donnée citoyenne ne transite par un CDN tiers côté application.
 | 🔔 **Actualités** | Liste des actus (issues de Facebook `#MAT` ou créées à la main) ; suppression ; publication manuelle |
 | 📢 **Info/Alerte** | Bandeau d'information/alerte affiché en haut de l'app |
 | 🚨 **Signalements** | Signalements citoyens (remontés vers Trello) |
-| 💡 **Idées** | Boîte à idées citoyenne |
+| 💡 **Idées** | Boîte à idées citoyenne — puces de filtre par statut de résolution (⏳ Sans statut / 🔍 En cours d'étude / ✅ Retenues / ❌ Non retenues / Toutes), avec compteurs |
 | 🗳️ **Sondages** | Création et suivi des sondages |
 | 📁 **Documents** | Document « à la une » + documents temporaires |
 | 🛠️ **Entreprises** | Annuaire des artisans/entreprises locales |
