@@ -4,7 +4,7 @@
  */
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { capStr, finiteNum, safeId, inEnum, geoPoint } = require("../lib/validate");
+const { capStr, finiteNum, safeId, inEnum, geoPoint, geoPointNear } = require("../lib/validate");
 
 test("capStr — plafonne, gère null/undefined/non-chaîne", () => {
   assert.equal(capStr("abcdef", 3), "abc");
@@ -45,4 +45,22 @@ test("geoPoint — coordonnées valides bornées, sinon { null, null }", () => {
   assert.deepEqual(geoPoint(0, 200), { lat: null, lon: null });  // lon hors plage
   assert.deepEqual(geoPoint("x", 1), { lat: null, lon: null });  // non numérique
   assert.deepEqual(geoPoint(undefined, undefined), { lat: null, lon: null });
+});
+
+test("geoPointNear — n'accepte que les points proches de la référence", () => {
+  const REF = [47.822, 1.808]; // centre de la commune (OPEN_METEO_LAT/LON)
+  // Point dans la commune ou à proximité → accepté
+  assert.deepEqual(geoPointNear("47.84425", "1.81926", ...REF), { lat: 47.84425, lon: 1.81926 });
+  assert.deepEqual(geoPointNear(47.79, 1.79, ...REF), { lat: 47.79, lon: 1.79 });
+  // « Null Island » (0,0) — GPS indisponible sur certains téléphones → écarté
+  assert.deepEqual(geoPointNear(0, 0, ...REF), { lat: null, lon: null });
+  assert.deepEqual(geoPointNear("0.00000", "0.00000", ...REF), { lat: null, lon: null });
+  // Point valide mais à des centaines de km (Paris) → écarté
+  assert.deepEqual(geoPointNear(48.85, 2.35, ...REF), { lat: null, lon: null });
+  // Coordonnées inversées (1.8, 47.8) → écarté
+  assert.deepEqual(geoPointNear(1.81926, 47.84425, ...REF), { lat: null, lon: null });
+  // Entrées invalides → écarté (même comportement que geoPoint)
+  assert.deepEqual(geoPointNear("x", 1.8, ...REF), { lat: null, lon: null });
+  // Orléans (~20 km) reste accepté — le rayon doit couvrir les alentours
+  assert.deepEqual(geoPointNear(47.9, 1.9, ...REF), { lat: 47.9, lon: 1.9 });
 });
