@@ -6,10 +6,10 @@ const axios = require("axios");
 const rateLimit = require("express-rate-limit");
 const { readSignals, writeSignals } = require("../lib/store");
 const { adminAuth } = require("../lib/middleware");
-const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_NOTIFY } = require("../config");
+const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO_NOTIFY, OPEN_METEO_LAT, OPEN_METEO_LON } = require("../config");
 const { registerNotifyToken, sendSignalStatusPush, sendDemandeStatusPush } = require("../lib/push-notify");
 const { trelloStatusFromListName } = require("../lib/trello-status");
-const { capStr, geoPoint, inEnum } = require("../lib/validate");
+const { capStr, geoPointNear, inEnum } = require("../lib/validate");
 
 const signalLimiter = rateLimit({
   windowMs: 60 * 1000, max: 10,
@@ -177,12 +177,15 @@ async function _fetchTrelloRich() {
     const matRefMatch = (card.desc || '').match(/\nMAT-REF:\s*([a-f0-9-]{36})/i);
     const matRef = matRefMatch ? matRefMatch[1] : null;
     const descRaw = (card.desc || '').replace(/\nMAT-REF:\s*[a-f0-9-]{36}/gi, '').trim();
-    // Coordonnées GPS extraites du lien OpenStreetMap inséré à la création
+    // Coordonnées GPS extraites du lien OpenStreetMap inséré à la création.
+    // geoPointNear écarte les points implausibles (Null Island 0,0, point à
+    // des milliers de km…) présents dans d'anciennes cartes : pas de marqueur
+    // aberrant sur la carte citoyenne, le lien reste lisible dans Trello.
     const geoMatch = (card.desc || '').match(/mlat=(-?\d+(?:\.\d+)?)&mlon=(-?\d+(?:\.\d+)?)/i);
-    const lat = geoMatch ? parseFloat(geoMatch[1]) : null;
-    const lon = geoMatch ? parseFloat(geoMatch[2]) : null;
-    const hasGeo = lat != null && lon != null && !isNaN(lat) && !isNaN(lon);
-    const rich = { id: card.id, type: isSig ? 'signalement' : 'bug', cat, descRaw, status, statusLabel, date: card.dateLastActivity, comments, photos, matRef, lat: hasGeo ? lat : null, lon: hasGeo ? lon : null };
+    const { lat, lon } = geoMatch
+      ? geoPointNear(parseFloat(geoMatch[1]), parseFloat(geoMatch[2]), OPEN_METEO_LAT, OPEN_METEO_LON)
+      : { lat: null, lon: null };
+    const rich = { id: card.id, type: isSig ? 'signalement' : 'bug', cat, descRaw, status, statusLabel, date: card.dateLastActivity, comments, photos, matRef, lat, lon };
     if (isSig) result.signalements.push(rich);
     else result.bugs.push(rich);
   }
@@ -225,9 +228,11 @@ router.post("/signal", signalLimiter, async (req, res) => {
   // empêche d'injecter autre chose que des coordonnées dans le lien carte.
   cat  = capStr(cat, 200);
   desc = capStr(desc, 5000);
-  // Coordonnées bornées (lat −90..90, lon −180..180) : tout point hors plage ou
-  // non numérique est ignoré (pas de lien carte), jamais injecté dans l'URL.
-  ({ lat, lon } = geoPoint(lat, lon));
+  // Coordonnées plausibles uniquement : bornées ET proches de la commune
+  // (±55 km). Écarte les points non numériques, hors plage, et « Null Island »
+  // (0,0) que certains téléphones renvoient quand la position est indisponible.
+  // Tout point écarté = pas de lien carte, jamais injecté dans l'URL.
+  ({ lat, lon } = geoPointNear(lat, lon, OPEN_METEO_LAT, OPEN_METEO_LON));
   const _hasGeo = lat !== null && lon !== null;
 
   const mapsLink = _hasGeo
