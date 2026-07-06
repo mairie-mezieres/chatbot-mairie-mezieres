@@ -86,7 +86,12 @@ async function publishActu(opts) {
     photoPublicId: finalPhotoPublicId,
     eventDate: eventDate || null,
     eventLocation: eventLocation || null,
-    source: "admin"
+    source: "admin",
+    // Trace du post Facebook (badge + lien dans l'admin) : sans elle, impossible
+    // de savoir après coup si une actu est réellement partie sur la page.
+    fb: (publishFacebook && result.facebook && result.facebook.ok)
+      ? { postId: result.facebook.post_id || null, mode: result.facebook.mode || null, fallback: !!result.facebook.fallbackUsed }
+      : null
   };
   actus.unshift(actu);
   if (actus.length > 30) actus.splice(30);
@@ -119,9 +124,8 @@ router.post("/admin/actus/add", adminAuth, async (req, res) => {
   if (!title || !String(title).trim()) {
     return res.status(400).json({ error: "title requis" });
   }
-  if (publishFacebook && !imageBase64) {
-    return res.status(400).json({ error: "imageBase64 requis pour publier sur Facebook avec image" });
-  }
+  // (Règle historique « photo obligatoire pour Facebook » supprimée : le post
+  // texte seul existe — postTextOnly — et la publication programmée l'utilise déjà.)
 
   try {
     const result = await publishActu({ title, description, imageBase64, imageUrl, eventDate, eventLocation, publishFacebook, sendPush, createCalendar });

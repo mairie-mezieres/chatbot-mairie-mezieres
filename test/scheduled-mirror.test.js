@@ -58,6 +58,33 @@ test("publication programmée : créer → lister → annuler via le miroir mém
   assert.ok(!list2.some(s => s.id === draft.id), "l'entrée annulée ne doit plus apparaître");
 });
 
+test("publication immédiate texte seul + Facebook : plus de 400, l'erreur FB est surfacée (502 sans token)", async () => {
+  // La règle historique « photo obligatoire pour Facebook » renvoyait 400.
+  // Désormais le post texte seul est tenté ; sans PAGE_ACCESS_TOKEN (env de
+  // test), l'étape Facebook échoue → 502 avec le détail, et l'actu n'est PAS créée.
+  const r = await fetch(base + "/admin/actus/add", {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({ title: "Actu texte seul", description: "d", publishFacebook: true, sendPush: false, createCalendar: false })
+  });
+  assert.equal(r.status, 502);
+  const d = await r.json();
+  assert.match(d.error || "", /Facebook/);
+});
+
+test("publication immédiate sans Facebook : succès hors-ligne, actu créée", async () => {
+  const r = await fetch(base + "/admin/actus/add", {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({ title: "Actu app seulement", description: "d", publishFacebook: false, sendPush: false, createCalendar: false })
+  });
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(d.ok, true);
+  assert.equal(d.actu.title, "Actu app seulement");
+  assert.equal(d.actu.fb, null); // pas de trace FB quand la case n'est pas cochée
+});
+
 test("push programmé : créer puis annuler via le miroir mémoire (sans Redis)", async () => {
   const scheduledAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
