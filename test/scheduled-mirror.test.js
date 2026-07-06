@@ -85,6 +85,29 @@ test("publication immédiate sans Facebook : succès hors-ligne, actu créée", 
   assert.equal(d.actu.fb, null); // pas de trace FB quand la case n'est pas cochée
 });
 
+test("republication Facebook (PATCH) : l'échec FB est renvoyé au client, l'actu reste", async () => {
+  // Créer une actu sans Facebook…
+  const rAdd = await fetch(base + "/admin/actus/add", {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({ title: "Actu à republier", description: "d", publishFacebook: false, sendPush: false, createCalendar: false })
+  });
+  const { actu } = await rAdd.json();
+  // …puis la republier avec Facebook coché : sans PAGE_ACCESS_TOKEN, l'étape FB
+  // échoue mais la modification reste (200 ok) et l'échec est explicite.
+  const rPatch = await fetch(base + "/admin/actus/" + actu.id, {
+    method: "PATCH",
+    headers: admin,
+    body: JSON.stringify({ publishFacebook: true })
+  });
+  assert.equal(rPatch.status, 200);
+  const d = await rPatch.json();
+  assert.equal(d.ok, true);
+  assert.equal(d.facebook.ok, false);
+  assert.match(d.facebook.error || "", /Facebook|token|Page/i);
+  assert.equal(d.actu.fb || null, null); // pas de badge 📘 si le post n'est pas parti
+});
+
 test("push programmé : créer puis annuler via le miroir mémoire (sans Redis)", async () => {
   const scheduledAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
