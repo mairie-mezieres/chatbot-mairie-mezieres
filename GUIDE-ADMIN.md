@@ -306,6 +306,7 @@ simplement désactivé (l'app fonctionne normalement).
 | Le site ne se met pas à jour | Vider le cache / forcer le rafraîchissement ; vérifier que `CACHE` a bien été incrémenté |
 | Consommation Redis élevée dans le mail quotidien (milliers de commandes) | Anormal : l'attendu est de quelques centaines/jour (~3–5 % du quota Upstash). Chercher un cron qui interroge Redis à chaque tick — les listes programmées passent par un miroir mémoire (ADR-0007) |
 | Un signalement apparaît sur la carte loin de la commune (Afrique, océan…) | Le téléphone du citoyen a renvoyé une position invalide — souvent (0,0), « Null Island ». Corrigé : les points à plus de ~55 km de la commune ne sont plus ni enregistrés ni affichés (ADR-0008) ; le lien reste visible dans la carte Trello |
+| Une actu cochée « Facebook » ne semble pas publiée sur la page | Regarder le **récapitulatif** à la publication (ligne 📘 avec lien « voir le post ↗ ») et le **badge 📘** dans la liste des actus (lien vers le post). Un échec sortant apparaît dans 🪲 Logs (module `facebook`). ⚠️ La ligne *webhook* du diagnostic ne teste que le flux **entrant** ; le sortant, c'est la ligne « 📘 Facebook Page » |
 
 ---
 
