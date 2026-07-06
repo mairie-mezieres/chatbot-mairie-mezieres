@@ -155,6 +155,14 @@ router.patch("/admin/actus/:id", adminAuth, async (req, res) => {
   if (publishFacebook) {
     try { result.facebook = await publishActuToFacebook(actu.title, actu.description, null, actu.eventDate, actu.eventLocation); }
     catch (e) { result.warnings.push("Facebook: " + e.message); result.facebook = { ok: false, error: e.message }; }
+    // Même trace que la publication initiale : le badge 📘 de l'admin doit
+    // refléter aussi les republications.
+    if (result.facebook && result.facebook.ok) {
+      actu.fb = { postId: result.facebook.post_id || null, mode: result.facebook.mode || null, fallback: !!result.facebook.fallbackUsed };
+      actus[idx] = actu;
+      await writeNews(actus);
+      result.actu = actu;
+    }
   }
   if (sendPush) {
     try { result.push = await sendActuPush(actu.title, actu.description, actu.photo, actu.id); }
