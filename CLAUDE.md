@@ -71,10 +71,13 @@ Architecture à connaître avant toute modification des notifications :
   **`index.js`** ne fait que l'exécuter (`app.listen`, polling météo/sécheresse, rappels déchets,
   arrêt gracieux). → Toute **nouvelle route se monte dans `app.js`**, pas `index.js`. Voir ADR-0006.
 - **Tests de routes** : `test/routes.test.js` importe `app.js`, fait `app.listen(0)` et tape via
-  `fetch` natif (aucune dépendance). `npm test` = `node --test --test-force-exit --test-concurrency=1`
-  (le force-exit est requis car des modules enregistrent des `setInterval` au niveau module ;
-  la concurrence à 1 évite un crash intermittent du runner — « Unable to deserialize cloned
-  data » — quand plusieurs fichiers tournent en parallèle avec force-exit).
+  `fetch` natif (aucune dépendance). `npm test` = `node --test --test-concurrency=1` — **sans**
+  `--test-force-exit` : tous les `setInterval` de niveau module sont `unref()` (store, mel,
+  admin-actus, admin-email, logger), donc les processus de test se terminent naturellement.
+  ⚠️ Tout nouveau `setInterval` de niveau module DOIT être `.unref?.()` — sinon les tests ne
+  rendent plus la main, et réintroduire force-exit ramènerait le crash intermittent du runner
+  Node (« Unable to deserialize cloned data », course kill/écriture des résultats, vu en CI
+  sur Node 22.23.1).
 - Couvrir en priorité les chemins **sans appel réseau sortant réel** (validation HMAC, auth admin,
   santé, CORS, rejets de validation) ou mocker, pour rester déterministe hors-ligne.
 - **Validation des entrées** : helpers sans dépendance dans `lib/validate.js`
