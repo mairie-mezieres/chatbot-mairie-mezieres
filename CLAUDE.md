@@ -87,6 +87,16 @@ Architecture à connaître avant toute modification des notifications :
   `logAudit(action, detail)` de `lib/logger.js` (même flux que les logs serveur, **sans** la
   limitation de débit). Les entrées apparaissent dans l'onglet 🪲 Logs (module `audit`).
 
+## Démarches administratives (grounding MEL)
+
+- Les questions type « inscription liste électorale » sont couvertes par les **fiches
+  vérifiées** `DEMARCHES` de `lib/mel.js` (règles nationales service-public.gouv.fr,
+  liens directs vers les téléservices), injectées pour le topic `demarches`.
+- MEL n'a PAS service-public.gouv.fr dans ses `SOURCES` : si elle « ne sait pas » sur une
+  démarche courante, la solution est d'**ajouter/compléter une fiche** (+ mots-clés dans
+  `KEYWORDS.demarches`) — pas de relâcher les garde-fous anti-hallucination.
+  Tests : `test/demarches.test.js`.
+
 ## Associations (grounding MEL)
 
 - MEL ne doit JAMAIS inventer d'association : la liste officielle est la constante `ASSOCIATIONS`
