@@ -90,14 +90,20 @@ Architecture à connaître avant toute modification des notifications :
   `logAudit(action, detail)` de `lib/logger.js` (même flux que les logs serveur, **sans** la
   limitation de débit). Les entrées apparaissent dans l'onglet 🪲 Logs (module `audit`).
 
-## Démarches administratives (grounding MEL)
+## Démarches administratives (MEL)
 
-- Les questions type « inscription liste électorale » sont couvertes par les **fiches
-  vérifiées** `DEMARCHES` de `lib/mel.js` (règles nationales service-public.gouv.fr,
-  liens directs vers les téléservices), injectées pour le topic `demarches`.
+- Le mécanisme maison pour les démarches courantes est **`DIRECT_RULES`** (`lib/mel.js`) :
+  réponse complète **instantanée, sans appel IA**, déclenchée par regex sur la question
+  normalisée (`normalizeQuestion` = minuscules, **sans accents**, sans ponctuation).
+  Déjà couverts : CNI, passeport, état civil, **élections (inscription + procuration)**,
+  **recensement citoyen**, **PACS**, clôtures/abris/piscine, déchets, santé, OPAH, SPANC…
 - MEL n'a PAS service-public.gouv.fr dans ses `SOURCES` : si elle « ne sait pas » sur une
-  démarche courante, la solution est d'**ajouter/compléter une fiche** (+ mots-clés dans
-  `KEYWORDS.demarches`) — pas de relâcher les garde-fous anti-hallucination.
+  démarche courante, **ajouter une DIRECT_RULE** (+ mots-clés dans `KEYWORDS.demarches`
+  pour les stats/pages sources) — pas de relâcher les garde-fous anti-hallucination,
+  et pas de mécanisme parallèle (leçon : une PR a créé un doublon « fiches contexte »
+  avant de découvrir DIRECT_RULES — règle d'or : vérifier l'existant).
+- L'**arbre de décision** (admin → onglet 👩 MEL) est le 3e canal : parcours guidé
+  cliquable, éditable par la mairie sans code.
   Tests : `test/demarches.test.js`.
 
 ## Associations (grounding MEL)
