@@ -282,7 +282,7 @@ setInterval(async () => {
     const remaining = scheduled.filter(n => (!n.sent && !n.failed) || new Date(n.scheduledAt).getTime() > cutoff);
     await writeScheduled(PUSH_SCHEDULED_KEY, remaining);
   } catch (e) { console.warn('Cron push schedulé:', e.message); }
-}, 60 * 1000);
+}, 60 * 1000).unref?.();
 
 // ── Publications programmées (différées) ────────────────────
 const ACTUS_SCHEDULED_KEY = 'mat:actus:scheduled';
@@ -397,6 +397,6 @@ setInterval(async () => {
     const remaining = scheduled.filter(s => s.status !== 'sent' || new Date(s.scheduledAt).getTime() > cutoff);
     await writeScheduled(ACTUS_SCHEDULED_KEY, remaining);
   } catch (e) { console.warn('Cron publication programmée:', e.message); }
-}, 60 * 1000);
+}, 60 * 1000).unref?.();
 
 module.exports = router;

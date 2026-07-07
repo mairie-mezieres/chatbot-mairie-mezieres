@@ -71,10 +71,13 @@ Architecture à connaître avant toute modification des notifications :
   **`index.js`** ne fait que l'exécuter (`app.listen`, polling météo/sécheresse, rappels déchets,
   arrêt gracieux). → Toute **nouvelle route se monte dans `app.js`**, pas `index.js`. Voir ADR-0006.
 - **Tests de routes** : `test/routes.test.js` importe `app.js`, fait `app.listen(0)` et tape via
-  `fetch` natif (aucune dépendance). `npm test` = `node --test --test-force-exit --test-concurrency=1`
-  (le force-exit est requis car des modules enregistrent des `setInterval` au niveau module ;
-  la concurrence à 1 évite un crash intermittent du runner — « Unable to deserialize cloned
-  data » — quand plusieurs fichiers tournent en parallèle avec force-exit).
+  `fetch` natif (aucune dépendance). `npm test` = `bash scripts/run-tests.sh` : chaque fichier
+  est exécuté **directement** (`node test/xxx.test.js`, mode standalone de `node:test`) — PAS
+  via le runner `node --test`, dont l'IPC parent/enfant plante aléatoirement sur Node 22.23.x
+  en CI (« Unable to deserialize cloned data »), avec ou sans `--test-force-exit`.
+  ⚠️ Tout nouveau `setInterval` de niveau module DOIT être `.unref?.()` (store, mel,
+  admin-actus, admin-email et logger le sont) — sinon les fichiers de test ne rendent plus la
+  main. Nouveau fichier de test : le nommer `test/*.test.js`, il est ramassé par le script.
 - Couvrir en priorité les chemins **sans appel réseau sortant réel** (validation HMAC, auth admin,
   santé, CORS, rejets de validation) ou mocker, pour rester déterministe hors-ligne.
 - **Validation des entrées** : helpers sans dépendance dans `lib/validate.js`
@@ -86,6 +89,22 @@ Architecture à connaître avant toute modification des notifications :
 - Toute **action admin destructrice** (suppression actu/idée/sondage/photo, purge) doit appeler
   `logAudit(action, detail)` de `lib/logger.js` (même flux que les logs serveur, **sans** la
   limitation de débit). Les entrées apparaissent dans l'onglet 🪲 Logs (module `audit`).
+
+## Démarches administratives (MEL)
+
+- Le mécanisme maison pour les démarches courantes est **`DIRECT_RULES`** (`lib/mel.js`) :
+  réponse complète **instantanée, sans appel IA**, déclenchée par regex sur la question
+  normalisée (`normalizeQuestion` = minuscules, **sans accents**, sans ponctuation).
+  Déjà couverts : CNI, passeport, état civil, **élections (inscription + procuration)**,
+  **recensement citoyen**, **PACS**, clôtures/abris/piscine, déchets, santé, OPAH, SPANC…
+- MEL n'a PAS service-public.gouv.fr dans ses `SOURCES` : si elle « ne sait pas » sur une
+  démarche courante, **ajouter une DIRECT_RULE** (+ mots-clés dans `KEYWORDS.demarches`
+  pour les stats/pages sources) — pas de relâcher les garde-fous anti-hallucination,
+  et pas de mécanisme parallèle (leçon : une PR a créé un doublon « fiches contexte »
+  avant de découvrir DIRECT_RULES — règle d'or : vérifier l'existant).
+- L'**arbre de décision** (admin → onglet 👩 MEL) est le 3e canal : parcours guidé
+  cliquable, éditable par la mairie sans code.
+  Tests : `test/demarches.test.js`.
 
 ## Associations (grounding MEL)
 

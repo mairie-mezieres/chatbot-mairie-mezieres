@@ -249,7 +249,7 @@ setInterval(async () => {
     _dailyStatsSentToday = today;
     await redisSet('mat:daily:stats:sent', today);
   } catch(e) { console.warn('Daily stats email:', e.message); }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref?.();
 
 // Helper partagé : envoyer les stats (avec dédup sauf si force=true)
 async function _triggerDailyStats(force) {
