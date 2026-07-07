@@ -71,13 +71,13 @@ Architecture à connaître avant toute modification des notifications :
   **`index.js`** ne fait que l'exécuter (`app.listen`, polling météo/sécheresse, rappels déchets,
   arrêt gracieux). → Toute **nouvelle route se monte dans `app.js`**, pas `index.js`. Voir ADR-0006.
 - **Tests de routes** : `test/routes.test.js` importe `app.js`, fait `app.listen(0)` et tape via
-  `fetch` natif (aucune dépendance). `npm test` = `node --test --test-concurrency=1` — **sans**
-  `--test-force-exit` : tous les `setInterval` de niveau module sont `unref()` (store, mel,
-  admin-actus, admin-email, logger), donc les processus de test se terminent naturellement.
-  ⚠️ Tout nouveau `setInterval` de niveau module DOIT être `.unref?.()` — sinon les tests ne
-  rendent plus la main, et réintroduire force-exit ramènerait le crash intermittent du runner
-  Node (« Unable to deserialize cloned data », course kill/écriture des résultats, vu en CI
-  sur Node 22.23.1).
+  `fetch` natif (aucune dépendance). `npm test` = `bash scripts/run-tests.sh` : chaque fichier
+  est exécuté **directement** (`node test/xxx.test.js`, mode standalone de `node:test`) — PAS
+  via le runner `node --test`, dont l'IPC parent/enfant plante aléatoirement sur Node 22.23.x
+  en CI (« Unable to deserialize cloned data »), avec ou sans `--test-force-exit`.
+  ⚠️ Tout nouveau `setInterval` de niveau module DOIT être `.unref?.()` (store, mel,
+  admin-actus, admin-email et logger le sont) — sinon les fichiers de test ne rendent plus la
+  main. Nouveau fichier de test : le nommer `test/*.test.js`, il est ramassé par le script.
 - Couvrir en priorité les chemins **sans appel réseau sortant réel** (validation HMAC, auth admin,
   santé, CORS, rejets de validation) ou mocker, pour rester déterministe hors-ligne.
 - **Validation des entrées** : helpers sans dépendance dans `lib/validate.js`
