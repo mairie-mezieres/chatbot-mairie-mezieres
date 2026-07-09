@@ -47,6 +47,15 @@ test("les règles directes existantes restent intactes (CNI, état civil)", () =
   assert.match(ask("il me faut un extrait d'acte de naissance") || "", /état civil/);
 });
 
+test("poulailler / basse-cour : réponse directe (urbanisme + RSD, seuil 50 volailles)", () => {
+  const a = ask("quelle est la législation pour un poulailler chez un particulier ?");
+  assert.ok(a, "une règle directe doit répondre");
+  assert.match(a, /Règlement Sanitaire Départemental|RSD/i);
+  assert.match(a, /50 volailles/);
+  assert.ok(ask("puis-je installer un clapier à lapins ?"));
+  assert.ok(ask("j'aimerais mettre des ruches dans mon jardin"));
+});
+
 test("pas de réponse directe hors sujet (bus) — l'IA garde la main", () => {
   assert.equal(ask("quels sont les horaires du bus ?"), null);
 });
