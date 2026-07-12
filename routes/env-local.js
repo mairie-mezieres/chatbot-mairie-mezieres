@@ -6,7 +6,7 @@ const axios = require("axios");
 const { redisGet, redisSetex } = require("../lib/redis");
 
 // ─── Environnement local — Open-Meteo Air Quality + Vigicrues Loire ────────
-const ENV_LOCAL_REDIS_KEY = 'mat:env-local:v4';
+const ENV_LOCAL_REDIS_KEY = 'mat:env-local:v5'; // v5 : ajout du polluant dominant
 const ENV_LOCAL_TTL_S     = 900; // 15 min
 const LAT_MEZIERES        = 47.79;
 const LON_MEZIERES        = 1.80;
@@ -42,12 +42,26 @@ router.get('/env-local', async (req, res) => {
     // Open-Meteo Air Quality — AQI européen + pollens
     try {
       const omRes = await axios.get(
-        `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${LAT_MEZIERES}&longitude=${LON_MEZIERES}&current=european_aqi,alder_pollen,birch_pollen,grass_pollen,olive_pollen,ragweed_pollen,mugwort_pollen&timezone=Europe%2FParis`,
+        `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${LAT_MEZIERES}&longitude=${LON_MEZIERES}&current=european_aqi,european_aqi_ozone,european_aqi_pm2_5,european_aqi_pm10,european_aqi_nitrogen_dioxide,european_aqi_sulphur_dioxide,alder_pollen,birch_pollen,grass_pollen,olive_pollen,ragweed_pollen,mugwort_pollen&timezone=Europe%2FParis`,
         { timeout: 8000 }
       );
       const c = (omRes.data || {}).current || {};
       if (c.european_aqi != null) {
-        data.aqi = { label: _aqiLabel(c.european_aqi), valeur: Math.round(c.european_aqi) };
+        // Polluant dominant = sous-indice AQI le plus élevé. L'IQA européen global
+        // EST déjà ce maximum ; on expose seulement lequel des polluants le porte.
+        const subs = [
+          { code: 'o3',   label: 'Ozone (O₃)',              v: c.european_aqi_ozone },
+          { code: 'pm25', label: 'Particules fines (PM2.5)', v: c.european_aqi_pm2_5 },
+          { code: 'pm10', label: 'Particules (PM10)',        v: c.european_aqi_pm10 },
+          { code: 'no2',  label: 'Dioxyde d’azote (NO₂)',    v: c.european_aqi_nitrogen_dioxide },
+          { code: 'so2',  label: 'Dioxyde de soufre (SO₂)',  v: c.european_aqi_sulphur_dioxide },
+        ].filter(s => s.v != null && !isNaN(s.v));
+        const dom = subs.length ? subs.reduce((a, b) => (b.v > a.v ? b : a)) : null;
+        data.aqi = {
+          label: _aqiLabel(c.european_aqi),
+          valeur: Math.round(c.european_aqi),
+          dominant: dom ? { code: dom.code, label: dom.label } : null
+        };
       }
       const pollens = ['alder_pollen','birch_pollen','grass_pollen','olive_pollen','ragweed_pollen','mugwort_pollen']
         .map(k => c[k]).filter(v => v != null && !isNaN(v));
