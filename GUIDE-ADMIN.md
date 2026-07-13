@@ -266,6 +266,36 @@ Lance un test en direct de chaque brique. Statuts : 🟢 OK · 🟡 attention ·
 
 ---
 
+## 6bis. Suivi du kit réplication « Partager »
+
+La page `partager.html` de l'app (générateur de prompt pour répliquer MAT dans
+une autre commune) remonte deux types d'information au backend :
+
+1. **Compteurs anonymes** (déjà en place) : `partager_visite` (ouverture de la
+   page) et `partager_prompt` (clic « Générer mon prompt ») via `/stats/track` —
+   visibles dans les stats habituelles.
+2. **Profil de la commune intéressée** : à la génération du prompt, le formulaire
+   envoie `POST /stats/partager` avec le **nom de la commune**, la **population**,
+   le **budget mensuel souhaité** et le **niveau informatique** déclarés (plus
+   hébergeur et mode souverain). Le profil n'est envoyé que si le nom de commune
+   est renseigné. Données de collectivité, pas de données personnelles ; une
+   mention l'indique sur la page.
+
+Stockage : liste Redis `mat:partager:profils` (plafonnée aux 500 dernières
+entrées, LPUSH + LTRIM). Consultation :
+
+- **Mail quotidien « MAT stats »** : carte « 🧩 Kit réplication “Partager” » —
+  visites/prompts du jour et total, plus le tableau des communes ayant généré un
+  prompt dans la journée (commune, habitants, budget, niveau, 🇫🇷 si mode
+  souverain).
+- **`GET /admin/partager-profils`** (token admin) : liste complète des profils
+  collectés, du plus récent au plus ancien.
+
+L'écriture est best-effort (un Redis en 429 ne bloque jamais la génération du
+prompt côté habitant) et la route est rate-limitée (10 req/min/IP).
+
+---
+
 ## 7. Suivi d'erreurs (Sentry)
 
 Si `SENTRY_DSN` est défini sur Render, les erreurs serveur sont remontées à

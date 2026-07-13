@@ -3,10 +3,13 @@
 "use strict";
 const router = require("express").Router();
 const axios = require("axios");
+const rateLimit = require("express-rate-limit");
 const { REDIS_URL, REDIS_TOKEN } = require("../config");
 const { readAdminSettings, readStats, writeStats } = require("../lib/store");
-const { redisGet } = require("../lib/redis");
+const { redisGet, redisPipeline, redisLRange } = require("../lib/redis");
 const { getParisDateParts } = require("../lib/dates");
+const { capStr, finiteNum, inEnum } = require("../lib/validate");
+const { adminAuth } = require("../lib/middleware");
 const {
   shouldTrackService, shouldTrackDeviceBreakdown,
   pctTrend, sanitizeDeviceInfo, bumpDeviceBreakdown, compactSeenMap
@@ -140,6 +143,57 @@ router.post("/stats/track", async (req, res) => {
     trackedService: trackService,
     settings
   });
+});
+
+// ── Profils du kit de réplication « Partager » ───────────────
+// Envoyé par app-mezieres/js/mat-partager.js à la génération du prompt :
+// nom de commune, population, budget et niveau informatique déclarés.
+// Données non nominatives (profil de collectivité). Liste Redis plafonnée,
+// restituée dans le mail quotidien (routes/admin-email.js) et via
+// GET /admin/partager-profils.
+const PARTAGER_PROFILS_KEY = "mat:partager:profils";
+const PARTAGER_PROFILS_MAX = 500;
+
+const _partagerLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 10,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: "Trop de requêtes, réessayez dans une minute." }
+});
+
+router.post("/stats/partager", _partagerLimiter, async (req, res) => {
+  const b = req.body || {};
+  const commune = capStr(b.commune, 120).trim();
+  if (!commune) return res.status(400).json({ error: "commune requise" });
+
+  const population = finiteNum(b.population);
+  const budget = finiteNum(b.budget);
+  const entry = {
+    commune,
+    population: population !== null && population >= 0 ? Math.round(population) : null,
+    budget: budget !== null && budget >= 0 ? Math.round(budget) : null,
+    niveau: inEnum(b.niveau, ["debutant", "intermediaire"]) || "debutant",
+    sovereign: b.sovereign === true,
+    host: capStr(b.host, 40),
+    date: new Date().toISOString()
+  };
+
+  // Écriture best-effort : la réponse ne dépend jamais de Redis (cf. CLAUDE.md).
+  redisPipeline([
+    ["LPUSH", PARTAGER_PROFILS_KEY, JSON.stringify(entry)],
+    ["LTRIM", PARTAGER_PROFILS_KEY, "0", String(PARTAGER_PROFILS_MAX - 1)]
+  ]).catch(() => {});
+
+  res.json({ success: true });
+});
+
+// Lecture admin : liste complète des profils collectés (plus récent en premier)
+router.get("/admin/partager-profils", adminAuth, async (req, res) => {
+  try {
+    const profils = await redisLRange(PARTAGER_PROFILS_KEY, 0, PARTAGER_PROFILS_MAX - 1);
+    res.json({ ok: true, count: profils.length, profils });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 router.get("/stats", async (req, res) => {
