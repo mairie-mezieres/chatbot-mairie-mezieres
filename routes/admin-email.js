@@ -89,6 +89,15 @@ async function sendDailyStatsEmail() {
   const installTotal = services.installation || 0;
   const installToday = parJour[today]?.installation || 0;
 
+  // Kit de réplication « Partager » : visites/prompts du jour + profils
+  // de communes collectés à la génération du prompt (routes/stats-public.js)
+  const partagerVisitesToday = parJour[today]?.partager_visite || 0;
+  const partagerPromptsToday = parJour[today]?.partager_prompt || 0;
+  const partagerVisitesTotal = services.partager_visite || 0;
+  const partagerPromptsTotal = services.partager_prompt || 0;
+  const partagerProfils = await redisLRange('mat:partager:profils', 0, 499).catch(() => []);
+  const partagerProfilsToday = partagerProfils.filter(p => String(p.date || '').startsWith(today));
+
   // Services actifs aujourd'hui (hors mel, installation, app_open traités séparément)
   const SVC_LABELS = {
     meteo:'🌦️ Météo', actualites:'📰 Actualités', agenda:'📅 Agenda',
@@ -173,6 +182,31 @@ ${svcRows ? `<div class="card">
     ${stat(installToday > 0 ? `${installToday} / ${installTotal}` : installTotal, installToday > 0 ? "Installations aujourd'hui / total" : 'Installations PWA (total)')}
   </div>
 </div>
+
+${partagerVisitesTotal > 0 || partagerPromptsTotal > 0 || partagerProfils.length > 0 ? `<div class="card">
+  <h2>🧩 Kit réplication « Partager »</h2>
+  <div class="grid">
+    ${stat(partagerVisitesToday > 0 ? `${partagerVisitesToday} / ${partagerVisitesTotal}` : partagerVisitesTotal, partagerVisitesToday > 0 ? "Visites page aujourd'hui / total" : 'Visites page (total)')}
+    ${stat(partagerPromptsToday > 0 ? `${partagerPromptsToday} / ${partagerPromptsTotal}` : partagerPromptsTotal, partagerPromptsToday > 0 ? "Prompts générés aujourd'hui / total" : 'Prompts générés (total)')}
+  </div>
+  ${partagerProfilsToday.length > 0 ? `<div style="margin-top:12px"><strong style="font-size:0.8rem;color:#2d6a4f">Communes intéressées aujourd'hui (${partagerProfilsToday.length}) :</strong>
+    <table style="margin-top:6px">
+      <thead><tr style="background:#f3f4f6">
+        <th style="text-align:left;padding:4px 8px">Commune</th>
+        <th style="text-align:right;padding:4px 8px">Habitants</th>
+        <th style="text-align:right;padding:4px 8px">Budget</th>
+        <th style="text-align:left;padding:4px 8px">Niveau info.</th>
+      </tr></thead>
+      <tbody>${partagerProfilsToday.map(p => `
+        <tr>
+          <td style="padding:4px 8px">${String(p.commune || '—').replace(/</g,'&lt;')}${p.sovereign ? ' 🇫🇷' : ''}</td>
+          <td style="padding:4px 8px;text-align:right">${p.population != null ? Number(p.population).toLocaleString('fr-FR') : '—'}</td>
+          <td style="padding:4px 8px;text-align:right">${p.budget != null ? p.budget + ' €/mois' : '—'}</td>
+          <td style="padding:4px 8px">${p.niveau === 'intermediaire' ? 'Intermédiaire' : 'Débutant'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table></div>` : `<p style="color:#6b7280;font-style:italic;font-size:0.8rem;margin:10px 0 0">Aucun nouveau profil de commune aujourd'hui${partagerProfils.length > 0 ? ` (${partagerProfils.length} collecté${partagerProfils.length > 1 ? 's' : ''} au total)` : ''}.</p>`}
+</div>` : ''}
 
 <div class="card">
   <h2>⚡ Redis Upstash</h2>
