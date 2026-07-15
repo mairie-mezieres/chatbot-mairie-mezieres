@@ -53,5 +53,7 @@
   "UPSTASH_REDIS_DB_ID": "",
   "VAPID_EMAIL": "mailto:mairie@mezieres-lez-clery.fr",
   "VIGIEAU_COMMUNE_INSEE": "45203",
+  "VIGIEAU_LAT": 47.822,
+  "VIGIEAU_LON": 1.808,
   "WEATHER_CHECK_INTERVAL_MS": 900000
 }
