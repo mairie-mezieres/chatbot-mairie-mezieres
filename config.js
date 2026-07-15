@@ -92,6 +92,11 @@ const WEATHER_CHECK_INTERVAL_MS = Number(process.env.WEATHER_CHECK_INTERVAL_MS |
 // Sécheresse — restrictions VigiEau (séparées de la vigilance Météo-France).
 const AUTO_POST_DROUGHT_ALERTS  = process.env.AUTO_POST_DROUGHT_ALERTS === "true";
 const VIGIEAU_COMMUNE_INSEE     = process.env.VIGIEAU_COMMUNE_INSEE || "45203";
+// Point de référence (bourg) pour la requête VigiEau par coordonnées — même chemin
+// de résolution que le site vigieau.gouv.fr pour une adresse. Défaut : coordonnées
+// météo de la commune. Voir ADR-0009.
+const VIGIEAU_LAT               = Number(process.env.VIGIEAU_LAT || OPEN_METEO_LAT);
+const VIGIEAU_LON               = Number(process.env.VIGIEAU_LON || OPEN_METEO_LON);
 const DROUGHT_CHECK_INTERVAL_MS = Number(process.env.DROUGHT_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 
 module.exports = {
@@ -105,5 +110,5 @@ module.exports = {
   METEOFRANCE_VIGILANCE_URL, METEOFRANCE_API_TOKEN, AUTO_POST_WEATHER_ALERTS, AUTO_POST_MIN_LEVEL, AUTO_PUSH_WEATHER_MIN_LEVEL,
   RESEND_API_KEY, DAILY_STATS_EMAIL, CRON_SECRET, FACEBOOK_PAGE_ID,
   OPEN_METEO_LAT, OPEN_METEO_LON, OPEN_METEO_TZ, WEATHER_CHECK_INTERVAL_MS,
-  AUTO_POST_DROUGHT_ALERTS, VIGIEAU_COMMUNE_INSEE, DROUGHT_CHECK_INTERVAL_MS,
+  AUTO_POST_DROUGHT_ALERTS, VIGIEAU_COMMUNE_INSEE, VIGIEAU_LAT, VIGIEAU_LON, DROUGHT_CHECK_INTERVAL_MS,
 };

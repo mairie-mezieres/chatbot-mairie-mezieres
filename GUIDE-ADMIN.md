@@ -88,6 +88,7 @@ Le fichier [`.env.example`](.env.example) liste tout en détail. Les **essentiel
 |----------|------|
 | `AUTO_POST_DROUGHT_ALERTS` | `true` pour publier automatiquement sur Facebook quand le niveau sécheresse ≥ Alerte (le push citoyen + l'actu partent dans tous les cas). Défaut `false`. |
 | `VIGIEAU_COMMUNE_INSEE` | Code INSEE surveillé sur `api.vigieau.gouv.fr` (défaut `45203`). |
+| `VIGIEAU_LAT` / `VIGIEAU_LON` | Coordonnées du point de référence (bourg) pour la requête par géométrie — même chemin que vigieau.gouv.fr pour une adresse. Défaut : `OPEN_METEO_LAT`/`OPEN_METEO_LON`. Voir ADR-0009. |
 | `DROUGHT_CHECK_INTERVAL_MS` | Intervalle de vérification (défaut 6 h — la sécheresse évolue lentement). |
 
 ### Autres intégrations
@@ -184,6 +185,11 @@ La **vigilance Météo-France** (orages, canicule…) et les **restrictions séc
 ### Fonctionnement
 - Le backend interroge `api.vigieau.gouv.fr` toutes les `DROUGHT_CHECK_INTERVAL_MS`
   (route interne `GET /eau/restrictions/check`, polling lancé par `index.js`).
+- **Double requête** (ADR-0009) : l'API est interrogée par **coordonnées du bourg**
+  (`VIGIEAU_LAT`/`VIGIEAU_LON` — le chemin utilisé par vigieau.gouv.fr pour une
+  adresse) **et** par **code commune** ; le niveau **le plus grave** est retenu.
+  Les deux chemins de l'API peuvent diverger (zone AEP « eau potable » absente de
+  l'index par commune, constaté le 15/07/2026) — on ne sous-estime jamais.
 - Au passage à **Alerte ou plus** (ou changement d'arrêté), il crée une **actualité**
   `source: vigieau`, envoie un **push** aux abonnés actus, et publie sur **Facebook**
   si `AUTO_POST_DROUGHT_ALERTS=true`. Les consignes clés (usages interdits/réduits)
@@ -200,7 +206,8 @@ La **vigilance Météo-France** (orages, canicule…) et les **restrictions séc
 ### Dépannage
 | Symptôme | Piste |
 |---|---|
-| Niveau 🟡 « indéterminé » dans 🧪 Services | API VigiEau injoignable ou commune multi-zones (409) — réessai au prochain cycle |
+| Niveau 🟡 « indéterminé » dans 🧪 Services | API VigiEau injoignable sur les deux requêtes (coordonnées + commune) — réessai au prochain cycle |
+| Niveau plus bas que vigieau.gouv.fr pour une adresse du bourg | Ne devrait plus arriver (double requête, ADR-0009). Vérifier `VIGIEAU_LAT`/`VIGIEAU_LON` (point dans la commune) et comparer avec `GET /eau/restrictions` |
 | Pas de post Facebook en Alerte | `AUTO_POST_DROUGHT_ALERTS` ≠ `true` sur Render (le push + l'actu partent quand même) |
 | Forcer un test | `GET /eau/restrictions/check?force=1` (recrée l'actu même sans changement) |
 
