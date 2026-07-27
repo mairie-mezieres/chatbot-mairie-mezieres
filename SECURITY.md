@@ -41,8 +41,13 @@ Mistral, Anthropic, Cloudinary, etc.) — à signaler directement à leurs
 - **Timeouts** sur tous les appels sortants (axios) et **arrêt gracieux**.
 - **Validation de signature** des webhooks Trello (HMAC-SHA1) quand le
   secret est configuré.
+- **Suivi du runtime Node.js** : le socle de versions sûres est déclaré dans
+  `lib/node-baseline.js` et confronté à la version réellement en service par le
+  check 🟩 du diagnostic admin — Render ne réinstalle Node qu'au déploiement,
+  cet écart doit rester visible (voir `GUIDE-ADMIN.md` §6ter et ADR-0010).
 - **Intégration continue** : `node --check` + tests golden-master à chaque
-  modification.
+  modification, et `npm audit --audit-level=high` (non bloquant) pour signaler
+  les dépendances vulnérables.
 - **Suivi d'erreurs** en production (Sentry) pour détecter les anomalies.
 
 ## Données personnelles

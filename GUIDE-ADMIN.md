@@ -257,7 +257,8 @@ Lance un test en direct de chaque brique. Statuts : 🟢 OK · 🟡 attention ·
 
 | Check | Ce qu'il vérifie |
 |-------|------------------|
-| 🌲 Serveur API | Le backend répond |
+| 🌲 Serveur API | Le backend répond (la version affichée est lue dans `package.json`) |
+| 🟩 **Node.js (runtime)** | Version de Node du serveur face au socle de sécurité (voir §6ter) |
 | 🗄️ Redis / Upstash | Lecture/écriture du stockage |
 | 🌤️ Open-Meteo | Récupération météo de la commune |
 | ⚠️ Vigilance Météo-France | Flux vigilance du département 45 |
@@ -270,6 +271,55 @@ Lance un test en direct de chaque brique. Statuts : 🟢 OK · 🟡 attention ·
 | 📡 **Webhook Facebook (entrant)** | Abonnement au `feed` + présence de `FACEBOOK_APP_SECRET` (voir §5) |
 | 🚱 **Restrictions sécheresse (VigiEau)** | Niveau sécheresse courant de la commune (voir §5ter) |
 | 🔔 Notifications push | Clés VAPID + nombre d'abonnés |
+
+---
+
+## 6ter. Mettre à jour Node.js (check 🟩 « Node.js (runtime) »)
+
+### Pourquoi ce check existe
+
+Render ne recompile **qu'au déploiement**. La variable `NODE_VERSION` du
+`render.yaml` vaut `"22"` : à chaque build, Render installe la dernière 22.x
+disponible — mais tant qu'aucun déploiement n'a lieu, le serveur continue de
+tourner sur la version installée le jour du dernier build. Un correctif de
+sécurité Node peut donc sortir sans que le backend en bénéficie, **sans aucun
+signe visible**. Le check 🟩 rend cet écart lisible depuis l'admin.
+
+### Ce qu'affiche le check
+
+Il compare `process.version` au socle déclaré dans `lib/node-baseline.js` :
+
+| Couleur | Signification |
+|---|---|
+| 🟢 Vert | Version ≥ socle de sécurité de la ligne, aucun avis en attente |
+| 🟡 Jaune | Version conforme au socle **mais** une publication de sécurité est annoncée sans versions correctives encore connues — ou version illisible |
+| 🔴 Rouge | Version antérieure au socle, **ou** ligne Node qui n'est plus maintenue |
+
+### Procédure quand le check est 🔴 ou 🟡
+
+1. **Vérifier les versions correctives** sur <https://nodejs.org/en/security/>
+   (la veille hebdomadaire les signale aussi).
+2. **Mettre à jour `lib/node-baseline.js`** : reporter la version de chaque ligne
+   dans `MIN_SAFE_BY_LINE`, mettre `BASELINE_UPDATED` à la date du jour, et
+   remettre `PENDING_ADVISORY` à `null` une fois les versions connues.
+3. **Relever le plancher** `engines.node` dans `package.json` (même valeur que
+   la ligne 22 du socle).
+4. **Redéployer le backend** — c'est l'étape qui installe réellement le nouveau
+   Node. Un push sur `main` suffit (`autoDeploy: true`). S'il n'y a rien à
+   pousser : Render → service `chatbot-mairie-mezieres` → **Manual Deploy** →
+   **Clear build cache & deploy** (le cache de build fige sinon le runtime).
+5. **Re-lancer 🧪 Services** et vérifier que 🟩 est repassé au vert.
+
+> ℹ️ Changer de **ligne** Node (22 → 24 LTS par exemple) demande en plus de
+> modifier `NODE_VERSION` dans `render.yaml` et `node-version` dans les
+> workflows GitHub Actions des deux dépôts.
+
+### Dépendances npm
+
+La CI lance `npm audit --audit-level=high` en **non bloquant** à chaque push.
+Les avis `high`+ doivent être traités rapidement ; les avis `moderate` issus de
+la chaîne `googleapis` → `googleapis-common` → `gaxios` → `uuid` demandent une
+montée majeure de `googleapis` (breaking) et sont suivis à part.
 
 ---
 

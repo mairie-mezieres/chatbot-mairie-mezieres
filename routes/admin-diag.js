@@ -18,6 +18,8 @@ const { resolveFacebookPageId } = require("../lib/facebook");
 const { redisGet, redisSet, _isRedis429 } = require("../lib/redis");
 const { readSubs } = require("../lib/store");
 const { remiCache, calendarCache, CACHE_MS, refreshCalendarCache } = require("../lib/mel");
+const { checkNodeVersion } = require("../lib/node-baseline");
+const { version: PKG_VERSION } = require("../package.json");
 
 // ── Route setup webhook// ── Route setup webhook (à appeler une seule fois) ───────────
 router.get("/setup-webhook", adminAuth, async (req, res) => {
@@ -249,8 +251,18 @@ router.get("/admin/services/test", adminAuth, async (req, res) => {
   services.push(await runCheck("server", "Serveur API", "🌲", async () => ({
     status: "ok",
     message: "Serveur Express opérationnel",
-    details: { version: "6.6.0", uptimeSeconds: Math.round(process.uptime()) }
+    // Version lue depuis package.json : une valeur codée en dur devenait fausse
+    // à chaque release sans que personne ne s'en aperçoive.
+    details: { version: PKG_VERSION, uptimeSeconds: Math.round(process.uptime()) }
   })));
+
+  // Version du runtime Node face au socle de sécurité (lib/node-baseline.js).
+  // Render ne reconstruit qu'au déploiement : sans ce check, le backend peut
+  // rester des semaines sur un Node vulnérable sans signe visible.
+  services.push(await runCheck("runtime", "Node.js (runtime)", "🟩", async () => {
+    const verdict = checkNodeVersion();
+    return { status: verdict.status, message: verdict.message, details: verdict.details };
+  }));
 
   services.push(await runCheck("redis", "Redis / Upstash", "🗄️", async () => {
     if (!REDIS_URL || !REDIS_TOKEN) {
