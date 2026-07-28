@@ -2,11 +2,9 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
-const axios = require("axios");
 const rateLimit = require("express-rate-limit");
-const { REDIS_URL, REDIS_TOKEN } = require("../config");
 const { readAdminSettings, readStats, writeStats } = require("../lib/store");
-const { redisGet, redisPipeline, redisLRange } = require("../lib/redis");
+const { redisDel, redisPipeline, redisLRange } = require("../lib/redis");
 const { getParisDateParts } = require("../lib/dates");
 const { capStr, finiteNum, inEnum } = require("../lib/validate");
 const { adminAuth } = require("../lib/middleware");
@@ -241,24 +239,30 @@ router.get("/stats", async (req, res) => {
 });
 
 // ── Route : compteur public installations ────────────────────
+// Source unique : `stats.services.installation`, exactement la valeur affichée
+// par le mail quotidien et le tableau de bord admin. `readStats()` sert déjà
+// depuis le cache mémoire du serveur (lib/store.js) : aucune commande Redis en
+// régime permanent, donc pas besoin d'un cache dédié.
+//
+// ⚠️ L'ancienne implémentation lisait `mat:install_count_cache` (SETEX 24 h) et
+// renvoyait cette valeur telle quelle. Toute valeur posée dans cette clé **sans
+// TTL** (import/migration manuelle) figeait le compteur public indéfiniment,
+// pendant que le total réel continuait de monter → écart durable entre l'app et
+// le mail. Voir ADR-0010. La clé est purgée une fois au démarrage pour que le
+// reliquat éventuel ne traîne pas en base.
+const LEGACY_INSTALL_CACHE_KEY = "mat:install_count_cache";
+let _legacyInstallCachePurged = false;
+
 router.get("/api/install-count", async (req, res) => {
   try {
-    const cached = await redisGet("mat:install_count_cache");
-    if (cached !== null && cached !== undefined) {
-      return res.json({ count: parseInt(cached) || 0 });
-    }
     const stats = await readStats();
-    const count = stats.services?.installation || 0;
-    if (REDIS_URL) {
-      try {
-        const key = encodeURIComponent("mat:install_count_cache");
-        await axios.post(
-          `${REDIS_URL}/setex/${key}/86400`,
-          JSON.stringify(count),
-          { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
-        );
-      } catch (e) { console.warn("install-count cache set:", e.message); }
+    const count = Number(stats.services?.installation || 0);
+
+    if (!_legacyInstallCachePurged) {
+      _legacyInstallCachePurged = true;   // une seule tentative par process
+      redisDel(LEGACY_INSTALL_CACHE_KEY).catch(() => {});
     }
+
     res.json({ count });
   } catch (e) {
     console.error("install-count error:", e.message);

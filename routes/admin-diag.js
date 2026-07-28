@@ -15,8 +15,9 @@ const { getGoogleCalendarClient } = require("../lib/calendar");
 const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance } = require("../lib/meteo");
 const { fetchVigieauStatus } = require("../lib/vigieau");
 const { resolveFacebookPageId } = require("../lib/facebook");
-const { redisGet, redisSet, _isRedis429 } = require("../lib/redis");
-const { readSubs } = require("../lib/store");
+const { redisGet, redisSet, redisPipeline, _isRedis429 } = require("../lib/redis");
+const { readSubs, readStats } = require("../lib/store");
+const { getParisDateParts } = require("../lib/dates");
 const { remiCache, calendarCache, CACHE_MS, refreshCalendarCache } = require("../lib/mel");
 
 // ── Route setup webhook// ── Route setup webhook (à appeler une seule fois) ───────────
@@ -583,6 +584,43 @@ services.push(await runCheck("facebook", "Facebook Page", "📘", async () => {
       status: "ok",
       message: `Niveau : ${labels[status.level] || status.level}${status.level >= 2 ? " — actu/push/Facebook actifs" : " (pas de notification à ce niveau)"}`,
       details: { level: status.level, zones: (status.zones || []).length, consignes: (status.consignes || []).length, auto_post: AUTO_POST_DROUGHT_ALERTS }
+    };
+  }));
+
+  // Compteur d'installations : le badge public (GET /api/install-count), le mail
+  // quotidien et le tableau de bord doivent tous afficher `services.installation`.
+  // Le check remonte aussi l'éventuel reliquat de l'ancienne clé de cache
+  // `mat:install_count_cache` : si elle réapparaît (import manuel), c'est elle qui
+  // pouvait figer le badge de l'app pendant des jours (cf. ADR-0010).
+  services.push(await runCheck("installs", "Compteur installations", "🏘️", async () => {
+    const stats = await readStats();
+    const total = Number(stats.services?.installation || 0);
+    const { day: todayParis } = getParisDateParts();
+    const today = Number(stats.parJour?.[todayParis]?.installation || 0);
+
+    let legacy = null;
+    if (REDIS_URL && REDIS_TOKEN && !_isRedis429()) {
+      const r = await redisPipeline([
+        ["GET", "mat:install_count_cache"],
+        ["TTL", "mat:install_count_cache"]
+      ]);
+      const rawVal = r?.[0]?.result;
+      if (rawVal !== null && rawVal !== undefined) {
+        legacy = { value: Number(rawVal) || 0, ttl_seconds: r?.[1]?.result ?? null };
+      }
+    }
+
+    if (legacy) {
+      return {
+        status: "warn",
+        message: `Total ${total} — ancienne clé de cache encore présente (${legacy.value})`,
+        details: { total, today, legacy_cache: legacy }
+      };
+    }
+    return {
+      status: "ok",
+      message: `${total} installation(s) au total — ${today} aujourd'hui`,
+      details: { total, today, legacy_cache: null }
     };
   }));
 

@@ -270,6 +270,40 @@ Lance un test en direct de chaque brique. Statuts : 🟢 OK · 🟡 attention ·
 | 📡 **Webhook Facebook (entrant)** | Abonnement au `feed` + présence de `FACEBOOK_APP_SECRET` (voir §5) |
 | 🚱 **Restrictions sécheresse (VigiEau)** | Niveau sécheresse courant de la commune (voir §5ter) |
 | 🔔 Notifications push | Clés VAPID + nombre d'abonnés |
+| 🏘️ **Compteur installations** | Total d'installations PWA + celles du jour — le **même chiffre** que le mail quotidien et le badge de l'app (voir §6ter) |
+
+---
+
+## 6ter. Le compteur d'installations (badge de l'app)
+
+Un seul chiffre, trois affichages, **une seule source** : `services.installation`
+dans `mat:stats`.
+
+| Où | Ce qui est affiché |
+|----|--------------------|
+| Mail quotidien | « Installations PWA (total) » (+ celles du jour) |
+| Tableau de bord admin | `totalInstalls` |
+| App habitant (badge d'accueil) | `GET /api/install-count` → « 🏘️ N Macérien(ne)s ont installé MAT » |
+
+Ce que ça compte : un **événement d'installation** par navigateur/appareil
+(installation Android/Chrome ou 1er lancement en mode « app » sur iOS). Réinstaller
+ou vider le stockage du navigateur recompte l'appareil ; le chiffre est donc un
+ordre de grandeur, pas un nombre d'habitants distincts.
+
+**Si le badge de l'app diverge du mail** :
+
+1. Onglet 🧪 Services → ligne **🏘️ Compteur installations**. Statut 🟡 avec
+   « ancienne clé de cache encore présente » = une valeur figée traîne dans
+   `mat:install_count_cache` (elle est purgée automatiquement au premier appel de
+   `/api/install-count` après redémarrage — c'était la cause de l'écart
+   585 / 323 de juillet 2026, cf. ADR-0010).
+2. Sinon c'est le cache navigateur de l'habitant : le badge se rafraîchit en
+   arrière-plan au maximum une fois par heure, la valeur affichée peut donc avoir
+   jusqu'à une heure de retard.
+
+⚠️ Pour **corriger** le compteur (doublons d'un ancien import, par exemple), il
+faut modifier `services.installation` dans `mat:stats` — jamais une clé de cache,
+qui serait recalculée à la lecture suivante.
 
 ---
 
@@ -338,6 +372,7 @@ simplement désactivé (l'app fonctionne normalement).
 | « Cache bus présent mais en erreur » | Ne devrait plus rester bloqué : le dernier bon horaire est conservé et un refresh périodique (30 min) retente seul. Si l'état persiste plusieurs heures, vérifier le lien du PDF source |
 | Aucune notification push reçue (actus/déchets) | Onglet 🔔 Push : abonnés présents ? Clés VAPID définies ? Sur iPhone, l'app doit être **installée** (iOS 16.4+) |
 | Citoyen ne reçoit pas de push sur son signalement | Voir §5bis — vérifier webhook Trello actif + `MAT-REF:` présent dans la carte |
+| Le badge « X Macérien(ne)s ont installé MAT » ne bouge plus / diffère du mail | Voir §6ter : ligne 🏘️ du diagnostic. Un cache Redis figé faisait autorité sur le badge (ADR-0010) ; le compteur lit désormais directement `services.installation` |
 | L'admin renvoie « 401 » | `ADMIN_PASSWORD` absent sur Render, ou mauvais mot de passe |
 | Une intégration est 🔴 dans Services | La variable d'environnement correspondante manque ou est invalide (voir §4) |
 | Le site ne se met pas à jour | Vider le cache / forcer le rafraîchissement ; vérifier que `CACHE` a bien été incrémenté |

@@ -15,6 +15,7 @@ Règle d'or : **vérifier qu'une fonctionnalité n'existe pas déjà (code + UI 
 | **Webhook Facebook `#MAT`** — fonctionnement et dépannage | `GUIDE-ADMIN.md` §5 |
 | **Alertes sécheresse VigiEau** (séparées de la vigilance météo) — `lib/vigieau.js`, `routes/eau.js` | `GUIDE-ADMIN.md` §5ter |
 | **Kit réplication « Partager »** — profils de communes, mail quotidien, `POST /stats/partager` | `GUIDE-ADMIN.md` §6bis |
+| **Compteur d'installations** (badge app, mail, tableau de bord) — source unique `services.installation` | `GUIDE-ADMIN.md` §6ter + `docs/adr/0010-…` |
 | Présentation du backend, architecture, routes, démarrage | `README.md` |
 | Conformité de l'assistant MEL (AI Act, RGPD, sécurité) | `docs/note-conformite-MEL.md` |
 | Sécurité, signalement de vulnérabilité, données personnelles | `SECURITY.md` |
