@@ -54,14 +54,19 @@ Deux garde-fous accompagnent la décision :
 2. **Tests** (`test/routes.test.js`) : le total renvoyé suit `services.installation`
    immédiatement, sans TTL à attendre.
 
-Côté app, le cache `localStorage` du badge est conservé (affichage instantané)
-mais passe en **stale-while-revalidate** : la valeur en cache s'affiche tout de
-suite, puis un rafraîchissement en arrière-plan (au plus une fois par heure) met
-le badge à jour dans la même session.
+Côté app, le cache `localStorage` du badge est conservé (affichage instantané,
+badge visible hors-ligne) mais passe en **stale-while-revalidate** : la valeur en
+cache s'affiche tout de suite, puis un rafraîchissement en arrière-plan met le
+badge à jour dans la même session — **à chaque ouverture**, sans plancher.
+Un premier essai plafonnait la revalidation à une fois par heure ; c'était
+reproduire le problème en plus petit (valeur périmée affichée alors que le total
+avait changé) pour économiser un appel qui ne coûte aucune commande Redis, sur
+une app qui émet déjà un `stats/track` à chaque lancement.
 
 ## Conséquences
 
-- Le badge de l'app suit le total réel, au plus une heure de retard côté client.
+- Le badge de l'app suit le total réel dès l'ouverture suivante (le temps que le
+  Service Worker serve le nouvel `index.html`).
 - Ne **jamais** ré-introduire un cache Redis « valeur seule » qui fait autorité :
   s'il en faut un, stocker `{ value, ts }` et recalculer quand `ts` est trop
   ancien, pour qu'une clé sans TTL ne puisse pas geler un affichage.

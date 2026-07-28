@@ -297,9 +297,10 @@ ordre de grandeur, pas un nombre d'habitants distincts.
    `mat:install_count_cache` (elle est purgée automatiquement au premier appel de
    `/api/install-count` après redémarrage — c'était la cause de l'écart
    585 / 323 de juillet 2026, cf. ADR-0010).
-2. Sinon c'est le cache navigateur de l'habitant : le badge se rafraîchit en
-   arrière-plan au maximum une fois par heure, la valeur affichée peut donc avoir
-   jusqu'à une heure de retard.
+2. Sinon c'est l'app de l'habitant qui tourne encore sur une version précédente :
+   le badge revalide sa valeur à chaque ouverture, mais le Service Worker sert la
+   page en cache et applique la nouvelle version au lancement suivant. Fermer
+   complètement l'app puis la rouvrir suffit.
 
 ### Corriger le total (doublons d'un ancien import)
 
@@ -318,8 +319,8 @@ curl -X POST https://chatbot-mairie-mezieres.onrender.com/admin/stats/installati
 ⚠️ **Ne jamais écrire `mat:stats` directement dans Redis** (console Upstash,
 script) : le serveur garde les stats en **cache mémoire** et les réécrit au flush
 suivant (≤ 5 min), ce qui écraserait la correction. Elle doit passer par le
-process en cours, donc par la route ci-dessus. Le badge des habitants suit dans
-l'heure (cache navigateur) ; le mail, dès l'envoi suivant.
+process en cours, donc par la route ci-dessus. Le badge des habitants suit à leur
+prochaine ouverture de l'app ; le mail, dès l'envoi suivant.
 
 ---
 
