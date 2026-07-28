@@ -97,6 +97,42 @@ test("POST /webhook signature valide, feed sans #MAT → 200 EVENT_RECEIVED (ign
   delete process.env.FACEBOOK_APP_SECRET;
 });
 
+// ── Compteur public d'installations (routes/stats-public.js) ──
+// Le badge de l'app doit toujours refléter `services.installation`, c'est-à-dire
+// le total affiché par le mail quotidien et le tableau de bord — jamais une
+// valeur figée dans un cache annexe. `writeStats` n'écrit que le cache mémoire
+// (le flush Redis est périodique), donc le test reste hors-ligne.
+test("GET /api/install-count → total vivant de services.installation", async () => {
+  const store = require("../lib/store");
+  await store.writeStats({ services: { installation: 585 } });
+
+  const r = await fetch(base + "/api/install-count");
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { count: 585 });
+
+  // Une nouvelle installation doit être visible immédiatement, sans TTL à attendre.
+  await store.writeStats({ services: { installation: 586 } });
+  const r2 = await fetch(base + "/api/install-count");
+  assert.deepEqual(await r2.json(), { count: 586 });
+});
+
+test("GET /api/install-count sans stats → { count: 0 }", async () => {
+  const store = require("../lib/store");
+  await store.writeStats({});
+  const r = await fetch(base + "/api/install-count");
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { count: 0 });
+});
+
+test("POST /admin/stats/installations sans token → 401", async () => {
+  const r = await fetch(base + "/admin/stats/installations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ total: 361 }),
+  });
+  assert.equal(r.status, 401);
+});
+
 // ── Contrat de validation des entrées (chemins de rejet, sans réseau) ──
 async function postJson(path, body) {
   return fetch(base + path, {

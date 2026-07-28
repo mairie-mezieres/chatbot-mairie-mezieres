@@ -2,14 +2,13 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
-const axios = require("axios");
 const rateLimit = require("express-rate-limit");
-const { REDIS_URL, REDIS_TOKEN } = require("../config");
-const { readAdminSettings, readStats, writeStats } = require("../lib/store");
-const { redisGet, redisPipeline, redisLRange } = require("../lib/redis");
+const { readAdminSettings, readStats, writeStats, flushStatsNow } = require("../lib/store");
+const { redisDel, redisPipeline, redisLRange } = require("../lib/redis");
 const { getParisDateParts } = require("../lib/dates");
 const { capStr, finiteNum, inEnum } = require("../lib/validate");
 const { adminAuth } = require("../lib/middleware");
+const { logAudit } = require("../lib/logger");
 const {
   shouldTrackService, shouldTrackDeviceBreakdown,
   pctTrend, sanitizeDeviceInfo, bumpDeviceBreakdown, compactSeenMap
@@ -241,28 +240,76 @@ router.get("/stats", async (req, res) => {
 });
 
 // ── Route : compteur public installations ────────────────────
+// Source unique : `stats.services.installation`, exactement la valeur affichée
+// par le mail quotidien et le tableau de bord admin. `readStats()` sert déjà
+// depuis le cache mémoire du serveur (lib/store.js) : aucune commande Redis en
+// régime permanent, donc pas besoin d'un cache dédié.
+//
+// ⚠️ L'ancienne implémentation lisait `mat:install_count_cache` (SETEX 24 h) et
+// renvoyait cette valeur telle quelle. Toute valeur posée dans cette clé **sans
+// TTL** (import/migration manuelle) figeait le compteur public indéfiniment,
+// pendant que le total réel continuait de monter → écart durable entre l'app et
+// le mail. Voir ADR-0010. La clé est purgée une fois au démarrage pour que le
+// reliquat éventuel ne traîne pas en base.
+const LEGACY_INSTALL_CACHE_KEY = "mat:install_count_cache";
+let _legacyInstallCachePurged = false;
+
 router.get("/api/install-count", async (req, res) => {
   try {
-    const cached = await redisGet("mat:install_count_cache");
-    if (cached !== null && cached !== undefined) {
-      return res.json({ count: parseInt(cached) || 0 });
-    }
     const stats = await readStats();
-    const count = stats.services?.installation || 0;
-    if (REDIS_URL) {
-      try {
-        const key = encodeURIComponent("mat:install_count_cache");
-        await axios.post(
-          `${REDIS_URL}/setex/${key}/86400`,
-          JSON.stringify(count),
-          { headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" }, timeout: 8000 }
-        );
-      } catch (e) { console.warn("install-count cache set:", e.message); }
+    const count = Number(stats.services?.installation || 0);
+
+    if (!_legacyInstallCachePurged) {
+      _legacyInstallCachePurged = true;   // une seule tentative par process
+      redisDel(LEGACY_INSTALL_CACHE_KEY).catch(() => {});
     }
+
     res.json({ count });
   } catch (e) {
     console.error("install-count error:", e.message);
     res.json({ count: 0 });
+  }
+});
+
+// ── Correction du total d'installations (admin) ──────────────
+// `services.installation` est la source unique du compteur (badge de l'app, mail
+// quotidien, tableau de bord). Une correction ne peut PAS se faire en écrivant
+// `mat:stats` directement dans Redis : le serveur garde ces stats en cache
+// mémoire (`lib/store.js`) et les réécrit au flush suivant (≤ 5 min), ce qui
+// écraserait la valeur posée à la main. Elle doit donc passer par le process en
+// cours — c'est le rôle de cette route.
+//
+// Cas d'usage : retirer d'anciens doublons (import/migration). Action tracée
+// dans le journal d'audit (onglet 🪲 Logs).
+const INSTALL_TOTAL_MAX = 1_000_000;
+
+router.post("/admin/stats/installations", adminAuth, async (req, res) => {
+  const parsed = finiteNum(req.body?.total);
+  if (parsed === null || parsed < 0 || parsed > INSTALL_TOTAL_MAX) {
+    return res.status(400).json({
+      ok: false,
+      error: `total requis : entier entre 0 et ${INSTALL_TOTAL_MAX}`
+    });
+  }
+  const total = Math.round(parsed);
+
+  try {
+    const stats = await readStats();
+    if (!stats.services) stats.services = {};
+    const previous = Number(stats.services.installation || 0);
+    stats.services.installation = total;
+
+    await writeStats(stats);
+    await flushStatsNow();                       // persistance immédiate, sans attendre le flush périodique
+    await redisDel(LEGACY_INSTALL_CACHE_KEY).catch(() => {});
+
+    logAudit("stats_installations_set", `${previous} → ${total}`);
+    console.log(`🏘️ Total installations corrigé : ${previous} → ${total}`);
+
+    res.json({ ok: true, previous, total });
+  } catch (e) {
+    console.error("stats/installations:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
