@@ -3,11 +3,12 @@
 "use strict";
 const router = require("express").Router();
 const rateLimit = require("express-rate-limit");
-const { readAdminSettings, readStats, writeStats } = require("../lib/store");
+const { readAdminSettings, readStats, writeStats, flushStatsNow } = require("../lib/store");
 const { redisDel, redisPipeline, redisLRange } = require("../lib/redis");
 const { getParisDateParts } = require("../lib/dates");
 const { capStr, finiteNum, inEnum } = require("../lib/validate");
 const { adminAuth } = require("../lib/middleware");
+const { logAudit } = require("../lib/logger");
 const {
   shouldTrackService, shouldTrackDeviceBreakdown,
   pctTrend, sanitizeDeviceInfo, bumpDeviceBreakdown, compactSeenMap
@@ -267,6 +268,48 @@ router.get("/api/install-count", async (req, res) => {
   } catch (e) {
     console.error("install-count error:", e.message);
     res.json({ count: 0 });
+  }
+});
+
+// ── Correction du total d'installations (admin) ──────────────
+// `services.installation` est la source unique du compteur (badge de l'app, mail
+// quotidien, tableau de bord). Une correction ne peut PAS se faire en écrivant
+// `mat:stats` directement dans Redis : le serveur garde ces stats en cache
+// mémoire (`lib/store.js`) et les réécrit au flush suivant (≤ 5 min), ce qui
+// écraserait la valeur posée à la main. Elle doit donc passer par le process en
+// cours — c'est le rôle de cette route.
+//
+// Cas d'usage : retirer d'anciens doublons (import/migration). Action tracée
+// dans le journal d'audit (onglet 🪲 Logs).
+const INSTALL_TOTAL_MAX = 1_000_000;
+
+router.post("/admin/stats/installations", adminAuth, async (req, res) => {
+  const parsed = finiteNum(req.body?.total);
+  if (parsed === null || parsed < 0 || parsed > INSTALL_TOTAL_MAX) {
+    return res.status(400).json({
+      ok: false,
+      error: `total requis : entier entre 0 et ${INSTALL_TOTAL_MAX}`
+    });
+  }
+  const total = Math.round(parsed);
+
+  try {
+    const stats = await readStats();
+    if (!stats.services) stats.services = {};
+    const previous = Number(stats.services.installation || 0);
+    stats.services.installation = total;
+
+    await writeStats(stats);
+    await flushStatsNow();                       // persistance immédiate, sans attendre le flush périodique
+    await redisDel(LEGACY_INSTALL_CACHE_KEY).catch(() => {});
+
+    logAudit("stats_installations_set", `${previous} → ${total}`);
+    console.log(`🏘️ Total installations corrigé : ${previous} → ${total}`);
+
+    res.json({ ok: true, previous, total });
+  } catch (e) {
+    console.error("stats/installations:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

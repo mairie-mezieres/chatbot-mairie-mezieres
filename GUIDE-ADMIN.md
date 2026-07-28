@@ -301,9 +301,25 @@ ordre de grandeur, pas un nombre d'habitants distincts.
    arrière-plan au maximum une fois par heure, la valeur affichée peut donc avoir
    jusqu'à une heure de retard.
 
-⚠️ Pour **corriger** le compteur (doublons d'un ancien import, par exemple), il
-faut modifier `services.installation` dans `mat:stats` — jamais une clé de cache,
-qui serait recalculée à la lecture suivante.
+### Corriger le total (doublons d'un ancien import)
+
+Onglet **🗑️ Purge** → carte **🏘️ Compteur d'installations** : saisir le nouveau
+total, « Corriger ». L'ancienne et la nouvelle valeur sont tracées dans 🪲 Logs.
+
+En ligne de commande, même effet :
+
+```bash
+curl -X POST https://chatbot-mairie-mezieres.onrender.com/admin/stats/installations \
+  -H "Content-Type: application/json" -H "x-admin-token: $ADMIN_PASSWORD" \
+  -d '{"total": 361}'
+# → {"ok":true,"previous":585,"total":361}
+```
+
+⚠️ **Ne jamais écrire `mat:stats` directement dans Redis** (console Upstash,
+script) : le serveur garde les stats en **cache mémoire** et les réécrit au flush
+suivant (≤ 5 min), ce qui écraserait la correction. Elle doit passer par le
+process en cours, donc par la route ci-dessus. Le badge des habitants suit dans
+l'heure (cache navigateur) ; le mail, dès l'envoi suivant.
 
 ---
 

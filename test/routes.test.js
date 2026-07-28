@@ -124,6 +124,15 @@ test("GET /api/install-count sans stats → { count: 0 }", async () => {
   assert.deepEqual(await r.json(), { count: 0 });
 });
 
+test("POST /admin/stats/installations sans token → 401", async () => {
+  const r = await fetch(base + "/admin/stats/installations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ total: 361 }),
+  });
+  assert.equal(r.status, 401);
+});
+
 // ── Contrat de validation des entrées (chemins de rejet, sans réseau) ──
 async function postJson(path, body) {
   return fetch(base + path, {

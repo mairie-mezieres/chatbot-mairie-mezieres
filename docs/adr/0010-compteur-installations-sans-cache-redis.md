@@ -67,7 +67,12 @@ le badge à jour dans la même session.
   ancien, pour qu'une clé sans TTL ne puisse pas geler un affichage.
 - Une correction manuelle du compteur doit se faire sur `mat:stats`
   (`services.installation`), la seule source de vérité — plus sur une clé de
-  cache.
+  cache. Elle passe par **`POST /admin/stats/installations`** (`{ total }`,
+  `x-admin-token`, tracée dans le journal d'audit), exposée dans l'admin :
+  onglet 🗑️ Purge → « 🏘️ Compteur d'installations ». Écrire `mat:stats`
+  directement dans Redis ne tiendrait pas : le serveur garde les stats en cache
+  mémoire et les réécrit au flush suivant (≤ 5 min), écrasant la valeur posée à
+  la main.
 - Le total reste un compteur d'**événements d'installation** : un réinstall ou un
   vidage du stockage du navigateur recompte l'appareil (voir
   `app-mezieres/js/mat-core.js`, drapeau `mat_install_tracked`).
