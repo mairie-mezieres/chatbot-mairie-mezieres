@@ -7,17 +7,50 @@
 // SÉPARATION STRICTE d'avec la vigilance Météo-France : ce flux ne touche jamais
 // au bandeau de vigilance météo. Quand le niveau atteint « alerte » (2) ou plus,
 // on publie une ACTUALITÉ distincte (source: 'vigieau') + push + Facebook, via les
-// briques actu existantes. Calqué sur routes/meteo.js (dédup signature + verrou).
+// briques actu existantes.
+//
+// Ce qui déclenche (ou non) une notification est décidé par `decideDroughtAction`
+// (lib/vigieau.js, fonction pure) : montée notifiée tout de suite, niveau inchangé
+// jamais renotifié, baisse seulement sur lecture complète et confirmée. Ici on ne
+// garde que la persistance (Redis + miroir mémoire) et le verrou anti-course.
 
 const router = require("express").Router();
-const { fetchVigieauStatus, vigieauSignature, buildDroughtActu, droughtImageUrl } = require("../lib/vigieau");
+const { fetchVigieauStatus, vigieauSignature, decideDroughtAction, buildDroughtActu, droughtImageUrl } = require("../lib/vigieau");
 const { readNews, writeNews } = require("../lib/store");
 const { sendActuPush, publishActuToFacebook } = require("../lib/actu");
 const { redisGet, redisSet, redisSetex, redisSetNxEx, redisDel } = require("../lib/redis");
 const { AUTO_POST_DROUGHT_ALERTS } = require("../config");
 
-const LAST_KEY = "mat:vigieau:last";          // dernière signature postée (dédup durable)
+const LAST_KEY = "mat:vigieau:last";          // dernier niveau notifié (dédup durable)
+const PENDING_KEY = "mat:vigieau:pending";    // baisse en cours de confirmation
 const RACE_TTL_S = 2 * 3600;                  // verrou anti-course (court)
+
+// Miroir mémoire des deux clés (même principe que les listes programmées, ADR-0007) :
+// `redisGet` renvoie `null` aussi bien pour « clé absente » que pour « Redis en
+// hoquet (429, timeout) ». Sans ce miroir, un hoquet Redis effaçait la mémoire du
+// dernier niveau notifié et relançait une notification identique.
+let _lastMem = null;
+let _pendingMem = null;
+
+async function _readLast() {
+  const v = await redisGet(LAST_KEY);
+  if (v) _lastMem = v;
+  return v || _lastMem;
+}
+async function _writeLast(v) {
+  _lastMem = v;
+  await redisSet(LAST_KEY, v).catch(() => {});
+}
+async function _readPending() {
+  const v = await redisGet(PENDING_KEY);
+  if (v) _pendingMem = v;
+  return v || _pendingMem;
+}
+async function _writePending(v) {
+  _pendingMem = v;
+  if (v) await redisSet(PENDING_KEY, v).catch(() => {});
+  else await redisDel(PENDING_KEY).catch(() => {});
+}
 
 function _claimKey(sig) { return `mat:vigieau:claim:${sig}`; }
 
@@ -89,50 +122,38 @@ router.get("/eau/restrictions/check", async (req, res) => {
       return res.json({ status: "unknown", detail: status.reason || null });
     }
 
-    const last = await redisGet(LAST_KEY); // { sig, level, at }
-    const lastLevel = last && typeof last.level === "number" ? last.level : 0;
+    const [last, pending] = await Promise.all([_readLast(), _readPending()]);
     const sig = vigieauSignature(status);
+    const decision = decideDroughtAction({ status, last, pending, force });
+    const memorized = { sig, level: status.level, at: new Date().toISOString() };
 
-    // Montée / changement d'arrêté au niveau alerte (2) et plus.
-    if (status.level >= 2) {
-      if (!force && last && last.sig === sig) {
-        return res.json({ status: "duplicate", level: status.level });
+    // Rien à notifier : niveau inchangé, sous le seuil, ou baisse pas encore
+    // confirmée (dans ce dernier cas on garde en mémoire le niveau notifié —
+    // `memorize: false` — pour ne pas voir le retour au niveau réel comme une
+    // montée et renotifier).
+    if (decision.action !== "publish") {
+      if (decision.memorize) await _writeLast(memorized);
+      await _writePending(decision.pending);
+      if (decision.reason !== "unchanged" && decision.reason !== "below-threshold") {
+        console.log(`🚱 VigiEau : niveau ${status.level} — ${decision.reason} (aucune notification)`);
       }
-      if (!(await _claim(sig, force))) {
-        return res.json({ status: "duplicate", level: status.level });
-      }
-      try {
-        const out = await _publishDroughtActu(status);
-        await redisSet(LAST_KEY, { sig, level: status.level, at: new Date().toISOString() });
-        console.log(`🚱 VigiEau : actu sécheresse publiée (niveau ${status.level})`);
-        return res.json({ status: "published", level: status.level, ...out });
-      } catch (e) {
-        await _release(sig);
-        throw e;
-      }
+      return res.json({ status: decision.reason, level: status.level, complete: !!status.complete });
     }
 
-    // Levée : on était en alerte (≥2), on repasse sous le seuil → actu « fin des restrictions ».
-    if (lastLevel >= 2 && status.level < 2) {
-      const liftSig = `lift|${sig}`;
-      if (force || !last || last.sig !== liftSig) {
-        if (await _claim(liftSig, force)) {
-          try {
-            const out = await _publishDroughtActu(status);
-            await redisSet(LAST_KEY, { sig: liftSig, level: status.level, at: new Date().toISOString() });
-            console.log("🚱 VigiEau : fin des restrictions publiée");
-            return res.json({ status: "lifted", level: status.level, ...out });
-          } catch (e) {
-            await _release(liftSig);
-            throw e;
-          }
-        }
-      }
+    // Verrou anti-course : deux instances ne publient pas la même transition.
+    if (!(await _claim(sig, force))) {
+      return res.json({ status: "duplicate", level: status.level });
     }
-
-    // Sous le seuil (vigilance ou aucune) sans transition à notifier : on mémorise l'état.
-    await redisSet(LAST_KEY, { sig, level: status.level, at: new Date().toISOString() });
-    return res.json({ status: "below-threshold", level: status.level });
+    try {
+      const out = await _publishDroughtActu(status);
+      await _writeLast(memorized);
+      await _writePending(null);
+      console.log(`🚱 VigiEau : actu sécheresse publiée (niveau ${status.level}, ${decision.reason})`);
+      return res.json({ status: "published", reason: decision.reason, level: status.level, ...out });
+    } catch (e) {
+      await _release(sig);
+      throw e;
+    }
   } catch (e) {
     console.error("🚱 VigiEau check error:", e.message);
     res.status(500).json({ error: "Contrôle sécheresse impossible", detail: e.message });
