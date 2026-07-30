@@ -580,10 +580,15 @@ services.push(await runCheck("facebook", "Facebook Page", "📘", async () => {
       };
     }
     const labels = { 0: "Aucune restriction", 1: "Vigilance", 2: "Alerte", 3: "Alerte renforcée", 4: "Crise" };
+    // Lecture partielle = une seule des deux requêtes (coordonnées / commune) a
+    // abouti : le niveau peut être sous-estimé, aucune baisse n'est actée dessus.
+    const partial = status.complete === false;
     return {
-      status: "ok",
-      message: `Niveau : ${labels[status.level] || status.level}${status.level >= 2 ? " — actu/push/Facebook actifs" : " (pas de notification à ce niveau)"}`,
-      details: { level: status.level, zones: (status.zones || []).length, consignes: (status.consignes || []).length, auto_post: AUTO_POST_DROUGHT_ALERTS }
+      status: partial ? "warn" : "ok",
+      message: `Niveau : ${labels[status.level] || status.level}`
+        + (status.level >= 2 ? " — actu/push/Facebook actifs" : " (pas de notification à ce niveau)")
+        + (partial ? " — lecture partielle (une requête VigiEau en échec)" : ""),
+      details: { level: status.level, complete: !partial, zones: (status.zones || []).length, consignes: (status.consignes || []).length, auto_post: AUTO_POST_DROUGHT_ALERTS }
     };
   }));
 

@@ -190,13 +190,37 @@ La **vigilance Météo-France** (orages, canicule…) et les **restrictions séc
   adresse) **et** par **code commune** ; le niveau **le plus grave** est retenu.
   Les deux chemins de l'API peuvent diverger (zone AEP « eau potable » absente de
   l'index par commune, constaté le 15/07/2026) — on ne sous-estime jamais.
-- Au passage à **Alerte ou plus** (ou changement d'arrêté), il crée une **actualité**
-  `source: vigieau`, envoie un **push** aux abonnés actus, et publie sur **Facebook**
-  si `AUTO_POST_DROUGHT_ALERTS=true`. Les consignes clés (usages interdits/réduits)
+- Au passage à **Alerte ou plus**, il crée une **actualité** `source: vigieau`,
+  envoie un **push** aux abonnés actus, et publie sur **Facebook** si
+  `AUTO_POST_DROUGHT_ALERTS=true`. Les consignes clés (usages interdits/réduits)
   sont incluses, avec un lien vers `vigieau.gouv.fr`.
 - Au **retour sous le seuil**, une actu « fin des restrictions » est publiée.
-- **Déduplication** : on ne reposte que si le niveau OU l'arrêté change (Redis
-  `mat:vigieau:last` + verrou anti-course `mat:vigieau:claim:*`).
+
+#### Quand une notification part — et quand elle ne part pas (ADR-0011)
+Ce qui déclenche une notification est un **changement de niveau confirmé**, jamais
+un simple changement d'arrêté (le texte publié serait identique) :
+
+| Situation | Notification ? |
+|---|---|
+| Niveau **inchangé** (même si l'arrêté change) | ❌ Non |
+| **Montée** (Alerte ou plus) | ✅ Oui, tout de suite |
+| **Baisse** vue par une **lecture partielle** (une des deux requêtes VigiEau en échec) | ❌ Non — et le niveau lu est ignoré |
+| **Baisse** confirmée par **2 lectures complètes** consécutives | ✅ Oui (fin des restrictions, ou actu du nouveau niveau) |
+| Niveau **indéterminé** (API injoignable) | ❌ Non, rien n'est modifié |
+
+> ⚠️ Une **lecture partielle** ne peut que **sous-estimer** le niveau (elle voit
+> moins de zones). Elle est donc bonne pour **alerter**, jamais pour **rassurer** :
+> c'est ce qui a causé le double envoi « alerte » puis « crise » des 29–30/07/2026
+> alors que la commune n'avait pas quitté le niveau crise.
+>
+> Conséquence assumée : une **levée** réelle est annoncée avec un cycle de retard
+> (~12 h avec un cycle de 6 h). La ligne « Restrictions » de l'app, elle, reste
+> en temps réel.
+
+- **État mémorisé** : Redis `mat:vigieau:last` (dernier niveau notifié) +
+  `mat:vigieau:pending` (baisse en cours de confirmation) + verrou anti-course
+  `mat:vigieau:claim:*`. Les deux premières clés ont un **miroir mémoire** : un
+  hoquet Redis (429 Upstash) ne fait plus repartir une notification déjà envoyée.
 - **Visuels** : chaque niveau a sa carte 1200×630 (`img/secheresse/secheresse-{vigilance,alerte,alerte-renforcee,crise,fin}.png`
   côté app), illustrant l'actu / le push / le post Facebook — comme les visuels de
   vigilance météo. Régénérables via `node scripts/generate-secheresse-cards.js`
@@ -207,6 +231,10 @@ La **vigilance Météo-France** (orages, canicule…) et les **restrictions séc
 | Symptôme | Piste |
 |---|---|
 | Niveau 🟡 « indéterminé » dans 🧪 Services | API VigiEau injoignable sur les deux requêtes (coordonnées + commune) — réessai au prochain cycle |
+| 🟡 « lecture partielle » dans 🧪 Services | Une seule des deux requêtes VigiEau a abouti : le niveau affiché peut être sous-estimé. Aucune baisse n'est actée dans cet état (ADR-0011) — réessai au prochain cycle |
+| Deux notifications sécheresse pour le même niveau | Ne devrait plus arriver (ADR-0011) : seul un changement de niveau notifie. Si ça se reproduit, regarder les logs `🚱 VigiEau` — la ligne indique la raison retenue (`unchanged`, `escalation`, `descent-incomplete`, `descent-pending`…) |
+| « Fin des restrictions » annoncée alors que la sécheresse continue | Ne devrait plus arriver : une baisse exige 2 lectures complètes consécutives (ADR-0011) |
+| La levée des restrictions tarde à être annoncée | Normal : ~12 h (2 cycles) le temps de confirmer, pour ne pas annoncer une fausse levée |
 | Niveau plus bas que vigieau.gouv.fr pour une adresse du bourg | Ne devrait plus arriver (double requête, ADR-0009). Vérifier `VIGIEAU_LAT`/`VIGIEAU_LON` (point dans la commune) et comparer avec `GET /eau/restrictions` |
 | Pas de post Facebook en Alerte | `AUTO_POST_DROUGHT_ALERTS` ≠ `true` sur Render (le push + l'actu partent quand même) |
 | Forcer un test | `GET /eau/restrictions/check?force=1` (recrée l'actu même sans changement) |
