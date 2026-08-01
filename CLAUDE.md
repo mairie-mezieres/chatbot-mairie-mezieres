@@ -129,3 +129,31 @@ Architecture à connaître avant toute modification des notifications :
   dans `routes/admin-actus.js`, le buffer stats de `lib/store.js`, et l'ADR-0007).
   La consommation attendue est de quelques centaines de commandes/jour — si le mail
   quotidien annonce des milliers, chercher un polling Redis dans un `setInterval`.
+
+## ⛔ Édition de fichiers — règles non négociables
+
+**Incident du 1ᵉʳ août 2026 (dépôt `app-mezieres`, même classe d'erreur possible ici) :**
+un fichier de documentation est passé de 41 Ko à 85 Mo et a été poussé sur `main` sans
+que personne ne le voie. Une substitution par script dont le motif matchait la **chaîne
+vide** a inséré son bloc de remplacement entre *chaque caractère* du fichier — 39 508
+copies, contenu réel entièrement détruit. Détecté seulement 2 versions plus tard.
+Voir `app-mezieres/docs/adr/0009-edition-de-fichiers-verifier-avant-de-commiter.md`.
+
+Ce qui a permis le désastre : le fichier n'a jamais été rouvert après modification, et
+`git add -A` ne dit rien de la taille de ce qu'il ajoute.
+
+**Règles :**
+
+1. **Utiliser l'outil `Edit`** pour modifier un fichier existant. Il échoue proprement
+   si le motif est absent ou ambigu — un script de substitution, non.
+2. **Ne jamais** faire de `re.sub` / `sed` / `.replace()` sur un fichier entier via un
+   script sans avoir vérifié que le motif ne peut pas matcher la chaîne vide
+   (`*`, `?`, `{0,n}`, alternance avec branche vide…).
+3. **Après toute édition automatisée, vérifier avant de commiter** :
+   ```bash
+   ls -la <fichier> && wc -l <fichier>
+   git diff --stat --cached
+   ```
+   Une variation de taille sans rapport avec l'ampleur du changement = STOP.
+4. Ne pas se fier au succès d'un script pour conclure que le résultat est correct :
+   **relire le fichier**.
