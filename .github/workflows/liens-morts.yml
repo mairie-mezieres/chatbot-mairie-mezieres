@@ -60,6 +60,14 @@ jobs:
             --exclude 'api\.vigieau\.beta\.gouv\.fr'
             --exclude 'sentry\.io'
             --exclude 'localhost'
+            --exclude 'api\.anthropic\.com'
+            --exclude 'api\.mistral\.ai'
+            --exclude 'api\.resend\.com'
+            --exclude 'trello\.com'
+            --exclude 'overpass-api\.de'
+            --exclude 'apicarto\.ign\.fr'
+            --exclude 'open-meteo\.com'
+            --exclude 'upstash\.io'
             'lib/*.js' 'routes/*.js' '*.md' 'docs/**/*.md'
           format: markdown
           output: ./lychee/rapport.md
