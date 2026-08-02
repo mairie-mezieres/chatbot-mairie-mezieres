@@ -4,6 +4,7 @@
 const router = require("express").Router();
 const { readAdminSettings, readNews, writeNews } = require("../lib/store");
 const { redisGet, redisSet, redisSismember, redisSadd, redisSrem, _isRedis429 } = require("../lib/redis");
+const { inEnum } = require("../lib/validate");
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -130,6 +131,80 @@ router.post("/event/:uid/rsvp", async (req, res) => {
     res.json({ count: newCount, rsvp });
   } catch (e) {
     console.error("POST /event/:uid/rsvp:", e.message);
+    res.status(500).json({ error: "Erreur serveur" });
+  }
+});
+
+// ─── « Le saviez-vous ? » — répartition des réponses ─────────────────────────
+// Alimente la ligne « X % des Macérien(ne)s ont répondu comme vous ». Même
+// motif que les RSVP ci-dessus : un Set Redis pour dédupliquer par appareil,
+// un compteur. Le nombre de clés est borné par la taille du corpus (quelques
+// centaines d'entrées dans app-mezieres/data/saviez-vous.json), il n'y a donc
+// pas de croissance non bornée à purger.
+//
+// Le contenu du fait N'EST PAS ici : il vit dans le dépôt frontend, versionné
+// et relu. Le backend ne connaît que des identifiants et des compteurs.
+
+const SV_SET_KEY   = id => "mat:sv:votants:" + id;
+const SV_COUNT_KEY = id => "mat:sv:count:" + id;
+
+// Les identifiants viennent du corpus frontend (« calc-orleans », « plu-approbation »…).
+// safeId() de lib/validate.js ne vaut que pour des entiers : on valide ici le
+// format textuel, sur le modèle de getDeviceId ci-dessus.
+function svId(raw) {
+  const s = (raw || "").toString().trim();
+  return /^[a-z0-9-]{2,64}$/i.test(s) ? s : null;
+}
+
+async function svCounts(id) {
+  const d = await redisGet(SV_COUNT_KEY(id));
+  return {
+    oui: Number(d && d.oui) || 0,
+    non: Number(d && d.non) || 0
+  };
+}
+
+router.get("/saviezvous/:id", async (req, res) => {
+  try {
+    const id = svId(req.params.id);
+    if (!id) return res.status(400).json({ error: "identifiant invalide" });
+    const deviceId = getDeviceId(req);
+    const c = await svCounts(id);
+    const moi = deviceId ? await redisSismember(SV_SET_KEY(id), deviceId) : false;
+    res.json({ oui: c.oui, non: c.non, moi });
+  } catch (e) {
+    // Best-effort : le frontend masque simplement le pourcentage.
+    res.json({ oui: 0, non: 0, moi: false });
+  }
+});
+
+router.post("/saviezvous/:id", async (req, res) => {
+  if (!await reactionsAllowed()) return res.status(503).json({ error: "Réactions désactivées" });
+
+  const id = svId(req.params.id);
+  if (!id) return res.status(400).json({ error: "identifiant invalide" });
+
+  const reponse = inEnum((req.body || {}).reponse, ["oui", "non"]);
+  if (!reponse) return res.status(400).json({ error: "réponse attendue : oui ou non" });
+
+  const deviceId = getDeviceId(req);
+  if (!deviceId) return res.status(400).json({ error: "device-id requis" });
+
+  try {
+    // Une seule réponse par appareil et par fait : on ne retire jamais, à la
+    // différence d'un RSVP. La répartition doit rester le reflet des premières
+    // intuitions, pas d'un vote qu'on corrige après avoir lu la réponse.
+    const deja = await redisSismember(SV_SET_KEY(id), deviceId);
+    const c = await svCounts(id);
+    if (deja) return res.json(c);
+
+    await redisSadd(SV_SET_KEY(id), deviceId);
+    c[reponse] = c[reponse] + 1;
+    await redisSet(SV_COUNT_KEY(id), c);
+
+    res.json(c);
+  } catch (e) {
+    console.error("POST /saviezvous/:id:", e.message);
     res.status(500).json({ error: "Erreur serveur" });
   }
 });

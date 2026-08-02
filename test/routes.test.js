@@ -170,3 +170,35 @@ test("PATCH /admin/signals/:id sans token → 401", async () => {
   });
   assert.equal(r.status, 401);
 });
+
+// ── « Le saviez-vous ? » (routes/reactions.js) ────────────────
+// Seuls les rejets de validation sont testés : ils ne touchent pas Redis,
+// donc restent déterministes hors-ligne.
+
+test("POST /saviezvous/:id avec un identifiant invalide → 400", async () => {
+  const r = await fetch(base + "/saviezvous/pas%20un%20id!", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-device-id": "mat-test-1234" },
+    body: JSON.stringify({ reponse: "oui" }),
+  });
+  assert.equal(r.status, 400);
+});
+
+test("POST /saviezvous/:id sans réponse oui/non → 400", async () => {
+  const r = await fetch(base + "/saviezvous/plu-approbation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-device-id": "mat-test-1234" },
+    body: JSON.stringify({ reponse: "peut-etre" }),
+  });
+  assert.equal(r.status, 400);
+});
+
+test("POST /saviezvous/:id sans device-id → 400", async () => {
+  const r = await postJson("/saviezvous/plu-approbation", { reponse: "oui" });
+  assert.equal(r.status, 400);
+});
+
+test("GET /saviezvous/:id avec un identifiant invalide → 400", async () => {
+  const r = await fetch(base + "/saviezvous/" + encodeURIComponent("../../etc"));
+  assert.equal(r.status, 400);
+});
