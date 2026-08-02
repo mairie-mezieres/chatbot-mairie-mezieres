@@ -30,7 +30,7 @@ test("nouvel habitant : check-list complète des démarches d'arrivée", () => {
   assert.match(a, /service-public\.gouv\.fr/);
   assert.match(a, /portail-usagers\.ccterresduvaldeloire\.fr/);
   assert.match(a, /listes électorales/);
-  assert.match(a, /valdeloire-fibre\.fr/);
+  assert.match(a, /lysseo\.fr/);
   // Variantes de formulation
   assert.ok(ask("je suis un nouvel habitant de la commune"));
   assert.ok(ask("existe-t-il un guide d'arrivée ?"));
@@ -111,6 +111,24 @@ test("l'apostrophe ne casse plus la carte d'identité ni la pièce d'identité",
 test("« maison de santé » et « centre de loisirs » écrits en toutes lettres", () => {
   assert.match(ask("où est la maison de santé ?") || "", /Val d'Ardoux/);
   assert.match(ask("y a-t-il un centre de loisirs ?") || "", /centre de loisirs/);
+});
+
+// ─── Opérateur fibre ─────────────────────────────────────────────────
+// La réponse annonçait « Val de Loire Fibre » et le domaine
+// valdeloire-fibre.fr, qui n'existe pas (échec DNS, constaté en
+// production). Ce réseau dessert l'Indre-et-Loire et le Loir-et-Cher, pas
+// le Loiret. L'arbre de décision de MEL, validé par la mairie, désignait
+// Lysséo depuis le début : c'était une double source divergente.
+
+test("fibre : l'opérateur annoncé est Lysséo, pas Val de Loire Fibre", () => {
+  const a = ask("comment vérifier mon éligibilité à la fibre ?");
+  assert.ok(a);
+  assert.match(a, /Lysséo/);
+  assert.match(a, /https:\/\/lysseo\.fr/);
+  assert.doesNotMatch(a, /Val de Loire Fibre/);
+  assert.doesNotMatch(a, /valdeloire-fibre/);
+  // L'ancien nom reste compris : un habitant peut encore l'employer.
+  assert.ok(ask("le déploiement Val de Loire Fibre en est où ?"));
 });
 
 // ─── Non-régression : jour de collecte du bac jaune ───────────────────

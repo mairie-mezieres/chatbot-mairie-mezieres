@@ -137,6 +137,20 @@ Architecture à connaître avant toute modification des notifications :
 > les `DIRECT_RULES` ci-dessus, pour que MEL sache répondre à la même question en langage
 > naturel. Les deux doivent rester cohérents.
 
+## Liens des réponses — vérification automatique
+
+- Les adresses citées dans les réponses vieillissent sans prévenir. Le workflow
+  `.github/workflows/liens-morts.yml` (lundi 07h30 UTC + `workflow_dispatch`) scanne
+  `lib/`, `routes/` et la doc avec lychee, et **ouvre une issue** `liens-morts` si
+  quelque chose casse. Le pendant existe dans `app-mezieres` pour les `.html` et `js/`.
+- Origine : la règle `fibre` annonçait `valdeloire-fibre.fr`, un domaine qui **n'existe
+  pas** (échec DNS), et la règle CNI renvoyait vers le site d'une seule commune. Rien ne
+  le détectait — le scan de `app-mezieres` ne couvrait que ses pages HTML.
+- ⚠️ **Opérateur fibre = Lysséo** (`https://lysseo.fr`), pas « Val de Loire Fibre » : ce
+  dernier dessert l'Indre-et-Loire et le Loir-et-Cher, pas le Loiret. L'arbre de décision
+  de MEL (`app-mezieres/js/mat-mel.js`) le disait déjà — c'était une **double source
+  divergente**, la même classe de problème que pour les associations.
+
 ## Associations (grounding MEL)
 
 - MEL ne doit JAMAIS inventer d'association : la liste officielle est la constante `ASSOCIATIONS`
