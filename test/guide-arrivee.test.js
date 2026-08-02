@@ -16,7 +16,7 @@
  */
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { findDirectAnswer, detectTopics } = require("../lib/mel");
+const { findDirectAnswer, detectTopics, DIRECT_RULES } = require("../lib/mel");
 const { normalizeQuestion } = require("../lib/text");
 
 const ask = q => findDirectAnswer(normalizeQuestion(q), []);
@@ -123,6 +123,47 @@ test("collecte : le bac jaune est annoncé le mardi des semaines paires", () => 
   assert.doesNotMatch(a, /lundi sur deux/);
   // Le bac gris reste le lundi.
   assert.match(a, /chaque lundi matin/);
+});
+
+// ─── Liens cliquables dans les réponses ──────────────────────────────
+// L'app ne fabrique un lien que sur `https?://…` et `www.…`
+// (`_renderDirectAnswer`, app-mezieres/js/mat-mel.js). Un domaine écrit nu
+// — « mairie-clery-saint-andre.fr » — reste du texte mort : l'habitant le
+// voit mais ne peut pas l'ouvrir. Et comme le motif d'URL est `[^\s<>]+`,
+// une ponctuation collée derrière est AVALÉE dans le href : écrire
+// « (sur https://exemple.fr) » produit un lien vers « https://exemple.fr) »,
+// donc cassé. D'où les deux propriétés vérifiées ici.
+
+const URL_RE = /https?:\/\/[^\s<>]+/g;
+
+test("carte d'identité et passeport pointent vers le service officiel ANTS", () => {
+  const cni = ask("où faire ma carte d'identité ?");
+  assert.match(cni, /https:\/\/passeport\.ants\.gouv\.fr\/services\/geolocaliser-une-mairie-habilitee/);
+  assert.doesNotMatch(cni, /mairie-clery-saint-andre\.fr/);
+  assert.match(ask("comment faire un passeport ?"), /geolocaliser-une-mairie-habilitee/);
+});
+
+test("aucune URL ne se termine par une ponctuation avalée dans le lien", () => {
+  const fautifs = [];
+  for (const r of DIRECT_RULES) {
+    for (const u of r.answer.match(URL_RE) || []) {
+      if (/[.,;:!?)\]»]$/.test(u)) fautifs.push(r.name + " → " + u);
+    }
+  }
+  assert.deepEqual(fautifs, [], "URL suivie d'une ponctuation collée (le lien l'inclut et casse)");
+});
+
+test("les règles du guide d'arrivée n'annoncent que des liens ouvrables", () => {
+  // Périmètre : les règles ajoutées pour le guide. Les règles héritées
+  // contiennent encore des domaines nus, corrigés séparément côté frontend.
+  const nommees = ["demarches_cni", "demarches_passeport", "demarches_changement_adresse", "nouvel_habitant"];
+  for (const nom of nommees) {
+    const r = DIRECT_RULES.find(x => x.name === nom);
+    assert.ok(r, "règle " + nom + " introuvable");
+    const nus = (r.answer.match(/(?:[a-z0-9-]+\.)+(?:gouv\.fr|fr|com|org)\b/g) || [])
+      .filter(d => !(r.answer.match(URL_RE) || []).some(u => u.includes(d)));
+    assert.deepEqual(nus, [], nom + " contient un domaine non cliquable");
+  }
 });
 
 // ─── Topic (stats onglet 🤖 IA + pages sources de buildContext) ───────
