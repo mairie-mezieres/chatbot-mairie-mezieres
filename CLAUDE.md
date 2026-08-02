@@ -150,6 +150,12 @@ Architecture à connaître avant toute modification des notifications :
   dernier dessert l'Indre-et-Loire et le Loir-et-Cher, pas le Loiret. L'arbre de décision
   de MEL (`app-mezieres/js/mat-mel.js`) le disait déjà — c'était une **double source
   divergente**, la même classe de problème que pour les associations.
+- ⚠️ **`SOURCES` ne contient plus que des pages CCTVL.** Le domaine
+  `mezieres-lez-clery.fr` sert désormais l'application : l'ancien site WordPress
+  n'existe plus, et ses 20 pages référencées ici renvoyaient toutes 404. `buildContext`
+  téléchargeait donc des pages d'erreur à chaque question sans rien injecter. Ne pas
+  réintroduire d'URL `mezieres-lez-clery.fr/<chemin>` — le commentaire en tête de la
+  constante explique le détail.
 
 ## Associations (grounding MEL)
 
