@@ -106,6 +106,14 @@ Architecture à connaître avant toute modification des notifications :
   **trois** caractères entre les deux mots. Un motif écrit `carte.identit` ne matche donc
   pas la formulation la plus naturelle. Écrire `carte.{0,4}identit`. Trois règles étaient
   muettes pour cette raison (CNI/pièce d'identité, maison de santé, centre de loisirs).
+- ⚠️ **Écrire les liens en `https://` complet, et jamais collés à une ponctuation.**
+  L'app ne rend cliquable que `https?://…` et `www.…` (`_renderDirectAnswer`,
+  `app-mezieres/js/mat-mel.js`) : un domaine nu comme `exemple.fr` s'affiche mais ne
+  s'ouvre pas. Et comme le motif d'URL est `[^\s<>]+`, toute ponctuation collée derrière
+  est **avalée dans le href** — `(sur https://exemple.fr)` produit un lien vers
+  `https://exemple.fr)`, cassé. Faire suivre l'URL d'une espace (tiret cadratin plutôt
+  que parenthèse ou point). Verrouillé pour toutes les règles par un test de propriété
+  dans `test/guide-arrivee.test.js`.
 - ⚠️ Inutile de lister les variantes **accentuées** dans un `test` de `DIRECT_RULES` : la
   question est déjà dé-accentuée. `maison de santé` ou `crèche` dans une alternation sont
   du code mort — seule la forme sans accent peut matcher.
