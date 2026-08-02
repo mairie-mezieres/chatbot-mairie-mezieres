@@ -1,0 +1,74 @@
+name: Détection de liens morts
+
+# Les réponses de MEL contiennent des adresses officielles (service-public,
+# ANTS, CCTVL, opérateur fibre…) écrites en dur dans lib/mel.js. Elles vieillissent
+# sans prévenir : un domaine change, une page est déplacée, et MEL continue de
+# l'annoncer aux habitants.
+#
+# Ce scan est né d'un cas réel : la réponse « carte d'identité » renvoyait vers
+# le site d'une seule commune, et la règle « fibre » vers valdeloire-fibre.fr,
+# un domaine qui n'existe pas. Le dépôt app-mezieres avait déjà ce workflow,
+# mais il ne couvrait que ses propres pages HTML — donc rien côté backend.
+
+on:
+  schedule:
+    # Tous les lundis à 07h30 UTC (30 min après celui de app-mezieres, pour ne
+    # pas ouvrir deux issues au même instant).
+    - cron: '30 7 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  liens-morts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Vérifier les liens
+        id: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Périmètre : le code qui porte des adresses montrées aux habitants
+          # (lib/, routes/) et la documentation.
+          #
+          # Exclusions : les sites qui bloquent les robots, et les points
+          # d'entrée d'API — ce ne sont pas des liens suivis par un humain et
+          # ils répondent 401/404 sans clé ni paramètres.
+          args: >-
+            --no-progress
+            --max-retries 2
+            --exclude 'facebook\.com'
+            --exclude 'instagram\.com'
+            --exclude 'linkedin\.com'
+            --exclude 'claude\.ai'
+            --exclude 'chatgpt\.com'
+            --exclude 'chat\.mistral\.ai'
+            --exclude 'console\.mistral\.ai'
+            --exclude 'console\.anthropic\.com'
+            --exclude 'dashboard\.render\.com'
+            --exclude 'onrender\.com'
+            --exclude 'api\.trello\.com'
+            --exclude 'graph\.facebook\.com'
+            --exclude 'api\.cloudinary\.com'
+            --exclude 'public-api\.meteofrance\.fr'
+            --exclude 'hubeau\.eaufrance\.fr'
+            --exclude 'api\.vigieau\.beta\.gouv\.fr'
+            --exclude 'sentry\.io'
+            --exclude 'localhost'
+            'lib/*.js' 'routes/*.js' '*.md' 'docs/**/*.md'
+          format: markdown
+          output: ./lychee/rapport.md
+          fail: false
+
+      - name: Créer une issue si des liens sont cassés
+        if: steps.lychee.outputs.exit_code != 0
+        uses: peter-evans/create-issue-from-file@v6
+        with:
+          title: 🔗 Liens morts détectés dans les réponses de MEL
+          content-filepath: ./lychee/rapport.md
+          labels: liens-morts
