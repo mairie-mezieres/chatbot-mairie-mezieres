@@ -98,7 +98,22 @@ Architecture à connaître avant toute modification des notifications :
   réponse complète **instantanée, sans appel IA**, déclenchée par regex sur la question
   normalisée (`normalizeQuestion` = minuscules, **sans accents**, sans ponctuation).
   Déjà couverts : CNI, passeport, état civil, **élections (inscription + procuration)**,
-  **recensement citoyen**, **PACS**, clôtures/abris/piscine, déchets, santé, OPAH, SPANC…
+  **recensement citoyen**, **PACS**, **arrivée dans la commune (nouvel habitant, changement
+  d'adresse, compteurs eau/énergie, inscription scolaire)**, clôtures/abris/piscine,
+  déchets, santé, OPAH, SPANC…
+- ⚠️ **Le joker `.` ne suffit pas comme séparateur.** `normalizeQuestion` remplace toute
+  ponctuation par une **espace** : « carte d'identité » devient `carte d identite`, soit
+  **trois** caractères entre les deux mots. Un motif écrit `carte.identit` ne matche donc
+  pas la formulation la plus naturelle. Écrire `carte.{0,4}identit`. Trois règles étaient
+  muettes pour cette raison (CNI/pièce d'identité, maison de santé, centre de loisirs).
+- ⚠️ Inutile de lister les variantes **accentuées** dans un `test` de `DIRECT_RULES` : la
+  question est déjà dé-accentuée. `maison de santé` ou `crèche` dans une alternation sont
+  du code mort — seule la forme sans accent peut matcher.
+- **L'ordre du tableau est la priorité** : la première règle dont `test` renvoie vrai gagne.
+  Le bloc « arrivée dans la commune » est placé après l'état civil (une question précise
+  garde la main) et avant `cantine`/`centre_loisirs`, et sa règle parapluie
+  `nouvel_habitant` vient en dernier du bloc. Ces contraintes sont verrouillées par des
+  tests d'ordre dans `test/guide-arrivee.test.js`.
 - MEL n'a PAS service-public.gouv.fr dans ses `SOURCES` : si elle « ne sait pas » sur une
   démarche courante, **ajouter une DIRECT_RULE** (+ mots-clés dans `KEYWORDS.demarches`
   pour les stats/pages sources) — pas de relâcher les garde-fous anti-hallucination,
@@ -106,7 +121,13 @@ Architecture à connaître avant toute modification des notifications :
   avant de découvrir DIRECT_RULES — règle d'or : vérifier l'existant).
 - L'**arbre de décision** (admin → onglet 👩 MEL) est le 3e canal : parcours guidé
   cliquable, éditable par la mairie sans code.
-  Tests : `test/demarches.test.js`.
+  Tests : `test/demarches.test.js`, `test/guide-arrivee.test.js`.
+
+> 📦 Le **guide d'arrivée des nouveaux habitants** est une page de l'app (repo
+> `app-mezieres`, `js/mat-guide-arrivee.js`) : contenu embarqué en statique, consultable
+> hors-ligne, **aucune route ni clé Redis côté backend**. Le backend n'intervient que par
+> les `DIRECT_RULES` ci-dessus, pour que MEL sache répondre à la même question en langage
+> naturel. Les deux doivent rester cohérents.
 
 ## Associations (grounding MEL)
 
