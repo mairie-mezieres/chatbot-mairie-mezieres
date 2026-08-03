@@ -13,14 +13,14 @@
     "check": "node --check index.js && npm test && npm run smoke"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.50.0",
-    "@sentry/node": "^8",
-    "axios": "^1.6.0",
+    "@anthropic-ai/sdk": "^0.115.0",
+    "@sentry/node": "^10",
+    "axios": "^1.19.0",
     "cloudinary": "^2.9.0",
     "express": "^5.2.1",
-    "express-rate-limit": "^7.4.0",
+    "express-rate-limit": "^8.6.1",
     "form-data": "^4.0.0",
-    "googleapis": "^134.0.0",
+    "googleapis": "^173.0.0",
     "string-similarity": "^4.0.4",
     "web-push": "^3.6.0"
   },
