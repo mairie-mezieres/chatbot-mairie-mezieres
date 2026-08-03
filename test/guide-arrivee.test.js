@@ -131,6 +131,34 @@ test("fibre : l'opérateur annoncé est Lysséo, pas Val de Loire Fibre", () => 
   assert.ok(ask("le déploiement Val de Loire Fibre en est où ?"));
 });
 
+// ─── Fibre : rôle de chacun et construction neuve ─────────────────────
+// La version précédente écrivait « vérifiez votre éligibilité sur lysseo.fr ou
+// contactez votre fournisseur internet », ce qui mettait l'opérateur
+// d'infrastructure et le fournisseur d'accès sur le même plan. Lysséo ne vend
+// aucun abonnement, et pour une construction neuve l'étape bloquante est la
+// déclaration de l'adresse auprès de XpFibre / Loiret THD : sans elle, aucun
+// opérateur ne peut enregistrer la commande.
+
+test("fibre : Lysséo n'est pas présenté comme un vendeur d'abonnement", () => {
+  const a = ask("comment raccorder ma construction neuve à la fibre ?");
+  assert.ok(a);
+  assert.match(a, /ne vend aucun abonnement/);
+  assert.match(a, /raccordable/);
+  assert.match(a, /XpFibre \/ Loiret THD/);
+  assert.match(a, /https:\/\/www\.xpfibre\.com\/loiret-thd/);
+  assert.match(a, /permis de construire/);
+  assert.match(a, /certificat de numérotation/);
+  assert.match(a, /plan de masse/);
+  assert.match(a, /Base Adresse Nationale/);
+});
+
+test("fibre : les formulations d'entrée mènent toutes à la même règle", () => {
+  for (const q of ["fibre", "mon adresse est-elle raccordable ?", "qui est xpfibre ?",
+                   "loiret thd c'est quoi", "je suis éligible à la fibre ?"]) {
+    assert.match(ask(q) || "", /Lysséo/, "pas de réponse directe pour : " + q);
+  }
+});
+
 // ─── Non-régression : jour de collecte du bac jaune ───────────────────
 
 test("collecte : le bac jaune est annoncé le mardi des semaines paires", () => {

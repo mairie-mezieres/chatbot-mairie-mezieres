@@ -151,6 +151,18 @@ Architecture à connaître avant toute modification des notifications :
   dernier dessert l'Indre-et-Loire et le Loir-et-Cher, pas le Loiret. L'arbre de décision
   de MEL (`app-mezieres/js/mat-mel.js`) le disait déjà — c'était une **double source
   divergente**, la même classe de problème que pour les associations.
+- ⚠️ **Lysséo n'est PAS un fournisseur d'accès** — corrigé le 3 août 2026, voir
+  `app-mezieres/docs/adr/0013-fibre-…`. C'est l'**opérateur d'infrastructure** du réseau
+  public fibre du Loiret (exploité par Loiret THD / Loiret Fibre, groupe XpFibre, en DSP du
+  Département) : il ne vend **aucun** abonnement, l'habitant souscrit chez Orange, SFR,
+  Bouygues, Free… Pour une **construction neuve**, l'étape bloquante est la déclaration de
+  l'adresse auprès de XpFibre / Loiret THD (`https://www.xpfibre.com/loiret-thd`) : tant
+  qu'elle n'est pas « raccordable », aucun opérateur ne peut enregistrer la commande. La
+  mairie, elle, fait remonter la numérotation de la parcelle à la Base Adresse Nationale.
+  Trois endroits doivent rester en phase : la règle `fibre` et le prompt du topic
+  `numerique` de `lib/mel.js`, les trois entrées `numerique` de l'arbre de décision
+  (`app-mezieres/js/mat-mel.js` **et** `app-mezieres/data/mel-tree.json`), et la fiche fibre
+  de `app-mezieres/js/mat-guide-arrivee.js`.
 - ⚠️ **`SOURCES` ne contient plus que des pages CCTVL.** Le domaine
   `mezieres-lez-clery.fr` sert désormais l'application : l'ancien site WordPress
   n'existe plus, et ses 20 pages référencées ici renvoyaient toutes 404. `buildContext`
