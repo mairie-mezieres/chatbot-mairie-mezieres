@@ -48,7 +48,7 @@ Aucune donnée citoyenne ne transite par un CDN tiers côté application.
 | 🚨 **Signalements** | Signalements citoyens (remontés vers Trello) |
 | 💡 **Idées** | Boîte à idées citoyenne — puces de filtre par statut de résolution (⏳ Sans statut / 🔍 En cours d'étude / ✅ Retenues / ❌ Non retenues / Toutes), avec compteurs |
 | 🗳️ **Sondages** | Création et suivi des sondages |
-| 📁 **Documents** | Document « à la une » + documents temporaires |
+| 📁 **Documents** | Document « à la une » + documents temporaires + **documents du PLUi-H-D** (voir §6quater) |
 | 🛠️ **Entreprises** | Annuaire des artisans/entreprises locales |
 | 🤖 **IA** | Statistiques d'usage de l'assistante MEL |
 | 📱 **Usage app** | Statistiques d'utilisation de la PWA |
@@ -379,6 +379,63 @@ entrées, LPUSH + LTRIM). Consultation :
 
 L'écriture est best-effort (un Redis en 429 ne bloque jamais la génération du
 prompt côté habitant) et la route est rate-limitée (10 req/min/IP).
+
+---
+
+## 6quater. Documents du PLUi-H-D (onglet 📁 Documents)
+
+La page « Grand dossier PLUi-H-D » de l'app affiche une liste de documents
+officiels. Cette liste **s'administre depuis le tableau de bord** : onglet
+**📁 Documents**, section « Documents du PLUi-H-D », en bas de l'onglet.
+
+### Ajouter un document
+
+Trois champs, puis **une** des deux options :
+
+| Champ | Remarque |
+|---|---|
+| **Titre** | Ce que verront les habitants (ex. « Enquête publique — dossier complet ») |
+| **Date du document** | Sert au tri (le plus récent en haut) **et** au déclenchement de la pastille « Nouveau » |
+| **Option 1 — fichier PDF** | Le fichier est hébergé par l'application (Cloudinary). **4 Mo maximum** |
+| **Option 2 — lien** | Adresse `https://` d'un document déjà en ligne (Drive, site de la CCTVL…). Aucune limite de taille |
+
+> ⚠️ **Pourquoi 4 Mo ?** Le backend plafonne les envois à 6 Mo, et un fichier
+> encodé pour le transport gonfle d'environ un tiers. Les gros documents
+> d'urbanisme (diagnostic, PADD avec cartes) dépassent souvent ce seuil : pour
+> ceux-là, déposez le fichier sur Drive ou sur le site de la CCTVL et **collez le
+> lien**. L'écran refuse le fichier avant tout envoi et affiche la marche à
+> suivre, plutôt que de laisser échouer la requête.
+
+### Effet côté habitant
+
+Dès qu'un document est ajouté, une pastille rouge **« Nouveau »** s'allume sur le
+bandeau « Grand dossier » de l'accueil et sur l'entrée du menu en version
+ordinateur — **sans attendre** que l'habitant ouvre la page. Elle s'éteint une
+fois la page consultée. La clé de fraîcheur est *date du document le plus récent
++ nombre de documents* : elle rebascule donc à chaque ajout.
+
+Les documents déjà reçus sont conservés localement sur l'appareil : la page reste
+consultable **hors connexion**.
+
+### Supprimer un document
+
+Le bouton « Supprimer » de la ligne retire l'entrée **et** le fichier hébergé
+s'il avait été envoyé depuis cet écran (un document ajouté par lien ne touche
+évidemment pas à la cible du lien). L'action est tracée dans le **journal
+d'audit** (onglet 🪲 Logs).
+
+### Routes
+
+| Route | Auth | Rôle |
+|---|---|---|
+| `GET /docs/plui` | non | Liste publique, lue par l'app |
+| `POST /admin/docs/plui` | token admin | Ajout (`{titre, date, url}` ou `{titre, date, fileB64}`) |
+| `DELETE /admin/docs/plui/:id` | token admin | Suppression (+ fichier Cloudinary) |
+
+Stockage : clé Redis `mat:docs:plui`, avec le miroir mémoire habituel de
+`lib/store.js`. Si Cloudinary n'est pas configuré (`CLOUDINARY_*` absentes),
+l'envoi de fichier répond 503 avec un message invitant à utiliser un lien —
+l'ajout par lien, lui, continue de fonctionner.
 
 ---
 

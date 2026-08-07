@@ -49,6 +49,7 @@ function _isLargeBodyRoute(p) {
   if (p === "/admin/actus/add") return true;
   if (p === "/admin/entreprises" || p.startsWith("/admin/entreprises/")) return true;
   if (p === "/admin/mascotte") return true;
+  if (p === "/admin/docs/plui") return true; // PDF du PLUi envoyé en base64
   return false;
 }
 const _jsonSmall = express.json({ limit: "256kb", verify: (req, res, buf) => { req.rawBody = buf; } });
