@@ -6,7 +6,7 @@ const { readTempDocs, writeTempDocs, readFeaturedDoc, writeFeaturedDoc,
         readPluiDocs, writePluiDocs } = require("../lib/store");
 const { adminAuth } = require("../lib/middleware");
 const { capStr, safeId } = require("../lib/validate");
-const { CLOUDINARY_ENABLED, uploadPluiDocToCloudinary, deletePluiDocFromCloudinary } = require("../lib/cloudinary");
+const { CLOUDINARY_ENABLED, uploadPluiDocToCloudinary, deletePluiDocFromCloudinary, pluiDocUrl } = require("../lib/cloudinary");
 const { logAudit } = require("../lib/logger");
 
 router.get("/docs/temp", async (req, res) => {
@@ -62,9 +62,18 @@ router.delete("/admin/docs/featured", adminAuth, async (req, res) => {
 const PLUI_MAX_DOCS = 100;
 const PDF_PREFIX = "data:application/pdf;base64,";
 
+// L'URL de livraison d'un fichier hébergé est (re)calculée signée à chaque
+// lecture — voir pluiDocUrl(). Un document ajouté par lien garde le sien.
+// `fichier` dit à l'admin si le document est hébergé par nous (📎) ou pointé par
+// un lien (🔗) — sans exposer le publicId Cloudinary, qui est un détail interne.
+function publicPluiDoc(d) {
+  const signed = d.publicId ? pluiDocUrl(d.publicId) : null;
+  return { id: d.id, titre: d.titre, date: d.date, url: signed || d.url, fichier: !!d.publicId };
+}
+
 router.get("/docs/plui", async (req, res) => {
   const docs = await readPluiDocs();
-  res.json({ docs });
+  res.json({ docs: docs.map(publicPluiDoc) });
 });
 
 router.post("/admin/docs/plui", adminAuth, async (req, res) => {
@@ -107,7 +116,7 @@ router.post("/admin/docs/plui", adminAuth, async (req, res) => {
   docs.push({ id: Date.now(), titre: t, date: d, url: finalUrl, publicId, addedAt: new Date().toISOString() });
   if (docs.length > PLUI_MAX_DOCS) docs.splice(0, docs.length - PLUI_MAX_DOCS);
   await writePluiDocs(docs);
-  res.json({ ok: true, docs });
+  res.json({ ok: true, docs: docs.map(publicPluiDoc) });
 });
 
 router.delete("/admin/docs/plui/:id", adminAuth, async (req, res) => {
@@ -128,7 +137,7 @@ router.delete("/admin/docs/plui/:id", adminAuth, async (req, res) => {
   const rest = docs.filter(x => x.id !== id);
   await writePluiDocs(rest);
   logAudit("Suppression document PLUi", `id=${id} — "${doc.titre.slice(0, 60)}"`).catch(() => {});
-  res.json({ ok: true, docs: rest });
+  res.json({ ok: true, docs: rest.map(publicPluiDoc) });
 });
 
 module.exports = router;

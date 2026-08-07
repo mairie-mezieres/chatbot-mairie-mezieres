@@ -103,7 +103,9 @@ test("ajouter par lien → apparaît dans la liste publique → supprimer", asyn
   const added = (await rAdd.json()).docs.find(d => d.titre === "Enquête publique — dossier complet");
   assert.ok(added, "le document doit être présent dans la réponse");
   assert.equal(added.date, "2026-08-07");
-  assert.equal(added.publicId, null, "un document ajouté par lien n'a pas de fichier Cloudinary");
+  assert.equal(added.url, "https://exemple.fr/enquete-publique.pdf", "un lien externe est renvoyé tel quel");
+  assert.equal(added.fichier, false, "un document ajouté par lien n'est pas hébergé par nous");
+  assert.equal(added.publicId, undefined, "le publicId Cloudinary ne fuite pas côté public");
 
   const rList = await fetch(base + "/docs/plui");
   const list = (await rList.json()).docs;
