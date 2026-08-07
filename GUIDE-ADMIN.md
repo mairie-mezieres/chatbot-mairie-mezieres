@@ -437,6 +437,22 @@ Stockage : clé Redis `mat:docs:plui`, avec le miroir mémoire habituel de
 l'envoi de fichier répond 503 avec un message invitant à utiliser un lien —
 l'ajout par lien, lui, continue de fonctionner.
 
+### ⚠️ Si un document envoyé affiche « HTTP ERROR 401 »
+
+Cloudinary bloque **par défaut** la livraison des PDF (« types de médias
+restreints »). Le fichier s'envoie sans erreur, apparaît dans la liste, et
+répond 401 quand on clique dessus.
+
+C'est traité dans le code : l'URL est **signée** à chaque lecture de
+`GET /docs/plui` (`pluiDocUrl()` dans `lib/cloudinary.js`), et une URL signée
+est délivrée même quand le type est restreint. Rien à faire côté console.
+
+Si malgré tout un 401 persiste, le réglage de secours est dans la console
+Cloudinary → **Settings → Security → Restricted media types** : retirer `PDF` de
+la liste. Vérifier au passage que la clé `CLOUDINARY_SECRET` de Render est bien
+celle du compte — une signature calculée avec une mauvaise clé produit
+exactement la même erreur 401.
+
 ---
 
 ## 7. Suivi d'erreurs (Sentry)
