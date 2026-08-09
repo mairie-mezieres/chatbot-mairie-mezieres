@@ -39,6 +39,21 @@ jobs:
           # Exclusions : les sites qui bloquent les robots, et les points
           # d'entrée d'API — ce ne sont pas des liens suivis par un humain et
           # ils répondent 401/404 sans clé ni paramètres.
+          #
+          # ⚠️ Un motif d'exclusion vieillit comme le lien qu'il couvre. Les
+          # cinq « erreurs » de l'issue #181 étaient TOUTES des faux positifs,
+          # dont trois dus à des motifs devenus faux :
+          #   • `api.vigieau.beta.gouv.fr` — l'API a quitté le domaine `.beta`
+          #     pour `api.vigieau.gouv.fr`, l'exclusion ne matchait plus rien ;
+          #   • `upstash.io` — la route stats appelle `api.upstash.com` ;
+          #   • `vigicrues.gouv.fr` n'était pas exclue du tout.
+          # Les deux dernières sont les bases d'URL des visuels
+          # (`mezieres-lez-clery.fr/img/…`) : ce sont des PRÉFIXES, jamais
+          # requis tels quels — le code y concatène un nom de fichier. Servies
+          # par GitHub Pages, elles répondent donc 404 en tant que répertoire,
+          # alors que les 34 images existent bien.
+          # En cas de doute sur un signalement, vérifier d'abord si l'URL est
+          # réellement suivie par un humain avant de la croire cassée.
           args: >-
             --no-progress
             --max-retries 2
@@ -57,7 +72,8 @@ jobs:
             --exclude 'api\.cloudinary\.com'
             --exclude 'public-api\.meteofrance\.fr'
             --exclude 'hubeau\.eaufrance\.fr'
-            --exclude 'api\.vigieau\.beta\.gouv\.fr'
+            --exclude 'api\.vigieau\.gouv\.fr'
+            --exclude 'www\.vigicrues\.gouv\.fr'
             --exclude 'sentry\.io'
             --exclude 'localhost'
             --exclude 'api\.anthropic\.com'
@@ -68,15 +84,46 @@ jobs:
             --exclude 'apicarto\.ign\.fr'
             --exclude 'open-meteo\.com'
             --exclude 'upstash\.io'
+            --exclude 'api\.upstash\.com'
+            --exclude 'mezieres-lez-clery\.fr/img/'
             'lib/*.js' 'routes/*.js' '*.md' 'docs/**/*.md'
           format: markdown
           output: ./lychee/rapport.md
           fail: false
 
-      - name: Créer une issue si des liens sont cassés
+      # ⚠️ Sans cette recherche, chaque passage hebdomadaire ouvrait une issue
+      # DE PLUS, au lieu de mettre à jour l'existante : #176 et #181 étaient
+      # identiques mot pour mot, à un jour d'intervalle. Le rapport de lychee
+      # décrit un état courant, pas un événement — une seule issue vivante suffit.
+      - name: Chercher une issue « liens-morts » déjà ouverte
+        id: issue_ouverte
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          numero=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+                     --label liens-morts --state open --limit 1 \
+                     --json number --jq '.[0].number // ""')
+          echo "numero=$numero" >> "$GITHUB_OUTPUT"
+          echo "Issue liens-morts ouverte : ${numero:-aucune}"
+
+      - name: Créer ou mettre à jour l'issue si des liens sont cassés
         if: steps.lychee.outputs.exit_code != 0
         uses: peter-evans/create-issue-from-file@v6
         with:
           title: 🔗 Liens morts détectés dans les réponses de MEL
           content-filepath: ./lychee/rapport.md
           labels: liens-morts
+          # Vide → création. Renseigné → mise à jour de l'issue existante.
+          issue-number: ${{ steps.issue_ouverte.outputs.numero }}
+
+      # Symétrique : quand tout repasse au vert, l'issue n'a plus de raison de
+      # rester ouverte. Sans ça elle traîne jusqu'à ce que quelqu'un y pense.
+      - name: Refermer l'issue si plus aucun lien n'est cassé
+        if: steps.lychee.outputs.exit_code == 0 && steps.issue_ouverte.outputs.numero != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMERO: ${{ steps.issue_ouverte.outputs.numero }}
+        run: |
+          gh issue comment "$NUMERO" --repo "$GITHUB_REPOSITORY" \
+            --body "✅ Scan du $(date -u '+%d/%m/%Y') : plus aucun lien cassé. Refermée automatiquement."
+          gh issue close "$NUMERO" --repo "$GITHUB_REPOSITORY" --reason completed

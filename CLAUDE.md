@@ -147,6 +147,11 @@ Architecture à connaître avant toute modification des notifications :
   `.github/workflows/liens-morts.yml` (lundi 07h30 UTC + `workflow_dispatch`) scanne
   `lib/`, `routes/` et la doc avec lychee, et **ouvre une issue** `liens-morts` si
   quelque chose casse. Le pendant existe dans `app-mezieres` pour les `.html` et `js/`.
+- ⚠️ **Une seule issue vivante à la fois.** Le workflow cherche d'abord une issue
+  `liens-morts` ouverte et passe son numéro à `create-issue-from-file` : rapport mis à
+  jour au lieu d'une nouvelle issue à chaque passage. Il la **referme** aussi quand le
+  scan repasse au vert. Sans ce garde-fou, chaque exécution hebdomadaire en créait une
+  de plus — #176 et #181 étaient identiques mot pour mot, à un jour d'intervalle.
 - Origine : la règle `fibre` annonçait `valdeloire-fibre.fr`, un domaine qui **n'existe
   pas** (échec DNS), et la règle CNI renvoyait vers le site d'une seule commune. Rien ne
   le détectait — le scan de `app-mezieres` ne couvrait que ses pages HTML.
