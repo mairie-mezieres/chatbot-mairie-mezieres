@@ -54,6 +54,12 @@ jobs:
           # alors que les 34 images existent bien.
           # En cas de doute sur un signalement, vérifier d'abord si l'URL est
           # réellement suivie par un humain avant de la croire cassée.
+          #
+          # `^https://…$` : le message d'erreur de routes/docs.js dit
+          # « url (https://…) ou fileB64 requis ». Les points de suspension
+          # sont un ESPACE RÉSERVÉ dans un texte, pas une adresse — lychee
+          # essaie néanmoins de les parser et échoue sur « invalid
+          # international domain name ». Motif ancré pour n'attraper que ça.
           args: >-
             --no-progress
             --max-retries 2
@@ -76,6 +82,7 @@ jobs:
             --exclude 'www\.vigicrues\.gouv\.fr'
             --exclude 'sentry\.io'
             --exclude 'localhost'
+            --exclude '^https://…$'
             --exclude 'api\.anthropic\.com'
             --exclude 'api\.mistral\.ai'
             --exclude 'api\.resend\.com'

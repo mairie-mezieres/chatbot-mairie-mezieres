@@ -36,3 +36,14 @@ updates:
       backend:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+        # ⚠️ Trou de `update-types` sur les paquets `0.x`. En semver strict,
+        # `0.50.4 → 0.115.0` est une montée MINEURE (le majeur reste 0) : le
+        # filtre ci-dessus ne l'écarte donc pas. C'est ainsi que la PR #186 a
+        # regroupé un saut de 65 versions du SDK Anthropic — celui qui fait
+        # parler MEL, avec 6 nouvelles dépendances transitives — derrière un
+        # innocent bump d'axios.
+        #
+        # Aucun réglage dependabot ne permet de traiter « mineure de 0.x »
+        # comme une majeure. L'exclusion nommée est la seule voie : le SDK
+        # aura toujours sa propre PR, relisable seule.
+        exclude-patterns: ["@anthropic-ai/sdk"]
