@@ -13,9 +13,9 @@
     "check": "node --check index.js && npm test && npm run smoke"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.50.0",
+    "@anthropic-ai/sdk": "^0.115.0",
     "@sentry/node": "^8",
-    "axios": "^1.6.0",
+    "axios": "^1.19.0",
     "cloudinary": "^2.9.0",
     "express": "^5.2.1",
     "express-rate-limit": "^7.4.0",
