@@ -39,6 +39,21 @@ jobs:
           # Exclusions : les sites qui bloquent les robots, et les points
           # d'entrée d'API — ce ne sont pas des liens suivis par un humain et
           # ils répondent 401/404 sans clé ni paramètres.
+          #
+          # ⚠️ Un motif d'exclusion vieillit comme le lien qu'il couvre. Les
+          # cinq « erreurs » de l'issue #181 étaient TOUTES des faux positifs,
+          # dont trois dus à des motifs devenus faux :
+          #   • `api.vigieau.beta.gouv.fr` — l'API a quitté le domaine `.beta`
+          #     pour `api.vigieau.gouv.fr`, l'exclusion ne matchait plus rien ;
+          #   • `upstash.io` — la route stats appelle `api.upstash.com` ;
+          #   • `vigicrues.gouv.fr` n'était pas exclue du tout.
+          # Les deux dernières sont les bases d'URL des visuels
+          # (`mezieres-lez-clery.fr/img/…`) : ce sont des PRÉFIXES, jamais
+          # requis tels quels — le code y concatène un nom de fichier. Servies
+          # par GitHub Pages, elles répondent donc 404 en tant que répertoire,
+          # alors que les 34 images existent bien.
+          # En cas de doute sur un signalement, vérifier d'abord si l'URL est
+          # réellement suivie par un humain avant de la croire cassée.
           args: >-
             --no-progress
             --max-retries 2
@@ -57,7 +72,8 @@ jobs:
             --exclude 'api\.cloudinary\.com'
             --exclude 'public-api\.meteofrance\.fr'
             --exclude 'hubeau\.eaufrance\.fr'
-            --exclude 'api\.vigieau\.beta\.gouv\.fr'
+            --exclude 'api\.vigieau\.gouv\.fr'
+            --exclude 'www\.vigicrues\.gouv\.fr'
             --exclude 'sentry\.io'
             --exclude 'localhost'
             --exclude 'api\.anthropic\.com'
@@ -68,6 +84,8 @@ jobs:
             --exclude 'apicarto\.ign\.fr'
             --exclude 'open-meteo\.com'
             --exclude 'upstash\.io'
+            --exclude 'api\.upstash\.com'
+            --exclude 'mezieres-lez-clery\.fr/img/'
             'lib/*.js' 'routes/*.js' '*.md' 'docs/**/*.md'
           format: markdown
           output: ./lychee/rapport.md
