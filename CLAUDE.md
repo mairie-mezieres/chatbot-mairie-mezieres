@@ -20,6 +20,8 @@ Règle d'or : **vérifier qu'une fonctionnalité n'existe pas déjà (code + UI 
 | Présentation du backend, architecture, routes, démarrage | `README.md` |
 | Conformité de l'assistant MEL (AI Act, RGPD, sécurité) | `docs/note-conformite-MEL.md` |
 | Sécurité, signalement de vulnérabilité, données personnelles | `SECURITY.md` |
+| **Mise à jour de Node.js**, socle de versions sûres (`lib/node-baseline.js`), check 🟩 runtime | `GUIDE-ADMIN.md` §6ter |
+| **Inventaire des domaines / hébergeurs, alertes CERT-FR** | repo `app-mezieres` → `docs/surface-exposition.md` |
 | **Décisions d'architecture** (pourquoi Trello, pourquoi les tokens individuels, pourquoi `sub=null` sur 410…) | `docs/adr/` — un fichier par décision |
 | **« Le saviez-vous ? »** — routes `GET`/`POST /saviezvous/:id` (`routes/reactions.js`). ⚠️ Le **contenu** des faits n'est PAS ici : il vit dans `app-mezieres/data/saviez-vous.json`, versionné et relu. Le backend ne connaît que des identifiants et des compteurs. **Aucune IA ne doit jamais écrire ces faits** | `app-mezieres/docs/adr/0012-…` puis `SFD-16` |
 | **Côté app / PWA / Service Worker / affichage habitant** | repo `app-mezieres` → son `CLAUDE.md` puis `docs/guide-technique.md` |
