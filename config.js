@@ -91,7 +91,9 @@ const WEATHER_CHECK_INTERVAL_MS = Number(process.env.WEATHER_CHECK_INTERVAL_MS |
 
 // Sécheresse — restrictions VigiEau (séparées de la vigilance Météo-France).
 const AUTO_POST_DROUGHT_ALERTS  = process.env.AUTO_POST_DROUGHT_ALERTS === "true";
-const VIGIEAU_COMMUNE_INSEE     = process.env.VIGIEAU_COMMUNE_INSEE || "45203";
+// ⚠️ 45204 = Mézières-lez-Cléry. 45203 est MEUNG-SUR-LOIRE — la valeur par
+// défaut interrogeait les restrictions sécheresse de la commune voisine.
+const VIGIEAU_COMMUNE_INSEE     = process.env.VIGIEAU_COMMUNE_INSEE || "45204";
 // Point de référence (bourg) pour la requête VigiEau par coordonnées — même chemin
 // de résolution que le site vigieau.gouv.fr pour une adresse. Défaut : coordonnées
 // météo de la commune. Voir ADR-0009.

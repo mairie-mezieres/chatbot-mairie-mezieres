@@ -87,7 +87,7 @@ Le fichier [`.env.example`](.env.example) liste tout en détail. Les **essentiel
 | Variable | Rôle |
 |----------|------|
 | `AUTO_POST_DROUGHT_ALERTS` | `true` pour publier automatiquement sur Facebook quand le niveau sécheresse ≥ Alerte (le push citoyen + l'actu partent dans tous les cas). Défaut `false`. |
-| `VIGIEAU_COMMUNE_INSEE` | Code INSEE surveillé sur `api.vigieau.gouv.fr` (défaut `45203`). |
+| `VIGIEAU_COMMUNE_INSEE` | Code INSEE surveillé sur `api.vigieau.gouv.fr` (défaut `45204`). ⚠️ **45204 = Mézières-lez-Cléry ; 45203 = Meung-sur-Loire.** Le défaut a valu `45203` jusqu'au 10 août 2026 : la requête « par commune » interrogeait alors le voisin. **Si la variable est définie dans Render, vérifiez sa valeur** — le correctif ne change que le défaut du code. |
 | `VIGIEAU_LAT` / `VIGIEAU_LON` | Coordonnées du point de référence (bourg) pour la requête par géométrie — même chemin que vigieau.gouv.fr pour une adresse. Défaut : `OPEN_METEO_LAT`/`OPEN_METEO_LON`. Voir ADR-0009. |
 | `DROUGHT_CHECK_INTERVAL_MS` | Intervalle de vérification (défaut 6 h — la sécheresse évolue lentement). |
 
