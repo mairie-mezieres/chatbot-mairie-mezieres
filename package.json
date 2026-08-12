@@ -13,7 +13,7 @@
     "check": "node --check index.js && npm test && npm run smoke"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.50.0",
+    "@anthropic-ai/sdk": "^0.116.0",
     "@sentry/node": "^10",
     "axios": "^1.19.0",
     "cloudinary": "^2.9.0",
