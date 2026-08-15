@@ -289,6 +289,7 @@ Lance un test en direct de chaque brique. Statuts : 🟢 OK · 🟡 attention ·
 | 🟩 **Node.js (runtime)** | Version de Node du serveur face au socle de sécurité (voir §6ter) |
 | 🗄️ Redis / Upstash | Lecture/écriture du stockage |
 | 🌤️ Open-Meteo | Récupération météo de la commune |
+| 📊 **Normales saisonnières (ERA5)** | Normales 1991-2020 en cache, et celles du mois en cours (voir §6quinquies) |
 | ⚠️ Vigilance Météo-France | Flux vigilance du département 45 |
 | 🚌 Bus Rémi (cache) | Horaires bus (PDF → IA). En cas d'échec, le **dernier bon horaire est conservé** (pas de « en erreur » qui écrase le cache) et un rafraîchissement **périodique automatique** (toutes les 30 min, backoff 1 h après échec) retente sans intervention |
 | 📅 Agenda public | Lecture du calendrier Google (iCal) |
@@ -300,6 +301,58 @@ Lance un test en direct de chaque brique. Statuts : 🟢 OK · 🟡 attention ·
 | 🚱 **Restrictions sécheresse (VigiEau)** | Niveau sécheresse courant de la commune (voir §5ter) |
 | 🔔 Notifications push | Clés VAPID + nombre d'abonnés |
 | 🏘️ **Compteur installations** | Total d'installations PWA + celles du jour — le **même chiffre** que le mail quotidien et le badge de l'app (voir §6ter) |
+
+---
+
+## 6quinquies. Normales saisonnières (check 📊)
+
+### Ce que c'est, et ce que ce n'est pas
+
+L'application affiche, dans la fenêtre météo, l'écart entre la maximale du jour et la
+**normale du mois**. Ces normales sont calculées par le backend sur la période
+**1991-2020**, à partir de la **réanalyse ERA5** (ECMWF) servie par l'API archive
+d'Open-Meteo, interrogée aux coordonnées de la commune.
+
+> ⚠️ **Ce n'est pas une station Météo-France.** ERA5 est une maille de modèle, pas un
+> relevé de terrain. L'app l'écrit noir sur blanc sous la valeur affichée
+> (« réanalyse ERA5 »), et le payload le porte (`reanalyse: true`, `station: null`).
+> Ne jamais présenter ces valeurs comme un relevé de station : c'est exactement la
+> faute que l'ADR-0022 de l'app a corrigée en supprimant les anciennes normales
+> codées en dur, qui n'avaient ni station ni période.
+
+### Fonctionnement
+
+- Calculées **une seule fois**, puis conservées en Redis (`mat:meteo:normales:v1`,
+  TTL 6 mois) et en mémoire. Une normale trentenaire ne bouge pas.
+- Le calcul part **en arrière-plan** : il ne retarde jamais la réponse de
+  `/meteo/commune`. Tant qu'il n'a pas abouti, l'app n'affiche simplement aucun écart.
+- **Tout ou rien** : si un seul mois n'a pas au moins 80 % de ses jours mesurés, le
+  calcul échoue entièrement. Onze mois sur douze ne se servent pas.
+- Après un échec, une nouvelle tentative n'a lieu qu'au bout de **6 heures**.
+
+### Le check 📊
+
+| Statut | Signification |
+|---|---|
+| 🟢 | Normales en cache. Le message donne celles du mois en cours (`21.5°C / 12.1°C`). |
+| 🟡 | Pas encore calculées — **aucun écart n'est affiché dans l'app**, mais rien n'est cassé. |
+| 🔴 | Erreur de lecture (Redis). |
+
+### Forcer le calcul
+
+```
+GET /meteo/normales?calcul=1
+```
+
+Répond `503 { "disponible": false }` tant que le calcul n'a pas abouti — jamais des
+valeurs partielles. Compter jusqu'à une minute : la requête porte sur trente ans de
+valeurs quotidiennes.
+
+| Route | Auth | Rôle |
+|---|---|---|
+| `GET /meteo/normales` | non | Normales + provenance (surtout pour le diagnostic) |
+| `GET /meteo/normales?calcul=1` | non | Force le calcul si absent |
+| `GET /meteo/commune` | non | Les porte déjà dans le champ `normales` — l'app n'a **aucun** appel supplémentaire à faire |
 
 ---
 

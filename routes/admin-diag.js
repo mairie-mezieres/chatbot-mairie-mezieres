@@ -13,6 +13,7 @@ const {
 const { adminAuth } = require("../lib/middleware");
 const { getGoogleCalendarClient } = require("../lib/calendar");
 const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance } = require("../lib/meteo");
+const { lireNormales, normaleDuMois, MOIS_FR } = require("../lib/normales");
 const { fetchVigieauStatus } = require("../lib/vigieau");
 const { resolveFacebookPageId } = require("../lib/facebook");
 const { redisGet, redisSet, redisPipeline, _isRedis429 } = require("../lib/redis");
@@ -291,6 +292,36 @@ router.get("/admin/services/test", adminAuth, async (req, res) => {
         weather_code: cur.weather_code,
         wind_speed_10m: cur.wind_speed_10m,
         timezone: forecast?.timezone || OPEN_METEO_TZ
+      }
+    };
+  }));
+
+  // Les normales sont calculées une seule fois par semestre, en arrière-plan :
+  // si le calcul échoue, RIEN ne le montre côté habitant — la fenêtre météo
+  // affiche simplement la température sans écart, exactement comme avant. D'où
+  // ce check : c'est le seul endroit où l'absence est visible.
+  services.push(await runCheck("normales", "Normales saisonnières (ERA5)", "📊", async () => {
+    const normales = await lireNormales();
+    if (!normales) {
+      return {
+        status: "warn",
+        message: "Non encore calculées — aucun écart affiché dans l'app",
+        details: { relance: "GET /meteo/normales?calcul=1" }
+      };
+    }
+    const mois = new Date().getMonth() + 1;
+    const n = normaleDuMois(normales, mois);
+    return {
+      status: "ok",
+      message: n
+        ? `${MOIS_FR[mois - 1]} : ${n.tmax}°C / ${n.tmin}°C (${normales.periode.debut}-${normales.periode.fin})`
+        : `Normales ${normales.periode.debut}-${normales.periode.fin} en cache`,
+      details: {
+        jeu: normales.jeu,
+        reanalyse: normales.reanalyse,
+        station: normales.station,
+        calculeLe: normales.calculeLe,
+        joursDuMois: n ? n.jours : null
       }
     };
   }));

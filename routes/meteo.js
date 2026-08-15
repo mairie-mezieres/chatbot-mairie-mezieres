@@ -3,6 +3,7 @@
 "use strict";
 const router = require("express").Router();
 const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance, sendWeatherPush, publishWeatherAlertToFacebook, weatherAlertSignature, claimWeatherPush, releaseWeatherPushClaim, claimWeatherFacebookPost, releaseWeatherFacebookPost } = require("../lib/meteo");
+const { normalesSiPretes, calculerNormales } = require("../lib/normales");
 const { readLastWeatherAlert, writeLastWeatherAlert } = require("../lib/store");
 const { redisGet, redisSet } = require("../lib/redis");
 const { AUTO_POST_WEATHER_ALERTS, AUTO_POST_MIN_LEVEL, AUTO_PUSH_WEATHER_MIN_LEVEL } = require("../config");
@@ -27,15 +28,20 @@ router.get('/meteo/forecast', async (req, res) => {
 
 router.get("/meteo/commune", async (req, res) => {
   try {
-    const [forecastResult, rawVigilance] = await Promise.all([
+    const [forecastResult, rawVigilance, normales] = await Promise.all([
       getCachedMeteoForecast({ allowStale: true }),
       fetchMeteoFranceVigilanceRaw().catch(() => null),
+      // Ne bloque jamais : si les normales ne sont pas encore calculées, le calcul
+      // part en arrière-plan et la fenêtre météo s'affiche sans écart. Trente ans
+      // de données ne se mettent pas sur le chemin d'un habitant qui ouvre l'app.
+      normalesSiPretes().catch(() => null),
     ]);
 
     const vigilance = extractDepartmentVigilance(rawVigilance, "45");
     res.json({
       forecast: forecastResult.data,
       vigilance,
+      normales,
       stale: forecastResult.stale,
       cacheTime: forecastResult.cacheTime,
       source: forecastResult.source
@@ -43,6 +49,33 @@ router.get("/meteo/commune", async (req, res) => {
   } catch (e) {
     console.error("❌ /meteo/commune:", e.message);
     res.status(500).json({ error: "Météo indisponible", detail: e.message });
+  }
+});
+
+/**
+ * Normales saisonnières 1991-2020 (réanalyse ERA5) — voir `lib/normales.js`.
+ *
+ * Route dédiée surtout au diagnostic : l'app, elle, les reçoit dans
+ * `/meteo/commune` et n'a donc aucun appel supplémentaire à faire.
+ *
+ * Tant qu'elles ne sont pas calculées, on répond 503 `{ disponible: false }` —
+ * jamais des valeurs partielles ou approchées. L'app n'affiche alors aucun écart.
+ */
+router.get("/meteo/normales", async (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  try {
+    const forcer = req.query.calcul === "1";
+    const normales = forcer ? await calculerNormales() : await normalesSiPretes();
+    if (!normales) {
+      return res.status(503).json({
+        disponible: false,
+        raison: "Normales non encore calculées (calcul lancé en arrière-plan) ou source indisponible.",
+      });
+    }
+    res.json({ disponible: true, ...normales });
+  } catch (e) {
+    console.error("❌ /meteo/normales:", e.message);
+    res.status(503).json({ disponible: false, raison: "Normales indisponibles" });
   }
 });
 

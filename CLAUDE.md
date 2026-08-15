@@ -14,6 +14,7 @@ Règle d'or : **vérifier qu'une fonctionnalité n'existe pas déjà (code + UI 
 | Tableau de bord admin, onglets, **diagnostic 🧪 Services** (§6), env Render (§4), Sentry, FAQ dépannage | `GUIDE-ADMIN.md` |
 | **Webhook Facebook `#MAT`** — fonctionnement et dépannage | `GUIDE-ADMIN.md` §5 |
 | **Alertes sécheresse VigiEau** (séparées de la vigilance météo) — `lib/vigieau.js`, `routes/eau.js` | `GUIDE-ADMIN.md` §5ter |
+| **Normales saisonnières 1991-2020** — `lib/normales.js`, `GET /meteo/normales`, champ `normales` de `/meteo/commune`. ⚠️ **ERA5 est une réanalyse, PAS une station** : ne jamais l'annoncer autrement. Règle du tout ou rien, calcul en arrière-plan | `GUIDE-ADMIN.md` §6quinquies puis `app-mezieres/docs/adr/0024-…` |
 | **Kit réplication « Partager »** — profils de communes, mail quotidien, `POST /stats/partager` | `GUIDE-ADMIN.md` §6bis |
 | **Compteur d'installations** (badge app, mail, tableau de bord) — source unique `services.installation` | `GUIDE-ADMIN.md` §6ter + `docs/adr/0010-…` |
 | **Documents du PLUi-H-D** — routes `/docs/plui`, envoi de PDF (Cloudinary `raw`, 4 Mo max) ou lien, pastille « Nouveau » | `GUIDE-ADMIN.md` §6quater + `app-mezieres/docs/adr/0014-…` |
