@@ -153,6 +153,16 @@ Architecture à connaître avant toute modification des notifications :
   jour au lieu d'une nouvelle issue à chaque passage. Il la **referme** aussi quand le
   scan repasse au vert. Sans ce garde-fou, chaque exécution hebdomadaire en créait une
   de plus — #176 et #181 étaient identiques mot pour mot, à un jour d'intervalle.
+- ⚠️ **Ne jamais écrire d'adresse factice** — schéma `https` suivi de points de
+  suspension ou d'un domaine d'exemple — **dans `lib/`, `routes/` ou un `.md` de la
+  racine** : ces fichiers sont scannés, **commentaires compris**. lychee l'extrait comme
+  une vraie adresse et échoue à la **parser** ; or une erreur de parsing ne peut **pas**
+  être neutralisée par `--exclude`, qui ne filtre que des URL déjà parsées. C'est le
+  dernier faux positif de #181 : le message de `routes/docs.js` illustrait le format
+  attendu par un simulacre d'URL. L'exclusion ancrée ajoutée pour ça n'a rien changé
+  (scan du 10 août : toujours signalé), donc l'issue ne pouvait pas se refermer toute
+  seule. Seule issue : reformuler le texte — « url (adresse en https) ». Décrire le
+  format en toutes lettres.
 - Origine : la règle `fibre` annonçait `valdeloire-fibre.fr`, un domaine qui **n'existe
   pas** (échec DNS), et la règle CNI renvoyait vers le site d'une seule commune. Rien ne
   le détectait — le scan de `app-mezieres` ne couvrait que ses pages HTML.

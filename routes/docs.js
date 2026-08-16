@@ -108,7 +108,14 @@ router.post("/admin/docs/plui", adminAuth, async (req, res) => {
   } else {
     finalUrl = capStr(url, 500).trim();
     if (!/^https:\/\//i.test(finalUrl)) {
-      return res.status(400).json({ error: "url (https://…) ou fileB64 requis" });
+      // ⚠️ Décrire le format en toutes lettres — ne PAS écrire ici une adresse
+      // factice (schéma https suivi de points de suspension). lychee (workflow
+      // liens-morts) l'extrait comme une vraie adresse et échoue à la parser
+      // (« invalid international domain name »). Une erreur de parsing ne peut
+      // pas être filtrée par `--exclude`, qui ne voit que des URL déjà
+      // parsées : l'issue #181 est restée ouverte sur ce seul faux positif.
+      // Ce commentaire non plus ne doit pas en contenir : routes/*.js est scanné.
+      return res.status(400).json({ error: "url (adresse en https) ou fileB64 requis" });
     }
   }
 
