@@ -55,11 +55,18 @@ jobs:
           # En cas de doute sur un signalement, vérifier d'abord si l'URL est
           # réellement suivie par un humain avant de la croire cassée.
           #
-          # `^https://…$` : le message d'erreur de routes/docs.js dit
-          # « url (https://…) ou fileB64 requis ». Les points de suspension
-          # sont un ESPACE RÉSERVÉ dans un texte, pas une adresse — lychee
-          # essaie néanmoins de les parser et échoue sur « invalid
-          # international domain name ». Motif ancré pour n'attraper que ça.
+          # ⚠️ `--exclude` ne peut PAS neutraliser une erreur de PARSING.
+          # Le filtre s'applique à des URL déjà parsées ; quand lychee n'arrive
+          # pas à construire l'URL, il échoue avant d'y arriver. Le message
+          # d'erreur de routes/docs.js disait « url (https://…) ou fileB64
+          # requis » — les points de suspension sont un ESPACE RÉSERVÉ dans un
+          # texte, pas une adresse, et lychee échouait dessus sur « invalid
+          # international domain name ». L'exclusion `^https://…$` ajoutée pour
+          # ça n'a rien changé : le scan du 10 août l'a re-signalée, et l'issue
+          # #181 est restée ouverte sur ce seul faux positif. La seule issue est
+          # de ne pas écrire d'adresse factice dans le code : le message dit
+          # maintenant « url (adresse en https) ». Ne pas réintroduire de
+          # `https://` littéral suivi d'un espace réservé dans lib/ ou routes/.
           args: >-
             --no-progress
             --max-retries 2
@@ -82,7 +89,6 @@ jobs:
             --exclude 'www\.vigicrues\.gouv\.fr'
             --exclude 'sentry\.io'
             --exclude 'localhost'
-            --exclude '^https://…$'
             --exclude 'api\.anthropic\.com'
             --exclude 'api\.mistral\.ai'
             --exclude 'api\.resend\.com'
