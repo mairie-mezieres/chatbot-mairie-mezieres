@@ -104,3 +104,63 @@ version quand la question est posée autrement — c'est précisément ce qui s'
 - Ne pas écrire l'URL de l'arrêté sur `loiret.gouv.fr` dans `lib/` : l'arborescence du
   site préfectoral a déjà changé (`/Actions-de-l-Etat/…` → `/Politiques-publiques/…`) et
   le scan `liens-morts.yml` ouvrirait une issue. Nommer le texte et sa date suffit.
+
+---
+
+## Deuxième occurrence — la salle communale (23 août 2026, même journée)
+
+Le même jour, dans la même série de questions de contrôle :
+
+> « Je souhaite louer la salle des fêtes, quel est le tarif pour le 1er week-end
+> d'octobre 2026 ? »
+
+Classée « autre », MEL a improvisé. Or **la salle communale n'est plus proposée à la
+location** — il n'existe ni tarif, ni calendrier, à aucune date.
+
+Le cas est instructif parce qu'il diffère du premier sur un point : ici, **le fait
+existait bel et bien dans le dépôt**. Il était simplement inatteignable.
+
+- Dans `app-mezieres/data/mel-tree.json`, rubrique « Location de matériel » : la phrase
+  « en ce qui concerne la salle communale, elle ne pourra plus être louée désormais »
+  est la **9ᵉ ligne d'un paragraphe de 200 mots** recopié de l'ancien site WordPress,
+  entre les tarifs des barnums et la formule de politesse finale.
+- Dans `app-mezieres/js/mat-mel.js`, la **même rubrique** de l'autre copie de l'arbre
+  n'en dit **rien du tout**. Les deux copies divergeaient sur un fait, pas sur une
+  formulation.
+- `data/saviez-vous.json` porte pourtant l'entrée `salle-communale-location`, correcte
+  et sourcée — mais c'est un corpus de culture générale, que rien ne relie à MEL.
+- Le backend, lui, n'en savait rien du tout : ni `DIRECT_RULES`, ni `SYSTEM_PROMPT`.
+
+**Un fait enfoui n'est pas un fait connu.** Une information vraie, exacte et présente dans
+le dépôt ne protège de rien si elle n'est pas là où le code la lit. Trois copies, une
+seule portait le fait, et ce n'était pas celle que MEL consulte.
+
+### Ce que nous en faisons
+
+`DIRECT_RULE` `location_salle_materiel` + bloc `SALLE COMMUNALE ET LOCATION DE MATÉRIEL`
+dans le `SYSTEM_PROMPT`, sur le même modèle que le bruit : la connaissance **et**
+l'interdiction. Ici l'interdiction porte sur les tarifs, les montants de caution et les
+disponibilités — et explicitement sur la tournure « en vérifiant les disponibilités »,
+qui laisserait croire que la salle est réservable.
+
+Côté app, la rubrique « Location de matériel communal » annonce le fait **en première
+phrase**, dans les **deux** copies de l'arbre.
+
+### Le choix de ne PAS recopier les tarifs
+
+Les prix (tables et chaises, barnums 6×8 et 6×12, chèque de caution) vivent dans l'arbre
+de décision, que la mairie édite depuis l'admin **sans passer par le code**. Les recopier
+dans `lib/mel.js` aurait rendu la réponse plus complète — et créé une double source vouée
+à diverger au premier changement de tarif, sans que rien ne le signale. Même piège que les
+associations et la fibre, tous deux déjà documentés.
+
+La règle nomme donc le matériel disponible et renvoie à la mairie pour les montants.
+`test/location-salle.test.js` vérifie qu'**aucun montant en euros** n'apparaît dans la
+réponse : la tentation reviendra, le test la refusera.
+
+### Au passage
+
+La rubrique portait un lien mort — `mezieres-lez-clery.fr/2018/10/24/location-de-materiel/`
+— vers l'ancien site WordPress, dont le domaine sert désormais l'application. C'était la
+dernière URL de ce type dans `data/` et `js/` ; `data/` n'est pas couvert par le scan
+`liens-morts.yml`, ce qui explique qu'elle ait survécu.

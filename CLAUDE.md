@@ -135,7 +135,8 @@ Architecture à connaître avant toute modification des notifications :
   avant de découvrir DIRECT_RULES — règle d'or : vérifier l'existant).
 - L'**arbre de décision** (admin → onglet 👩 MEL) est le 3e canal : parcours guidé
   cliquable, éditable par la mairie sans code.
-  Tests : `test/demarches.test.js`, `test/guide-arrivee.test.js`, `test/bruit.test.js`.
+  Tests : `test/demarches.test.js`, `test/guide-arrivee.test.js`, `test/bruit.test.js`,
+  `test/location-salle.test.js`.
 - ⚠️ **Un changelog n'est pas une preuve d'existence.** La v4.15 annonçait « règle MEL
   directe pour les horaires de bruit et de bricolage » ; la règle n'a jamais existé dans
   le code. Résultat, trois mois plus tard : « quelles sont les horaires de bruit » →
@@ -154,6 +155,19 @@ Architecture à connaître avant toute modification des notifications :
   outils : la règle générale (aucun bruit portant atteinte à la tranquillité, de jour
   comme de nuit) s'applique en permanence. Deux endroits à garder en phase : la règle
   `bruit_travaux_horaires` et le bloc `BRUITS DE VOISINAGE` du `SYSTEM_PROMPT`.
+- ⚠️ **Un fait enfoui n'est pas un fait connu.** Deuxième occurrence le même jour : « quel
+  est le tarif de la salle des fêtes ? » — or **la salle n'est plus louée**. Le fait
+  existait dans le dépôt, en **9ᵉ ligne d'un paragraphe de 200 mots** de la rubrique
+  « Location de matériel » (`app-mezieres/data/mel-tree.json`), **absent** de l'autre copie
+  de l'arbre (`app-mezieres/js/mat-mel.js`), et inconnu du backend. Trois copies, une seule
+  portait le fait, et pas celle que MEL lit. D'où la règle `location_salle_materiel` et le
+  bloc `SALLE COMMUNALE ET LOCATION DE MATÉRIEL` du `SYSTEM_PROMPT`. Voir ADR-0013.
+- ⚠️ **Ne JAMAIS recopier les tarifs de location dans `lib/mel.js`.** Les prix (tables,
+  chaises, barnums, caution) vivent dans l'arbre de décision, **que la mairie édite depuis
+  l'admin sans passer par le code**. Les dupliquer ici créerait une double source vouée à
+  diverger au premier changement de tarif, en silence. La règle nomme le matériel et
+  renvoie à la mairie pour les montants ; `test/location-salle.test.js` refuse tout
+  montant en euros dans la réponse.
 
 > 📦 Le **guide d'arrivée des nouveaux habitants** est une page de l'app (repo
 > `app-mezieres`, `js/mat-guide-arrivee.js`) : contenu embarqué en statique, consultable
