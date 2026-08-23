@@ -105,7 +105,8 @@ Architecture à connaître avant toute modification des notifications :
   Déjà couverts : CNI, passeport, état civil, **élections (inscription + procuration)**,
   **recensement citoyen**, **PACS**, **arrivée dans la commune (nouvel habitant, changement
   d'adresse, compteurs eau/énergie, inscription scolaire)**, clôtures/abris/piscine,
-  déchets, santé, OPAH, SPANC…
+  déchets, santé, OPAH, SPANC, **bruits de voisinage (horaires de bricolage et de
+  jardinage)**…
 - ⚠️ **Le joker `.` ne suffit pas comme séparateur.** `normalizeQuestion` remplace toute
   ponctuation par une **espace** : « carte d'identité » devient `carte d identite`, soit
   **trois** caractères entre les deux mots. Un motif écrit `carte.identit` ne matche donc
@@ -134,7 +135,25 @@ Architecture à connaître avant toute modification des notifications :
   avant de découvrir DIRECT_RULES — règle d'or : vérifier l'existant).
 - L'**arbre de décision** (admin → onglet 👩 MEL) est le 3e canal : parcours guidé
   cliquable, éditable par la mairie sans code.
-  Tests : `test/demarches.test.js`, `test/guide-arrivee.test.js`.
+  Tests : `test/demarches.test.js`, `test/guide-arrivee.test.js`, `test/bruit.test.js`.
+- ⚠️ **Un changelog n'est pas une preuve d'existence.** La v4.15 annonçait « règle MEL
+  directe pour les horaires de bruit et de bricolage » ; la règle n'a jamais existé dans
+  le code. Résultat, trois mois plus tard : « quelles sont les horaires de bruit » →
+  « je n'ai pas cette information », et une reformulation de la même question →
+  **horaires inventés** (« 22h-7h », « dimanche toute la journée ») attribués à un
+  **arrêté municipal qui n'existe pas**. Une règle absente ne se manifeste pas par un
+  silence mais par une hallucination plausible. Deux garde-fous depuis :
+  `test/bruit.test.js` verrouille les plages **et** l'absence des plages fausses, et le
+  `SYSTEM_PROMPT` porte un bloc « BRUITS DE VOISINAGE » qui interdit explicitement d'en
+  énoncer d'autres. Avant de croire une entrée de changelog, `grep` le code.
+- ⚠️ **Bruit : l'arrêté est PRÉFECTORAL, pas municipal.** Mézières n'a pas d'arrêté
+  propre sur le bruit ; c'est l'**arrêté préfectoral du Loiret du 1er mars 1999** qui
+  s'applique. Plages autorisées pour les outils bruyants (tondeuse, taille-haie,
+  tronçonneuse, perceuse…) : **lundi-vendredi 8h30-12h et 14h30-19h30, samedi 9h-12h et
+  15h-19h, dimanche et jours fériés 10h-12h**. Ces horaires ne valent que pour ces
+  outils : la règle générale (aucun bruit portant atteinte à la tranquillité, de jour
+  comme de nuit) s'applique en permanence. Deux endroits à garder en phase : la règle
+  `bruit_travaux_horaires` et le bloc `BRUITS DE VOISINAGE` du `SYSTEM_PROMPT`.
 
 > 📦 Le **guide d'arrivée des nouveaux habitants** est une page de l'app (repo
 > `app-mezieres`, `js/mat-guide-arrivee.js`) : contenu embarqué en statique, consultable
