@@ -106,7 +106,7 @@ Architecture à connaître avant toute modification des notifications :
   **recensement citoyen**, **PACS**, **arrivée dans la commune (nouvel habitant, changement
   d'adresse, compteurs eau/énergie, inscription scolaire)**, clôtures/abris/piscine,
   déchets, santé, OPAH, SPANC, **bruits de voisinage (horaires de bricolage et de
-  jardinage)**…
+  jardinage)**, **LAEP (Lieu d'Accueil Enfants-Parents)**…
 - ⚠️ **Le joker `.` ne suffit pas comme séparateur.** `normalizeQuestion` remplace toute
   ponctuation par une **espace** : « carte d'identité » devient `carte d identite`, soit
   **trois** caractères entre les deux mots. Un motif écrit `carte.identit` ne matche donc
@@ -162,6 +162,21 @@ Architecture à connaître avant toute modification des notifications :
   de l'arbre (`app-mezieres/js/mat-mel.js`), et inconnu du backend. Trois copies, une seule
   portait le fait, et pas celle que MEL lit. D'où la règle `location_salle_materiel` et le
   bloc `SALLE COMMUNALE ET LOCATION DE MATÉRIEL` du `SYSTEM_PROMPT`. Voir ADR-0013.
+- ⚠️ **LAEP : ni un mode de garde, ni un service communal.** Le Lieu d'Accueil
+  Enfants-Parents de la CCTVL (ouverture le 7 septembre 2026) est **itinérant** —
+  Beauce la Romaine, Beaugency, Cléry-Saint-André, Meung-sur-Loire — et **ne passe pas
+  par Mézières** ; l'adulte accompagnant **reste avec l'enfant**. Même piège que la crèche
+  Les Marmousets (intercommunale, longtemps annoncée comme communale). Le **planning des
+  créneaux n'était pas encore publié au 25 août 2026** ; quand il paraîtra, ses **jours et
+  horaires ne devront être recopiés nulle part** — ils changeront sans préavis, et
+  `test/laep.test.js` refuse tout horaire ou jour de semaine dans la réponse. On renvoie
+  vers les renseignements du service : **06 62 65 59 04**, laep@ccterresduvaldeloire.fr.
+  La règle `laep` est placée **avant** `centre_loisirs` (un LAEP n'est pas un accueil de
+  loisirs). Quatre endroits à garder en phase : la règle `laep` + le bloc LAEP du
+  `SYSTEM_PROMPT` ici, les deux copies de l'arbre de décision
+  (`app-mezieres/data/mel-tree.json` **et** `app-mezieres/js/mat-mel.js`), et la fiche
+  `periscolaire` de `app-mezieres/js/mat-guide-arrivee.js`. Voir
+  `app-mezieres/docs/adr/0028-laep-…`.
 - ⚠️ **Ne JAMAIS recopier les tarifs de location dans `lib/mel.js`.** Les prix (tables,
   chaises, barnums, caution) vivent dans l'arbre de décision, **que la mairie édite depuis
   l'admin sans passer par le code**. Les dupliquer ici créerait une double source vouée à
