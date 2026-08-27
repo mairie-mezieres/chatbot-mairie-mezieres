@@ -162,6 +162,22 @@ Architecture à connaître avant toute modification des notifications :
   de l'arbre (`app-mezieres/js/mat-mel.js`), et inconnu du backend. Trois copies, une seule
   portait le fait, et pas celle que MEL lit. D'où la règle `location_salle_materiel` et le
   bloc `SALLE COMMUNALE ET LOCATION DE MATÉRIEL` du `SYSTEM_PROMPT`. Voir ADR-0013.
+- ⚠️ **Crèche Les Marmousets : un chiffre lu au mauvais paragraphe reste un chiffre faux.**
+  Le règlement de fonctionnement « parents » 2026-2027 du SIVU (27 août 2026) a démenti
+  deux affirmations que l'application portait depuis longtemps : « **17** assistantes
+  maternelles » (elles sont **16**, §1.4) et « enfants de **moins de 6 ans** » — c'est
+  **de 10 semaines à l'entrée à l'école maternelle** (§1.1). Les « moins de six ans »
+  existent bien dans le règlement, mais ne visent que les **places garanties de l'article
+  D.214-7** (parents en parcours d'insertion). Les deux erreurs s'étaient propagées dans le
+  corpus « Le saviez-vous ? » de l'app, qui puise dans l'arbre de décision : **toute
+  correction ici impose de grepper `app-mezieres/data/saviez-vous.json`.** Ne jamais
+  énoncer de tarif : la participation suit le **barème national CNAF** (§8.1). La règle
+  `creche` est placée **avant** `centre_loisirs`, dont le motif attrape déjà `creche` et
+  `marmousets`, et **après** `laep`. Verrouillé par `test/creche.test.js`. Quatre endroits
+  à garder en phase : la règle `creche` + le bloc CRÈCHE du `SYSTEM_PROMPT` ici, les deux
+  copies de l'arbre (`app-mezieres/data/mel-tree.json` **et** `app-mezieres/js/mat-mel.js`),
+  la fiche `periscolaire` de `app-mezieres/js/mat-guide-arrivee.js`, et les entrées
+  `marmousets-*` de `app-mezieres/data/saviez-vous.json`.
 - ⚠️ **LAEP : ni un mode de garde, ni un service communal.** Le Lieu d'Accueil
   Enfants-Parents de la CCTVL (ouverture le 7 septembre 2026) est **itinérant** —
   Beauce la Romaine, Beaugency, Cléry-Saint-André, Meung-sur-Loire — et **ne passe pas
