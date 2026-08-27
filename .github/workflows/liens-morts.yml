@@ -67,9 +67,22 @@ jobs:
           # de ne pas écrire d'adresse factice dans le code : le message dit
           # maintenant « url (adresse en https) ». Ne pas réintroduire de
           # `https://` littéral suivi d'un espace réservé dans lib/ ou routes/.
+          # ⚠️ Concurrence et délai : lychee lance par défaut jusqu'à 128 requêtes
+          # en parallèle, et abandonne au bout de 20 s. service-public.gouv.fr —
+          # de loin le domaine le plus cité par les réponses de MEL — étrangle
+          # cette rafale et laisse expirer une partie des requêtes. C'est
+          # exactement l'issue #201 : trois « TIMEOUT » sur R11193 et R16396,
+          # deux pages parfaitement vivantes, pendant que le scan du dépôt
+          # app-mezieres, dix minutes plus tôt et sur moins d'URL, obtenait du
+          # même domaine un vrai 404 bien net. Un faux positif coûte plus cher
+          # qu'un scan lent : il faut le ré-instruire à la main, et il apprend
+          # à se méfier du signal. 8 requêtes en parallèle et 30 s de patience
+          # suffisent — le scan tient largement dans les 10 minutes du job.
           args: >-
             --no-progress
             --max-retries 2
+            --max-concurrency 8
+            --timeout 30
             --exclude 'facebook\.com'
             --exclude 'instagram\.com'
             --exclude 'linkedin\.com'
