@@ -81,7 +81,10 @@ const AUTO_POST_WEATHER_ALERTS  = process.env.AUTO_POST_WEATHER_ALERTS === "true
 const AUTO_POST_MIN_LEVEL       = Number(process.env.AUTO_POST_MIN_LEVEL || 3);
 const AUTO_PUSH_WEATHER_MIN_LEVEL = Number(process.env.AUTO_PUSH_WEATHER_MIN_LEVEL || 2);
 const RESEND_API_KEY            = process.env.RESEND_API_KEY || "";
-const DAILY_STATS_EMAIL         = process.env.DAILY_STATS_EMAIL || "fabrice.auffret45@gmail.com";
+// Repli sur l'adresse de la COMMUNE, jamais sur une adresse personnelle : ce
+// défaut suit le code partout où il est déployé (kit de réplication compris),
+// et une boîte personnelle en dur y survivrait à son titulaire.
+const DAILY_STATS_EMAIL         = process.env.DAILY_STATS_EMAIL || "numerique@mezieres-lez-clery.fr";
 const CRON_SECRET               = process.env.CRON_SECRET || "";
 const FACEBOOK_PAGE_ID          = process.env.FACEBOOK_PAGE_ID;
 const OPEN_METEO_LAT            = Number(process.env.OPEN_METEO_LAT || 47.822);

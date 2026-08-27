@@ -12,7 +12,7 @@
   "CLOUDINARY_NAME": "",
   "CLOUDINARY_SECRET": "",
   "CRON_SECRET": "",
-  "DAILY_STATS_EMAIL": "fabrice.auffret45@gmail.com",
+  "DAILY_STATS_EMAIL": "numerique@mezieres-lez-clery.fr",
   "DROUGHT_CHECK_INTERVAL_MS": 21600000,
   "EUR_PER_USD": 0.92,
   "METEOFRANCE_VIGILANCE_URL": "",
