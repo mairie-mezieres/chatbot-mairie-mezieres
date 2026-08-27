@@ -23,6 +23,7 @@ Règle d'or : **vérifier qu'une fonctionnalité n'existe pas déjà (code + UI 
 | Sécurité, signalement de vulnérabilité, données personnelles | `SECURITY.md` |
 | **Mise à jour de Node.js**, socle de versions sûres (`lib/node-baseline.js`), check 🟩 runtime | `GUIDE-ADMIN.md` §6ter |
 | **Inventaire des domaines / hébergeurs, alertes CERT-FR** | repo `app-mezieres` → `docs/surface-exposition.md` |
+| **Cerfa d'urbanisme** (DP, permis de construire) — ⚠️ les 13703, 13702 et 13404 sont **abrogés** depuis le 1er janvier 2025 ; ne jamais écrire de **millésime** (« 16702\*02 ») ; quatre endroits à garder en phase | `app-mezieres/docs/adr/0029-un-numero-de-formulaire-mort-ne-se-voit-pas.md` puis `test/urbanisme-cerfa.test.js` |
 | **Décisions d'architecture** (pourquoi Trello, pourquoi les tokens individuels, pourquoi `sub=null` sur 410…) | `docs/adr/` — un fichier par décision |
 | **« Le saviez-vous ? »** — routes `GET`/`POST /saviezvous/:id` (`routes/reactions.js`). ⚠️ Le **contenu** des faits n'est PAS ici : il vit dans `app-mezieres/data/saviez-vous.json`, versionné et relu. Le backend ne connaît que des identifiants et des compteurs. **Aucune IA ne doit jamais écrire ces faits** | `app-mezieres/docs/adr/0012-…` puis `SFD-16` |
 | **Côté app / PWA / Service Worker / affichage habitant** | repo `app-mezieres` → son `CLAUDE.md` puis `docs/guide-technique.md` |
@@ -193,6 +194,23 @@ Architecture à connaître avant toute modification des notifications :
   (`app-mezieres/data/mel-tree.json` **et** `app-mezieres/js/mat-mel.js`), et la fiche
   `periscolaire` de `app-mezieres/js/mat-guide-arrivee.js`. Voir
   `app-mezieres/docs/adr/0028-laep-…`.
+- ⚠️ **Cerfa d'urbanisme : un numéro de formulaire meurt sans faire de bruit.** Au
+  **1er janvier 2025**, les cerfa **13703** (DP maison individuelle), **13702** (DP
+  lotissement) et **13404** (DP constructions et travaux) ont été **abrogés** ; ce sont
+  désormais le **16702** (constructions et travaux — clôture, abri de jardin, extension,
+  ravalement) et le **16703** (aménagements : lotissement, division de terrain). Le permis
+  de construire reste le **13406**. MEL conseillait encore le 13703 le 27 août 2026 : un
+  dossier déposé sur ce formulaire est **refusé**. Découvert par le scan de liens morts
+  (404 sur la fiche `R11646`, côté app), qui n'était que le symptôme visible — trois autres
+  endroits portaient le fait périmé sans aucun lien pour les trahir. ⚠️ **Ne jamais écrire
+  de millésime** (« 16702\*02 ») : seul le numéro à 5 chiffres est stable. Les numéros
+  abrogés ne sont admis dans `lib/mel.js` que sur la ligne qui les déclare ABROGÉS — le
+  `SYSTEM_PROMPT` doit les nommer pour les interdire. Verrouillé par
+  `test/urbanisme-cerfa.test.js`. Quatre endroits à garder en phase : la règle
+  `plu_permis_construire_depot` + le bloc AUTORISATIONS du `SYSTEM_PROMPT` ici,
+  `app-mezieres/js/mat-mel.js` (`pluAuthLink`), et les entrées `cloture-dp` /
+  `gnau-cerfa-cloture` de `app-mezieres/data/saviez-vous.json`. Voir
+  `app-mezieres/docs/adr/0029-…`.
 - ⚠️ **Ne JAMAIS recopier les tarifs de location dans `lib/mel.js`.** Les prix (tables,
   chaises, barnums, caution) vivent dans l'arbre de décision, **que la mairie édite depuis
   l'admin sans passer par le code**. Les dupliquer ici créerait une double source vouée à
@@ -217,6 +235,15 @@ Architecture à connaître avant toute modification des notifications :
   jour au lieu d'une nouvelle issue à chaque passage. Il la **referme** aussi quand le
   scan repasse au vert. Sans ce garde-fou, chaque exécution hebdomadaire en créait une
   de plus — #176 et #181 étaient identiques mot pour mot, à un jour d'intervalle.
+- ⚠️ **Un « TIMEOUT » n'est pas un lien mort.** Le scan du 24 août 2026 a ouvert l'issue
+  #201 sur trois expirations (`R11193` ×2, `R16396`) : trois pages parfaitement vivantes.
+  lychee lance par défaut **128 requêtes en parallèle** et abandonne au bout de **20 s** ;
+  `service-public.gouv.fr`, de loin le domaine le plus cité par MEL, étrangle la rafale.
+  Le scan du dépôt `app-mezieres`, dix minutes plus tôt et sur moins d'URL, obtenait du
+  même domaine un 404 bien net — c'est la charge, pas le domaine. Les deux workflows
+  passent donc `--max-concurrency 8 --timeout 30`. Avant d'exclure quoi que ce soit sur la
+  foi d'une expiration, relire cette ligne : un faux positif coûte plus cher qu'un scan
+  lent, il faut le ré-instruire à la main et il apprend à se méfier du signal.
 - ⚠️ **Ne jamais écrire d'adresse factice** — schéma `https` suivi de points de
   suspension ou d'un domaine d'exemple — **dans `lib/`, `routes/` ou un `.md` de la
   racine** : ces fichiers sont scannés, **commentaires compris**. lychee l'extrait comme
