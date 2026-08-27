@@ -100,7 +100,7 @@ Le fichier [`.env.example`](.env.example) liste tout en détail. Les **essentiel
 | `TRELLO_*` | Signalements / bugs → cartes Trello (**photo en pièce jointe de la carte**) |
 | `GOOGLE_CALENDAR_*` | Agenda public (lecture) et écriture |
 | `METEOFRANCE_VIGILANCE_URL` | Vigilance météo |
-| `RESEND_*` / `DAILY_STATS_EMAIL` | Rapport de stats quotidien par email |
+| `RESEND_*` / `DAILY_STATS_EMAIL` | Rapport de stats quotidien par email. `RESEND_FROM` = `MAT Stats <numerique@mezieres-lez-clery.fr>` — le domaine est vérifié chez Resend depuis le 25/08/2026 ; sans cette variable l'expéditeur retombe sur `onboarding@resend.dev`. `DAILY_STATS_EMAIL` a pour repli l'adresse de la commune, jamais une adresse personnelle |
 | `CRON_SECRET` | Protection des routes cron internes |
 
 > ⚠️ **Ne jamais committer de secret.** Tout vit dans Render (et dans `.env`
