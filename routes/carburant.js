@@ -6,7 +6,9 @@ const axios = require("axios");
 const { redisGet, redisSetex } = require("../lib/redis");
 const { dlog } = require("../lib/middleware");
 
-const CARBURANT_REDIS_KEY = 'mat:carburant:v7';
+// v8 : ajout de `majISO`. La clé change avec la forme du payload, sinon
+// l'app recevrait pendant une heure des relevés sans horodatage brut.
+const CARBURANT_REDIS_KEY = 'mat:carburant:v8';
 const CARBURANT_TTL_S     = 3600; // 1 heure
 const CARBURANT_STATIONS  = [
   { key: 'clery',      label: 'Intermarché Cléry-St-André',  cp: '45370', brand: 'intermarch' },
@@ -22,8 +24,15 @@ async function fetchStationPrices(cp, brandKey) {
     const sp95   = rec.sp95_prix   ?? rec.e10_prix  ?? null;
     const gazole = rec.gazole_prix ?? null;
     const rawMaj = rec.sp95_maj || rec.e10_maj || rec.gazole_maj || rec.prix_maj || null;
-    const maj    = rawMaj ? new Date(rawMaj).toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : null;
-    return { sp95, gazole, maj };
+    const dtMaj  = rawMaj ? new Date(rawMaj) : null;
+    const okMaj  = dtMaj && !isNaN(dtMaj.getTime());
+    const maj    = okMaj ? dtMaj.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : null;
+    // `maj` est une chaîne « JJ/MM HH:MM » SANS ANNÉE : on ne peut pas la
+    // comparer d'une station à l'autre. `majISO` porte l'horodatage brut, dont
+    // l'app a besoin pour savoir quel relevé est le plus récent (bandeau
+    // d'accueil : on quitte Cléry si son relevé a pris du retard).
+    const majISO = okMaj ? dtMaj.toISOString() : null;
+    return { sp95, gazole, maj, majISO };
   };
 
   // Tentative 1 : API v2.1 — refine=cp:CP (colon non-encodé, évite 400 ODSQL)
