@@ -74,6 +74,19 @@ Architecture à connaître avant toute modification des notifications :
 - **Résilience endpoint** : sur réponse 410/404 (endpoint expiré), on **ne supprime pas**
   le token — on met seulement `entry.sub = null`. Le frontend le re-lie au prochain
   chargement via `_registerPendingNotifyTokens()`.
+  ⛔ **Cette phrase a été fausse pendant longtemps, et c'est invisible d'ici.** Le
+  re-raccordement côté app était placé **derrière** le garde-fou `mat_push_active`,
+  drapeau qu'un habitant ayant activé les notifications depuis le **formulaire** n'a
+  jamais — donc il n'avait jamais lieu, pour exactement les abonnements concernés. Et
+  le handler `pushsubscriptionchange` du service worker ne rappelait pas
+  `/notify/register-token` (cas le plus fréquent : la rotation d'endpoint survient
+  application fermée). Corrigé en v4.102. ⚠️ **Le seul symptôme côté backend est
+  `{skipped: true, reason: "subscription expired"}` dans les logs du webhook Trello** —
+  un message exact, qui décrit un abonnement expiré et *pas* une chaîne de
+  re-raccordement rompue : il se lit comme un fonctionnement normal. Avant de conclure
+  qu'un habitant s'est désabonné, vérifier que le front raccorde vraiment
+  (`node scripts/check-notify-relink.js` dans `app-mezieres`). Voir
+  `app-mezieres/docs/adr/0034-un-garde-fou-peut-emporter-ce-qu-il-protege.md`.
 
 ## Structure & tests
 
