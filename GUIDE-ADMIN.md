@@ -356,6 +356,37 @@ valeurs quotidiennes.
 
 ---
 
+## 6sexies. Le mail de stats quotidien — pourquoi son HTML est écrit ainsi
+
+Le rapport part chaque soir à partir de 22 h (heure de Paris) vers
+`DAILY_STATS_EMAIL`, via Resend (`routes/admin-email.js`). On peut le déclencher
+à la main depuis l'admin, ou par `GET /cron/stats?key=CRON_SECRET&force=1`.
+
+⛔ **Son gabarit ne contient ni feuille de style, ni classe CSS, ni `display:grid`.**
+Ce n'est pas un oubli. Le mail arrivait auparavant **en texte brut** chez le
+destinataire : toute sa mise en forme vivait dans un bloc `<style>` du `<head>`,
+que Gmail (selon le type de compte et l'application), Outlook.com, Yahoo et
+plusieurs applis mobiles **suppriment à la réception**. Les classes ne peignaient
+alors plus rien, et il ne restait que le texte — sans la moindre erreur visible,
+puisque le HTML était valide et s'affichait parfaitement dans un navigateur.
+
+Les trois règles à respecter pour toute évolution du mail :
+
+| Règle | Pourquoi |
+|---|---|
+| Tout style en attribut `style=` sur l'élément peint | Un bloc `<style>` est supprimé par une partie des clients |
+| Chaque `<td>` de texte déclare sa propre `font-family` | Sous Outlook, une cellule n'hérite pas de la police de `<body>` |
+| Mise en page en `<table>` (helpers `card`, `statCell`, `statGrid`) | `grid` et `flex` sont ignorés par Outlook (moteur Word) |
+
+Le payload Resend porte aussi une variante `text` : un client réglé pour préférer
+le texte reçoit un rapport lisible, pas un HTML dépouillé.
+
+`test/email-stats-format.test.js` refuse toute réapparition d'un bloc `<style>`,
+d'un `class=`, d'une mise en page `grid`/`flex` ou d'un envoi sans variante texte.
+Détail de la décision : `docs/adr/0014-mail-html-sans-feuille-de-style.md`.
+
+---
+
 ## 6ter. Le compteur d'installations (badge de l'app)
 
 Un seul chiffre, trois affichages, **une seule source** : `services.installation`
