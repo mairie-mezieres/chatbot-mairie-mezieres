@@ -109,151 +109,222 @@ async function sendDailyStatsEmail() {
     transport:'🚌 Transport', urbanisme:'🏗️ Urbanisme', service_public:'🏛️ Service public',
     meteoalert:'⚠️ Alerte météo'
   };
-  const svcRows = Object.entries(parJour[today] || {})
+  // ⚠️ Mise en forme du mail : tout style s'écrit en attribut `style=`, toute mise en
+  // page repose sur des <table>. Un bloc <style> avec des classes CSS est supprimé par
+  // une bonne partie des clients de messagerie (Gmail selon le type de compte,
+  // Outlook.com, Yahoo, applis mobiles) : le mail arrive alors sans aucune mise en
+  // forme — c'est-à-dire en texte brut. `display:grid` et `display:flex` sont ignorés
+  // par Outlook (moteur Word). Ne pas réintroduire de classe ni de feuille de style.
+  const FONT = 'font-family:Arial,Helvetica,sans-serif';
+  const esc  = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const svcList = Object.entries(parJour[today] || {})
     .filter(([k, v]) => v > 0 && k !== 'mel' && k !== 'installation' && k !== 'app_open')
-    .sort(([,a],[,b]) => b - a)
-    .map(([k, v]) => `<tr><td style="padding:4px 8px">${SVC_LABELS[k] || k}</td><td style="padding:4px 8px;font-weight:700;text-align:right">${v}</td></tr>`)
+    .sort(([,a],[,b]) => b - a);
+  const svcRows = svcList
+    .map(([k, v], i) => `<tr style="background:${i % 2 ? '#f4f0ea' : '#ffffff'}"><td style="${FONT};font-size:13px;padding:4px 8px">${esc(SVC_LABELS[k] || k)}</td><td style="${FONT};font-size:13px;padding:4px 8px;font-weight:700;text-align:right">${v}</td></tr>`)
     .join('');
 
   const dateLabel = new Date(today + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
-  const stat = (val, lbl, cls='') =>
-    `<div class="stat${cls ? ' '+cls : ''}"><div class="stat-val">${val}</div><div class="stat-lbl">${lbl}</div></div>`;
-  const redisCls = redisPctDay !== null && redisPctDay >= 80 ? 'danger' : redisPctDay !== null && redisPctDay >= 60 ? 'warn' : '';
+
+  // Équivalent de l'ancienne classe .card
+  const card = (title, inner) => `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border:1px solid #e2ddd8;border-radius:12px;margin-bottom:16px">
+  <tr><td style="padding:20px">
+    <div style="${FONT};color:#2d6a4f;font-size:16px;font-weight:700;margin:0 0 12px">${title}</div>
+    ${inner}
+  </td></tr>
+</table>`;
+
+  // Une pastille de chiffre (ancienne classe .stat). `lbl` peut porter du HTML :
+  // le retour à la ligne et la tendance produits par trendLbl.
+  const statCell = (val, lbl, bg, w) =>
+    `<td width="${w}%" valign="top" style="padding:5px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${bg || '#d8f3dc'};border-radius:8px">
+        <tr><td align="center" style="${FONT};padding:12px">
+          <div style="font-size:24px;font-weight:900;color:#1a3d2b;line-height:1.2">${val}</div>
+          <div style="font-size:11px;color:#2d6a4f;line-height:1.5;padding-top:4px">${lbl}</div>
+        </td></tr>
+      </table>
+    </td>`;
+
+  // Remplace `display:grid` : une <table> de `cols` colonnes. Les entrées falsy sont
+  // ignorées, ce qui permet de garder les pastilles conditionnelles.
+  const statGrid = (cells, cols = 2) => {
+    const list = cells.filter(Boolean);
+    if (!list.length) return '';
+    const w = Math.round(100 / cols);
+    let rows = '';
+    for (let i = 0; i < list.length; i += cols) {
+      const slice = list.slice(i, i + cols);
+      rows += '<tr>'
+        + slice.map(([val, lbl, bg]) => statCell(val, lbl, bg, w)).join('')
+        + `<td width="${w}%" style="padding:5px"></td>`.repeat(cols - slice.length)
+        + '</tr>';
+    }
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>`;
+  };
+
+  const trendLbl = (lbl, a, b, ref) =>
+    b > 0 ? `${lbl}<br><span style="font-size:10px;color:#5a7065">${trend(a, b)} ${ref}</span>` : lbl;
+  const redisBg = redisPctDay !== null && redisPctDay >= 80 ? '#fee2e2'
+                : redisPctDay !== null && redisPctDay >= 60 ? '#fef3c7' : '';
 
   const html = `<!DOCTYPE html>
 <html lang="fr">
-<head><meta charset="UTF-8"><style>
-  body{font-family:system-ui,sans-serif;background:#f4f0ea;margin:0;padding:20px}
-  .card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #e2ddd8}
-  h1{color:#1a3d2b;font-size:1.4rem;margin:0 0 4px}
-  .sub{color:#5a7065;font-size:0.85rem;margin-bottom:20px}
-  h2{color:#2d6a4f;font-size:1rem;margin:0 0 12px}
-  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
-  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-  .stat{background:#d8f3dc;border-radius:8px;padding:12px;text-align:center}
-  .stat-val{font-size:1.5rem;font-weight:900;color:#1a3d2b}
-  .stat-lbl{font-size:0.70rem;color:#2d6a4f;margin-top:2px}
-  .trend{font-size:0.65rem;color:#5a7065}
-  .warn{background:#fef3c7}.danger{background:#fee2e2}
-  table{width:100%;border-collapse:collapse;font-size:0.85rem}
-  tr:nth-child(even){background:#f4f0ea}
-  .foot{color:#5a7065;font-size:0.75rem;text-align:center;margin-top:16px}
-  .q{background:#f4f0ea;border-radius:6px;padding:6px 10px;margin:4px 0;font-size:0.82rem;color:#2d2d2d}
-</style></head>
-<body>
-<h1>📊 MAT — Statistiques</h1>
-<div class="sub">${dateLabel}</div>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MAT — Statistiques du ${today}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f0ea;${FONT}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f0ea">
+<tr><td align="center" style="padding:20px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px">
+<tr><td>
 
-<div class="card">
-  <h2>👤 Fréquentation</h2>
-  <div class="grid">
-    ${stat(uToday, `Visiteurs uniques aujourd'hui${uYest > 0 ? '<br><span class="trend">'+trend(uToday,uYest)+' vs hier</span>' : ''}`)}
-    ${stat(uMonth, `Visiteurs uniques ce mois${uPrevM > 0 ? '<br><span class="trend">'+trend(uMonth,uPrevM)+' vs mois préc.</span>' : ''}`)}
-    ${stat(accessToday, `Accès app aujourd'hui${accessYest > 0 ? '<br><span class="trend">'+trend(accessToday,accessYest)+' vs hier</span>' : ''}`)}
-    ${stat(accessMonth, 'Accès app ce mois')}
-  </div>
-</div>
+<div style="${FONT};color:#1a3d2b;font-size:22px;font-weight:700;margin:0 0 4px">📊 MAT — Statistiques</div>
+<div style="${FONT};color:#5a7065;font-size:13px;margin:0 0 20px">${dateLabel}</div>
 
-${settings.melUsageStatsEnabled !== false ? `<div class="card">
-  <h2>💬 MEL — Chat IA</h2>
-  <div class="grid3">
-    ${stat(melToday, `Questions aujourd'hui${melYest > 0 ? '<br><span class="trend">'+trend(melToday,melYest)+' vs hier</span>' : ''}`)}
-    ${stat(melTotal, 'Total depuis le début')}
-    ${stat(iaEurMonth > 0 ? '€'+iaEurMonth.toFixed(2) : '—', 'Coût IA ce mois')}
-  </div>
-  ${Object.keys(iaCatsToday).length > 0 ? `<div style="margin-top:12px"><strong style="font-size:0.8rem;color:#2d6a4f">Catégories aujourd'hui :</strong><br><table style="margin-top:6px">${
-    Object.entries(iaCatsToday).sort(([,a],[,b])=>b-a).map(([k,v])=>`<tr><td style="padding:3px 8px">${IA_LABELS[k]||k}</td><td style="padding:3px 8px;font-weight:700;text-align:right">${v}</td></tr>`).join('')
-  }</table></div>` : ''}
-  ${melLogs.length > 0 ? `<div style="margin-top:12px"><strong style="font-size:0.8rem;color:#2d6a4f">Questions du jour (${melLogs.length}) :</strong><div style="margin-top:6px;max-height:200px;overflow:auto">${
-    melLogs.map(q => { const txt = typeof q === 'object' ? (q.q || '') : String(q); return `<div class="q">${txt.replace(/</g,'&lt;')}</div>`; }).join('')
-  }</div></div>` : ''}
-</div>` : ''}
+${card('👤 Fréquentation', statGrid([
+  [uToday,      trendLbl("Visiteurs uniques aujourd'hui", uToday, uYest, 'vs hier')],
+  [uMonth,      trendLbl('Visiteurs uniques ce mois', uMonth, uPrevM, 'vs mois préc.')],
+  [accessToday, trendLbl("Accès app aujourd'hui", accessToday, accessYest, 'vs hier')],
+  [accessMonth, 'Accès app ce mois']
+]))}
 
-${svcRows ? `<div class="card">
-  <h2>🛠️ Services utilisés aujourd'hui</h2>
-  <table>${svcRows}</table>
-</div>` : ''}
+${settings.melUsageStatsEnabled !== false ? card('💬 MEL — Chat IA', `
+  ${statGrid([
+    [melToday, trendLbl("Questions aujourd'hui", melToday, melYest, 'vs hier')],
+    [melTotal, 'Total depuis le début'],
+    [iaEurMonth > 0 ? '€' + iaEurMonth.toFixed(2) : '—', 'Coût IA ce mois']
+  ], 3)}
+  ${Object.keys(iaCatsToday).length > 0 ? `<div style="margin-top:12px"><strong style="${FONT};font-size:13px;color:#2d6a4f">Catégories aujourd'hui :</strong>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-top:6px">${
+      Object.entries(iaCatsToday).sort(([,a],[,b])=>b-a).map(([k,v],i)=>`<tr style="background:${i % 2 ? '#f4f0ea' : '#ffffff'}"><td style="${FONT};font-size:13px;padding:3px 8px">${esc(IA_LABELS[k]||k)}</td><td style="${FONT};font-size:13px;padding:3px 8px;font-weight:700;text-align:right">${v}</td></tr>`).join('')
+    }</table></div>` : ''}
+  ${melLogs.length > 0 ? `<div style="margin-top:12px"><strong style="${FONT};font-size:13px;color:#2d6a4f">Questions du jour (${melLogs.length}) :</strong><div style="margin-top:6px">${
+    melLogs.map(q => { const txt = typeof q === 'object' ? (q.q || '') : q; return `<div style="${FONT};background:#f4f0ea;border-radius:6px;padding:6px 10px;margin:4px 0;font-size:13px;color:#2d2d2d">${esc(txt)}</div>`; }).join('')
+  }</div></div>` : ''}`) : ''}
 
-<div class="card">
-  <h2>🔔 Abonnements push</h2>
-  <div class="grid">
-    ${stat(subs.length, 'Abonnés notifications')}
-    ${decSubs.length > 0 ? stat(decSubs.length, 'Abonnés rappels déchets') : ''}
-    ${stat(installToday > 0 ? `${installToday} / ${installTotal}` : installTotal, installToday > 0 ? "Installations aujourd'hui / total" : 'Installations PWA (total)')}
-  </div>
-</div>
+${svcRows ? card('🛠️ Services utilisés aujourd\'hui',
+  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">${svcRows}</table>`) : ''}
 
-${partagerVisitesTotal > 0 || partagerPromptsTotal > 0 || partagerProfils.length > 0 ? `<div class="card">
-  <h2>🧩 Kit réplication « Partager »</h2>
-  <div class="grid">
-    ${stat(partagerVisitesToday > 0 ? `${partagerVisitesToday} / ${partagerVisitesTotal}` : partagerVisitesTotal, partagerVisitesToday > 0 ? "Visites page aujourd'hui / total" : 'Visites page (total)')}
-    ${stat(partagerPromptsToday > 0 ? `${partagerPromptsToday} / ${partagerPromptsTotal}` : partagerPromptsTotal, partagerPromptsToday > 0 ? "Prompts générés aujourd'hui / total" : 'Prompts générés (total)')}
-  </div>
-  ${partagerProfilsToday.length > 0 ? `<div style="margin-top:12px"><strong style="font-size:0.8rem;color:#2d6a4f">Communes intéressées aujourd'hui (${partagerProfilsToday.length}) :</strong>
-    <table style="margin-top:6px">
+${card('🔔 Abonnements push', statGrid([
+  [subs.length, 'Abonnés notifications'],
+  decSubs.length > 0 ? [decSubs.length, 'Abonnés rappels déchets'] : null,
+  [installToday > 0 ? `${installToday} / ${installTotal}` : installTotal,
+   installToday > 0 ? "Installations aujourd'hui / total" : 'Installations PWA (total)']
+]))}
+
+${partagerVisitesTotal > 0 || partagerPromptsTotal > 0 || partagerProfils.length > 0 ? card('🧩 Kit réplication « Partager »', `
+  ${statGrid([
+    [partagerVisitesToday > 0 ? `${partagerVisitesToday} / ${partagerVisitesTotal}` : partagerVisitesTotal,
+     partagerVisitesToday > 0 ? "Visites page aujourd'hui / total" : 'Visites page (total)'],
+    [partagerPromptsToday > 0 ? `${partagerPromptsToday} / ${partagerPromptsTotal}` : partagerPromptsTotal,
+     partagerPromptsToday > 0 ? "Prompts générés aujourd'hui / total" : 'Prompts générés (total)']
+  ])}
+  ${partagerProfilsToday.length > 0 ? `<div style="margin-top:12px"><strong style="${FONT};font-size:13px;color:#2d6a4f">Communes intéressées aujourd'hui (${partagerProfilsToday.length}) :</strong>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-top:6px">
       <thead><tr style="background:#f3f4f6">
-        <th style="text-align:left;padding:4px 8px">Commune</th>
-        <th style="text-align:right;padding:4px 8px">Habitants</th>
-        <th style="text-align:right;padding:4px 8px">Budget</th>
-        <th style="text-align:left;padding:4px 8px">Niveau info.</th>
+        <th style="${FONT};font-size:13px;text-align:left;padding:4px 8px">Commune</th>
+        <th style="${FONT};font-size:13px;text-align:right;padding:4px 8px">Habitants</th>
+        <th style="${FONT};font-size:13px;text-align:right;padding:4px 8px">Budget</th>
+        <th style="${FONT};font-size:13px;text-align:left;padding:4px 8px">Niveau info.</th>
       </tr></thead>
-      <tbody>${partagerProfilsToday.map(p => `
-        <tr>
-          <td style="padding:4px 8px">${String(p.commune || '—').replace(/</g,'&lt;')}${p.sovereign ? ' 🇫🇷' : ''}</td>
-          <td style="padding:4px 8px;text-align:right">${p.population != null ? Number(p.population).toLocaleString('fr-FR') : '—'}</td>
-          <td style="padding:4px 8px;text-align:right">${p.budget != null ? p.budget + ' €/mois' : '—'}</td>
-          <td style="padding:4px 8px">${p.niveau === 'intermediaire' ? 'Intermédiaire' : 'Débutant'}</td>
+      <tbody>${partagerProfilsToday.map((p, i) => `
+        <tr style="background:${i % 2 ? '#f4f0ea' : '#ffffff'}">
+          <td style="${FONT};font-size:13px;padding:4px 8px">${esc(p.commune || '—')}${p.sovereign ? ' 🇫🇷' : ''}</td>
+          <td style="${FONT};font-size:13px;padding:4px 8px;text-align:right">${p.population != null ? Number(p.population).toLocaleString('fr-FR') : '—'}</td>
+          <td style="${FONT};font-size:13px;padding:4px 8px;text-align:right">${p.budget != null ? esc(p.budget) + ' €/mois' : '—'}</td>
+          <td style="${FONT};font-size:13px;padding:4px 8px">${p.niveau === 'intermediaire' ? 'Intermédiaire' : 'Débutant'}</td>
         </tr>`).join('')}
       </tbody>
-    </table></div>` : `<p style="color:#6b7280;font-style:italic;font-size:0.8rem;margin:10px 0 0">Aucun nouveau profil de commune aujourd'hui${partagerProfils.length > 0 ? ` (${partagerProfils.length} collecté${partagerProfils.length > 1 ? 's' : ''} au total)` : ''}.</p>`}
-</div>` : ''}
+    </table></div>` : `<p style="${FONT};color:#6b7280;font-style:italic;font-size:13px;margin:10px 0 0">Aucun nouveau profil de commune aujourd'hui${partagerProfils.length > 0 ? ` (${partagerProfils.length} collecté${partagerProfils.length > 1 ? 's' : ''} au total)` : ''}.</p>`}`) : ''}
 
-<div class="card">
-  <h2>⚡ Redis Upstash</h2>
-  <div class="grid">
-    ${stat(redisCmdDay !== null ? redisCmdDay : '—', `Commandes aujourd'hui${redisPctDay !== null ? ' ('+redisPctDay+'% du quota)' : ''}`, redisCls)}
-    ${stat(redisCmdMonth !== null ? redisCmdMonth : '—', 'Commandes ce mois')}
-  </div>
-</div>
+${card('⚡ Redis Upstash', statGrid([
+  [redisCmdDay !== null ? redisCmdDay : '—',
+   `Commandes aujourd'hui${redisPctDay !== null ? ' (' + redisPctDay + '% du quota)' : ''}`, redisBg],
+  [redisCmdMonth !== null ? redisCmdMonth : '—', 'Commandes ce mois']
+]))}
 
-<div class="card">
-  <h2>🤖 Questions posées à MEL</h2>
-  ${melQuestions.length === 0
-    ? '<p style="color:#6b7280;font-style:italic;margin:0">Pas de question posée aujourd\'hui.</p>'
-    : `<table style="width:100%;border-collapse:collapse;font-size:0.82rem">
-        <thead><tr style="background:#f3f4f6">
-          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb">Question</th>
-          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb">Réponse MEL</th>
-          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb;white-space:nowrap">Catégorie</th>
-        </tr></thead>
-        <tbody>${melQuestions.map((q,i) => `
-          <tr style="background:${i%2===0?'#fff':'#f9fafb'}">
-            <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6">${String(q.q||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
-            <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;color:#374151">${q.a ? String(q.a).replace(/</g,'&lt;').replace(/>/g,'&gt;') : '<span style="color:#9ca3af;font-style:italic">—</span>'}</td>
-            <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;white-space:nowrap;color:#6b7280">${String(q.cat||'').replace(/</g,'&lt;')}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`
-  }
-</div>
+${card('🤖 Questions posées à MEL', melQuestions.length === 0
+  ? `<p style="${FONT};color:#6b7280;font-style:italic;font-size:13px;margin:0">Pas de question posée aujourd'hui.</p>`
+  : `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">
+      <thead><tr style="background:#f3f4f6">
+        <th style="${FONT};font-size:13px;text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb">Question</th>
+        <th style="${FONT};font-size:13px;text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb">Réponse MEL</th>
+        <th style="${FONT};font-size:13px;text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb">Catégorie</th>
+      </tr></thead>
+      <tbody>${melQuestions.map((q, i) => `
+        <tr style="background:${i % 2 === 0 ? '#ffffff' : '#f9fafb'}">
+          <td style="${FONT};font-size:13px;padding:6px 8px;border-bottom:1px solid #f3f4f6">${esc(q.q)}</td>
+          <td style="${FONT};font-size:13px;padding:6px 8px;border-bottom:1px solid #f3f4f6;color:#374151">${q.a ? esc(q.a) : '<span style="color:#9ca3af;font-style:italic">—</span>'}</td>
+          <td style="${FONT};font-size:13px;padding:6px 8px;border-bottom:1px solid #f3f4f6;color:#6b7280">${esc(q.cat)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`)}
 
-${pendingSignals.length > 0 || pendingIdeas.length > 0 ? `<div class="card">
-  <h2>📋 En attente de traitement</h2>
-  <div class="grid">
-    ${pendingSignals.length > 0 ? stat(pendingSignals.length, '🚨 Signalements en attente', 'warn') : ''}
-    ${pendingIdeas.length   > 0 ? stat(pendingIdeas.length,   '💡 Idées en attente', 'warn')        : ''}
-  </div>
-</div>` : ''}
+${pendingSignals.length > 0 || pendingIdeas.length > 0 ? card('📋 En attente de traitement', statGrid([
+  pendingSignals.length > 0 ? [pendingSignals.length, '🚨 Signalements en attente', '#fef3c7'] : null,
+  pendingIdeas.length   > 0 ? [pendingIdeas.length,   '💡 Idées en attente',        '#fef3c7'] : null
+])) : ''}
 
-<div class="foot">MAT · Mézières-lez-Cléry · ${new Date().toLocaleDateString('fr-FR', { timeZone:'Europe/Paris' })}</div>
+<div style="${FONT};color:#5a7065;font-size:12px;text-align:center;margin-top:16px">MAT · Mézières-lez-Cléry · ${new Date().toLocaleDateString('fr-FR', { timeZone:'Europe/Paris' })}</div>
+
+</td></tr></table>
+</td></tr></table>
 </body></html>`;
+
+  // Variante texte : un client qui n'affiche que le `text/plain` (préférence de
+  // l'utilisateur, montre connectée, lecteur d'écran) reçoit un rapport lisible
+  // plutôt qu'un HTML dépouillé.
+  const pct = redisPctDay !== null ? ` (${redisPctDay}% du quota)` : '';
+  const text = [
+    `MAT — Statistiques du ${dateLabel}`,
+    '',
+    'FRÉQUENTATION',
+    `- Visiteurs uniques aujourd'hui : ${uToday}${uYest > 0 ? ` (${trend(uToday, uYest)} vs hier)` : ''}`,
+    `- Visiteurs uniques ce mois : ${uMonth}${uPrevM > 0 ? ` (${trend(uMonth, uPrevM)} vs mois préc.)` : ''}`,
+    `- Accès app aujourd'hui : ${accessToday}${accessYest > 0 ? ` (${trend(accessToday, accessYest)} vs hier)` : ''}`,
+    `- Accès app ce mois : ${accessMonth}`,
+    ...(settings.melUsageStatsEnabled !== false ? [
+      '',
+      'MEL — CHAT IA',
+      `- Questions aujourd'hui : ${melToday}${melYest > 0 ? ` (${trend(melToday, melYest)} vs hier)` : ''}`,
+      `- Total depuis le début : ${melTotal}`,
+      `- Coût IA ce mois : ${iaEurMonth > 0 ? '€' + iaEurMonth.toFixed(2) : '—'}`
+    ] : []),
+    ...(svcList.length ? ['', "SERVICES UTILISÉS AUJOURD'HUI",
+      ...svcList.map(([k, v]) => `- ${SVC_LABELS[k] || k} : ${v}`)] : []),
+    '',
+    'ABONNEMENTS PUSH',
+    `- Abonnés notifications : ${subs.length}`,
+    ...(decSubs.length > 0 ? [`- Abonnés rappels déchets : ${decSubs.length}`] : []),
+    `- Installations PWA : ${installToday > 0 ? `${installToday} aujourd'hui / ${installTotal} au total` : installTotal}`,
+    '',
+    'REDIS UPSTASH',
+    `- Commandes aujourd'hui : ${redisCmdDay !== null ? redisCmdDay + pct : '—'}`,
+    `- Commandes ce mois : ${redisCmdMonth !== null ? redisCmdMonth : '—'}`,
+    '',
+    'QUESTIONS POSÉES À MEL',
+    ...(melQuestions.length === 0
+      ? ["- Pas de question posée aujourd'hui."]
+      : melQuestions.map(q => `- ${String(q.q || '').trim()}${q.cat ? ` [${q.cat}]` : ''}`)),
+    ...(pendingSignals.length > 0 || pendingIdeas.length > 0 ? ['', 'EN ATTENTE DE TRAITEMENT',
+      ...(pendingSignals.length > 0 ? [`- Signalements : ${pendingSignals.length}`] : []),
+      ...(pendingIdeas.length   > 0 ? [`- Idées : ${pendingIdeas.length}`]          : [])] : []),
+    '',
+    `MAT · Mézières-lez-Cléry · ${new Date().toLocaleDateString('fr-FR', { timeZone:'Europe/Paris' })}`
+  ].join('\n');
 
   try {
     await axios.post('https://api.resend.com/emails', {
       from: process.env.RESEND_FROM || 'MAT Stats <onboarding@resend.dev>',
       to:   [DAILY_STATS_EMAIL],
       subject: `📊 MAT — Stats du ${today}`,
-      html
+      html,
+      text
     }, {
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       timeout: 15000
