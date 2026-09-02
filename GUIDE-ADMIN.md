@@ -42,7 +42,7 @@ Aucune donnée citoyenne ne transite par un CDN tiers côté application.
 
 | Onglet | À quoi ça sert |
 |--------|----------------|
-| 📎 **Atelier fichiers** | Compresser des images ou un PDF vers un poids cible, extraire les pages d'un PDF en images, assembler plusieurs documents en un PDF, extraire le texte d'un PDF (voir §3bis) |
+| 📎 **Atelier fichiers** | Compresser des images ou un PDF, **masquer un visage ou une plaque sur une photo**, **organiser les pages d'un PDF** (garder, pivoter, réordonner), extraire les pages en images, assembler plusieurs documents, extraire le texte (voir §3bis) |
 | 📊 **Vue générale** | Synthèse : activité, visiteurs, coûts Redis, état global |
 | 🔔 **Actualités** | Liste des actus (issues de Facebook `#MAT` ou créées à la main) ; suppression ; publication manuelle |
 | 📢 **Info/Alerte** | Bandeau d'information/alerte affiché en haut de l'app |
@@ -65,11 +65,46 @@ Aucune donnée citoyenne ne transite par un CDN tiers côté application.
 
 ## 3bis. L'atelier fichiers (onglet 📎)
 
-Cinq outils pour préparer un fichier avant de le publier ou de l'envoyer :
-compresser des images vers un poids cible, compresser un PDF, extraire les pages
-d'un PDF en images, assembler images et PDF en un seul document, extraire le texte
-d'un PDF. Sur téléphone, le bouton **« Prendre une photo »** permet de photographier
-un document page à page, puis de tout assembler en un PDF.
+Sept outils pour préparer un fichier avant de le publier ou de l'envoyer :
+compresser des images vers un poids cible, masquer une zone d'une photo, compresser
+un PDF, organiser les pages d'un PDF, extraire les pages d'un PDF en images,
+assembler images et PDF en un seul document, extraire le texte d'un PDF. Sur
+téléphone, le bouton **« Prendre une photo »** permet de photographier un document
+page à page, puis de tout assembler en un PDF.
+
+### Organiser un PDF ≠ compresser un PDF
+
+Les deux outils sont voisins dans la liste, et se tromper ne se voit qu'après coup :
+
+| | Ce qui arrive au document |
+|---|---|
+| **Organiser un PDF** | Les pages gardées sont **recopiées telles quelles**. Texte toujours sélectionnable et recherchable, qualité d'origine. À utiliser pour supprimer une page, redresser un scan à l'envers, extraire un extrait. |
+| **Compresser un PDF** | Chaque page est **transformée en image**. Le document s'allège beaucoup, mais le texte n'est plus sélectionnable. À réserver à un document destiné à la lecture ou à l'impression. |
+
+### Masquer un visage, une plaque, une adresse
+
+Déposez la photo, tracez un rectangle dessus (à la souris ou au doigt), traitez.
+Trois masques au choix :
+
+- **Flou** (par défaut) — ce qu'on attend sur une photo de manifestation.
+- **Pixels** — même usage, rendu différent.
+- **Noir opaque** — ⛔ **le seul qui supprime réellement l'information.**
+
+Un flou léger sur un petit visage, ou une pixelisation sur une plaque, laissent
+une partie de l'information en place. Pour une **plaque d'immatriculation ou une
+adresse dans un document**, prenez le noir. Pour ne pas identifier quelqu'un sur
+une photo de fête, le flou suffit.
+
+Le masque est appliqué à la **pleine résolution**, pas sur l'aperçu affiché à
+l'écran : ce que vous voyez est une réduction, la zone masquée sur le fichier
+final est exactement celle que vous avez tracée.
+
+### Les photos perdent leur position GPS
+
+Tous les outils qui produisent une image la recréent de zéro : elle **n'emporte
+aucune métadonnée de l'originale**, position GPS comprise. Une photo prise au
+téléphone puis publiée sur Facebook trahirait sinon le lieu exact de la prise de
+vue. L'information est rappelée sous la liste des fichiers.
 
 ### ⛔ Rien ne passe par le serveur
 
