@@ -42,6 +42,7 @@ Aucune donnée citoyenne ne transite par un CDN tiers côté application.
 
 | Onglet | À quoi ça sert |
 |--------|----------------|
+| 📎 **Atelier fichiers** | Compresser des images ou un PDF vers un poids cible, extraire les pages d'un PDF en images, assembler plusieurs documents en un PDF, extraire le texte d'un PDF (voir §3bis) |
 | 📊 **Vue générale** | Synthèse : activité, visiteurs, coûts Redis, état global |
 | 🔔 **Actualités** | Liste des actus (issues de Facebook `#MAT` ou créées à la main) ; suppression ; publication manuelle |
 | 📢 **Info/Alerte** | Bandeau d'information/alerte affiché en haut de l'app |
@@ -59,6 +60,41 @@ Aucune donnée citoyenne ne transite par un CDN tiers côté application.
 | 🚨 **Migration** | Outils de migration de données |
 | 🗑️ **Purge** | Nettoyage des anciennes données (actus, etc.) |
 | 🪲 **Logs** | Journaux serveur récents — inclut le **journal d'audit** des actions admin destructrices (lignes `audit` : suppression actu/idée/sondage/photo, purge) |
+
+---
+
+## 3bis. L'atelier fichiers (onglet 📎)
+
+Cinq outils pour préparer un fichier avant de le publier ou de l'envoyer :
+compresser des images vers un poids cible, compresser un PDF, extraire les pages
+d'un PDF en images, assembler images et PDF en un seul document, extraire le texte
+d'un PDF. Sur téléphone, le bouton **« Prendre une photo »** permet de photographier
+un document page à page, puis de tout assembler en un PDF.
+
+### ⛔ Rien ne passe par le serveur
+
+**Tout se calcule dans le navigateur de la personne qui utilise l'admin.** Aucun
+fichier, aucun nom de fichier, aucune métadonnée n'atteint le backend : il n'y a
+**aucune route**, aucune clé Redis, aucun log, rien à surveiller dans le diagnostic
+🧪 Services. Ne cherchez pas de trace d'un traitement côté serveur — il n'y en a
+pas, et c'est le but : c'est ce qui permet de compresser un projet de délibération
+ou une pièce nominative sans le confier à un tiers.
+
+Corollaire à connaître pour le dépannage :
+
+- **Le premier clic sur l'onglet télécharge 1,94 Mo** de bibliothèques (une seule
+  fois par session). Sur une connexion lente, le premier « Traiter » peut attendre.
+- **Un gros PDF consomme la mémoire de l'appareil.** Plusieurs centaines de pages
+  peuvent faire ramer un téléphone ; le même document passe sans peine sur un
+  ordinateur.
+- **Si le poids cible n'est pas atteint**, l'outil le dit explicitement plutôt que
+  de livrer un fichier trop lourd en silence : réduire la largeur max, ou viser un
+  poids plus élevé.
+- **Rien n'est conservé.** Fermer ou recharger l'onglet vide la liste : il n'y a
+  aucune sauvegarde, volontairement.
+
+Détail technique et raisons : `app-mezieres/docs/guide-technique.md` §10 bis et
+`app-mezieres/docs/adr/0035-atelier-fichiers-…`.
 
 ---
 
