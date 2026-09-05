@@ -13,6 +13,7 @@ const {
   readSignals, readIdeas, readAdminSettings
 } = require("../lib/store");
 const { calcIaCost } = require("../lib/stats");
+const { filterRealProfils } = require("../lib/partager");
 const {
   fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance,
   sendWeatherPush, weatherAlertSignature, claimWeatherPush, releaseWeatherPushClaim
@@ -95,7 +96,11 @@ async function sendDailyStatsEmail() {
   const partagerPromptsToday = parJour[today]?.partager_prompt || 0;
   const partagerVisitesTotal = services.partager_visite || 0;
   const partagerPromptsTotal = services.partager_prompt || 0;
-  const partagerProfils = await redisLRange('mat:partager:profils', 0, 499).catch(() => []);
+  // Les profils d'essai (« ville test », « Cancale »…) sont écartés : ils
+  // arriveraient sinon dans ce mail comme de vraies communes intéressées.
+  const partagerProfils = filterRealProfils(
+    await redisLRange('mat:partager:profils', 0, 499).catch(() => [])
+  );
   const partagerProfilsToday = partagerProfils.filter(p => String(p.date || '').startsWith(today));
 
   // Services actifs aujourd'hui (hors mel, installation, app_open traités séparément)

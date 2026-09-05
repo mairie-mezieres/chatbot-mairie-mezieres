@@ -76,3 +76,60 @@ test("GET /admin/partager-profils sans token → 401", async () => {
   const r = await fetch(base + "/admin/partager-profils");
   assert.equal(r.status, 401);
 });
+
+// ── Profils d'essai écartés (lib/partager.js) ────────────────
+const { isTestCommune, filterRealProfils, normalizeCommune } = require("../lib/partager");
+
+test("POST /stats/partager commune de test → 200 ignored (aucune écriture)", async () => {
+  for (const commune of ["ville test", "Ville Test", "VILLE-TEST", "Cancale", "cancale"]) {
+    const r = await postPartager({ commune, population: 900, budget: 20 });
+    assert.equal(r.status, 200, commune);
+    const j = await r.json();
+    assert.equal(j.success, true, commune);
+    assert.equal(j.ignored, true, commune);
+  }
+});
+
+test("POST /stats/partager vraie commune → pas de drapeau ignored", async () => {
+  const r = await postPartager({ commune: "Mézières-lez-Cléry", population: 1250 });
+  const j = await r.json();
+  assert.equal(j.success, true);
+  assert.equal(j.ignored, undefined);
+});
+
+test("isTestCommune : formes normalisées, mots entiers seulement", async () => {
+  assert.equal(isTestCommune("  ville   test  "), true);
+  assert.equal(isTestCommune("commune de test"), true);
+  assert.equal(isTestCommune("Démo"), true);
+  // Sous-chaîne « test » dans un vrai nom : ne doit PAS être écartée.
+  assert.equal(isTestCommune("Testelin"), false);
+  assert.equal(isTestCommune("Mézières-lez-Cléry"), false);
+  assert.equal(isTestCommune(""), false);
+  assert.equal(isTestCommune(null), false);
+  assert.equal(normalizeCommune("Château-Renard"), "chateau renard");
+});
+
+test("PARTAGER_IGNORE_COMMUNES ajoute des communes sans toucher au code", async () => {
+  const prev = process.env.PARTAGER_IGNORE_COMMUNES;
+  process.env.PARTAGER_IGNORE_COMMUNES = "Saint-Exemple, Beaugency";
+  try {
+    assert.equal(isTestCommune("saint exemple"), true);
+    assert.equal(isTestCommune("Beaugency"), true);
+    assert.equal(isTestCommune("Cléry-Saint-André"), false);
+  } finally {
+    if (prev === undefined) delete process.env.PARTAGER_IGNORE_COMMUNES;
+    else process.env.PARTAGER_IGNORE_COMMUNES = prev;
+  }
+});
+
+test("filterRealProfils écarte les essais déjà stockés", async () => {
+  const bruts = [
+    { commune: "Ville test", date: "2026-09-05T10:00:00.000Z" },
+    { commune: "Cancale", date: "2026-09-05T10:01:00.000Z" },
+    { commune: "Beaugency", date: "2026-09-05T10:02:00.000Z" },
+    null,
+  ];
+  const reels = filterRealProfils(bruts);
+  assert.deepEqual(reels.map(p => p.commune), ["Beaugency"]);
+  assert.deepEqual(filterRealProfils(undefined), []);
+});
