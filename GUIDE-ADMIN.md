@@ -173,6 +173,7 @@ Le fichier [`.env.example`](.env.example) liste tout en détail. Les **essentiel
 | `METEOFRANCE_VIGILANCE_URL` | Vigilance météo |
 | `RESEND_*` / `DAILY_STATS_EMAIL` | Rapport de stats quotidien par email. `RESEND_FROM` = `MAT Stats <numerique@mezieres-lez-clery.fr>` — le domaine est vérifié chez Resend depuis le 25/08/2026 ; sans cette variable l'expéditeur retombe sur `onboarding@resend.dev`. `DAILY_STATS_EMAIL` a pour repli l'adresse de la commune, jamais une adresse personnelle |
 | `CRON_SECRET` | Protection des routes cron internes |
+| `PARTAGER_IGNORE_COMMUNES` | Noms de communes à **ne pas enregistrer** dans les profils du kit « Partager » (séparés par des virgules), en plus des essais déjà écartés par défaut — voir §6bis |
 
 > ⚠️ **Ne jamais committer de secret.** Tout vit dans Render (et dans `.env`
 > en local, ignoré par git). Après modification d'une variable, Render
@@ -600,6 +601,31 @@ entrées, LPUSH + LTRIM). Consultation :
   souverain).
 - **`GET /admin/partager-profils`** (token admin) : liste complète des profils
   collectés, du plus récent au plus ancien.
+
+### Les profils d'essai ne sont pas enregistrés
+
+Les essais faits depuis la page (« ville test », « Cancale »…) passent par le
+même formulaire que les vraies communes intéressées : sans garde-fou, ils
+arrivent chaque matin dans le mail comme de véritables prospects. Ils sont donc
+écartés **à l'écriture et à la lecture** (`lib/partager.js`) :
+
+| Écarté | Règle |
+|---|---|
+| `ville test`, `cancale` | liste par défaut, comparaison sans accents ni ponctuation (`Ville Test`, `VILLE-TEST`… comptent pour la même) |
+| tout nom contenant le **mot** `test`, `tests`, `essai`, `essais` ou `demo` | mot entier uniquement — `Testelin` reste une vraie commune |
+| ce que déclare `PARTAGER_IGNORE_COMMUNES` | noms séparés par des virgules, en plus des précédents (§4) |
+
+`POST /stats/partager` répond alors `{"success":true,"ignored":true}` — la page
+de l'habitant ne change pas de comportement — **sans rien écrire dans Redis**.
+Le même filtre s'applique **à la lecture** (`GET /admin/partager-profils`, qui
+renvoie en plus `ignored`, et mail quotidien) : les essais déjà collectés avant
+ce garde-fou disparaissent des restitutions **sans avoir à toucher Redis**.
+
+> ⚠️ Ce filtre ne concerne **que les profils nominatifs**. Les compteurs
+> `partager_visite` / `partager_prompt` ne portent aucun nom de commune : ils
+> comptent toujours les essais, et se purgent par date depuis l'onglet
+> **🗑️ Purge** → « 📊 Stats usage par jour » (qui efface **tous** les services
+> de la journée, et seulement les journées **antérieures** à la date choisie).
 
 L'écriture est best-effort (un Redis en 429 ne bloque jamais la génération du
 prompt côté habitant) et la route est rate-limitée (10 req/min/IP).

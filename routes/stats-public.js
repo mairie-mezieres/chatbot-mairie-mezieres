@@ -7,6 +7,7 @@ const { readAdminSettings, readStats, writeStats, flushStatsNow } = require("../
 const { redisDel, redisPipeline, redisLRange } = require("../lib/redis");
 const { getParisDateParts } = require("../lib/dates");
 const { capStr, finiteNum, inEnum } = require("../lib/validate");
+const { isTestCommune, filterRealProfils } = require("../lib/partager");
 const { adminAuth } = require("../lib/middleware");
 const { logAudit } = require("../lib/logger");
 const {
@@ -164,6 +165,11 @@ router.post("/stats/partager", _partagerLimiter, async (req, res) => {
   const commune = capStr(b.commune, 120).trim();
   if (!commune) return res.status(400).json({ error: "commune requise" });
 
+  // Essais du porteur de projet (« ville test », « Cancale »…) : réponse 200
+  // — le front n'a rien à afficher de différent — mais aucune écriture. Voir
+  // lib/partager.js.
+  if (isTestCommune(commune)) return res.json({ success: true, ignored: true });
+
   const population = finiteNum(b.population);
   const budget = finiteNum(b.budget);
   const entry = {
@@ -188,8 +194,11 @@ router.post("/stats/partager", _partagerLimiter, async (req, res) => {
 // Lecture admin : liste complète des profils collectés (plus récent en premier)
 router.get("/admin/partager-profils", adminAuth, async (req, res) => {
   try {
-    const profils = await redisLRange(PARTAGER_PROFILS_KEY, 0, PARTAGER_PROFILS_MAX - 1);
-    res.json({ ok: true, count: profils.length, profils });
+    const bruts = await redisLRange(PARTAGER_PROFILS_KEY, 0, PARTAGER_PROFILS_MAX - 1);
+    // Les essais déjà stockés avant la mise en place du filtre sont écartés ici
+    // aussi : rien à purger dans Redis pour qu'ils cessent d'être comptés.
+    const profils = filterRealProfils(bruts);
+    res.json({ ok: true, count: profils.length, ignored: bruts.length - profils.length, profils });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
