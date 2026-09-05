@@ -449,6 +449,25 @@ Les trois règles à respecter pour toute évolution du mail :
 | Chaque `<td>` de texte déclare sa propre `font-family` | Sous Outlook, une cellule n'hérite pas de la police de `<body>` |
 | Mise en page en `<table>` (helpers `card`, `statCell`, `statGrid`) | `grid` et `flex` sont ignorés par Outlook (moteur Word) |
 
+### Ajouter un service au mail et au tableau de bord
+
+Le comptage d'usage est **générique** : `POST /stats/track` accepte n'importe quel
+nom de `service`, l'agrège dans `parJour[jour]`, et le mail liste tout ce qu'il y
+trouve. Il n'y a donc **rien à ajouter côté route ni côté stockage** — seulement un
+libellé, sinon le chiffre s'affiche sous son identifiant technique :
+
+| Où | Quoi |
+|---|---|
+| `routes/admin-email.js` → `SVC_LABELS` | le libellé dans le mail quotidien |
+| `app-mezieres/admin.html` → `SVC_LABELS` et `icons` | le libellé et l'icône du tableau de bord |
+| `app-mezieres/admin.html` → la liste **`services`** | ⚠️ **celle-ci est explicite** : un service qui n'y figure pas est compté mais **n'apparaît nulle part** dans le tableau de bord |
+
+Exemple en place depuis la v4.106 : `jeu` — « 🎮 Jeu du moment ». Il compte les
+**ouvertures du jeu, une fois par appareil et par jour** (le chiffre est donc un
+nombre de personnes, pas de clics), et **rien de la partie** : ni score, ni durée,
+ni nombre de parties. Comme tous les services détaillés, il obéit au réglage
+« statistiques détaillées » : coupé, il ne compte plus.
+
 Le payload Resend porte aussi une variante `text` : un client réglé pour préférer
 le texte reçoit un rapport lisible, pas un HTML dépouillé.
 
