@@ -105,7 +105,7 @@ async function sendDailyStatsEmail() {
     dechets:'🗑️ Déchets', sondages:'📊 Sondages', docs:'📄 Documents',
     nums:'📞 Numéros utiles', remi:'🚌 Bus Rémi', conseil:'🏛️ Conseil municipal',
     signalement:'🚨 Signalement', contact:'💬 Contact mairie', idees:'💡 Idées citoyennes',
-    app_resume:'↩️ Retours avant-plan',
+    app_resume:'↩️ Retours avant-plan', jeu:'🎮 Jeu du moment',
     transport:'🚌 Transport', urbanisme:'🏗️ Urbanisme', service_public:'🏛️ Service public',
     meteoalert:'⚠️ Alerte météo'
   };
