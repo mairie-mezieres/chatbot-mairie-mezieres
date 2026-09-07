@@ -12,7 +12,7 @@ const {
   readStats, readIaStats, readSubs, readDechetsSubs,
   readSignals, readIdeas, readAdminSettings
 } = require("../lib/store");
-const { calcIaCost } = require("../lib/stats");
+const { calcIaCost, splitDayStats } = require("../lib/stats");
 const { filterRealProfils } = require("../lib/partager");
 const {
   fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance,
@@ -47,9 +47,25 @@ async function sendDailyStatsEmail() {
   const uYest    = (uniqueU.byDay   || {})[yesterday]?.length || 0;
   const uMonth   = (uniqueU.byMonth || {})[month]?.length    || 0;
   const uPrevM   = (uniqueU.byMonth || {})[prevMonth]?.length || 0;
-  const accessToday  = Object.values(parJour[today]     || {}).reduce((a,b) => a + Number(b||0), 0);
-  const accessYest   = Object.values(parJour[yesterday] || {}).reduce((a,b) => a + Number(b||0), 0);
-  const accessMonth  = Object.entries(parJour).filter(([d]) => d.startsWith(month)).reduce((s,[,v]) => s + Object.values(v||{}).reduce((a,b)=>a+Number(b||0),0), 0);
+  // ⛔ « Accès app » sommait TOUT `parJour[jour]`, `app_open` compris — donc le
+  // lancement de l'app n'apparaissait nulle part : ni dans ce total (fondu dedans),
+  // ni dans le tableau des services (explicitement exclu). splitDayStats sépare les
+  // lancements des écrans ouverts ; voir le commentaire de `lib/stats.js`.
+  const dayToday = splitDayStats(parJour[today]);
+  const dayYest  = splitDayStats(parJour[yesterday]);
+  const monthDays = Object.keys(parJour).filter(d => d.startsWith(month));
+  const accessToday  = dayToday.screens;
+  const accessYest   = dayYest.screens;
+  const accessMonth  = monthDays.reduce((s, d) => s + splitDayStats(parJour[d]).screens, 0);
+  // Lancements de l'app. ⚠️ Comptage optionnel (réglage « Ouvertures de
+  // l'application ») ; le visiteur unique, lui, est enregistré dans tous les cas.
+  // Coupé, ce compteur vaut 0 : on le dit, plutôt que d'afficher un zéro qui se
+  // lirait comme « personne n'a ouvert l'app ».
+  const openTracked  = settings.appOpenStatsEnabled !== false;
+  const opensToday   = dayToday.opens;
+  const opensYest    = dayYest.opens;
+  const opensMonth   = monthDays.reduce((s, d) => s + splitDayStats(parJour[d]).opens, 0);
+  const resumesToday = dayToday.resumes;
   const trend = (a, b) => b > 0 ? (a >= b ? `+${Math.round((a-b)/b*100)}%` : `-${Math.round((b-a)/b*100)}%`) : '';
 
   // MEL questions
@@ -110,7 +126,7 @@ async function sendDailyStatsEmail() {
     dechets:'🗑️ Déchets', sondages:'📊 Sondages', docs:'📄 Documents',
     nums:'📞 Numéros utiles', remi:'🚌 Bus Rémi', conseil:'🏛️ Conseil municipal',
     signalement:'🚨 Signalement', contact:'💬 Contact mairie', idees:'💡 Idées citoyennes',
-    app_resume:'↩️ Retours avant-plan', jeu:'🎮 Jeu du moment',
+    jeu:'🎮 Jeu du moment',
     transport:'🚌 Transport', urbanisme:'🏗️ Urbanisme', service_public:'🏛️ Service public',
     meteoalert:'⚠️ Alerte météo'
   };
@@ -123,9 +139,9 @@ async function sendDailyStatsEmail() {
   const FONT = 'font-family:Arial,Helvetica,sans-serif';
   const esc  = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  const svcList = Object.entries(parJour[today] || {})
-    .filter(([k, v]) => v > 0 && k !== 'mel' && k !== 'installation' && k !== 'app_open')
-    .sort(([,a],[,b]) => b - a);
+  // `app_open`, `app_resume`, `mel` et `installation` sont écartés par splitDayStats :
+  // aucun des quatre n'est une fonctionnalité, et `app_resume` trustait la 1re place.
+  const svcList = dayToday.services;
   const svcRows = svcList
     .map(([k, v], i) => `<tr style="background:${i % 2 ? '#f4f0ea' : '#ffffff'}"><td style="${FONT};font-size:13px;padding:4px 8px">${esc(SVC_LABELS[k] || k)}</td><td style="${FONT};font-size:13px;padding:4px 8px;font-weight:700;text-align:right">${v}</td></tr>`)
     .join('');
@@ -194,8 +210,11 @@ async function sendDailyStatsEmail() {
 ${card('👤 Fréquentation', statGrid([
   [uToday,      trendLbl("Visiteurs uniques aujourd'hui", uToday, uYest, 'vs hier')],
   [uMonth,      trendLbl('Visiteurs uniques ce mois', uMonth, uPrevM, 'vs mois préc.')],
-  [accessToday, trendLbl("Accès app aujourd'hui", accessToday, accessYest, 'vs hier')],
-  [accessMonth, 'Accès app ce mois']
+  openTracked ? [opensToday, trendLbl("Ouvertures de l'app aujourd'hui", opensToday, opensYest, 'vs hier')]
+              : ['—', `Ouvertures de l'app<br><span style="font-size:10px;color:#5a7065">comptage désactivé dans les réglages</span>`],
+  openTracked ? [opensMonth, "Ouvertures de l'app ce mois"] : null,
+  [accessToday, trendLbl("Écrans ouverts aujourd'hui", accessToday, accessYest, 'vs hier')],
+  [accessMonth, 'Écrans ouverts ce mois']
 ]))}
 
 ${settings.melUsageStatsEnabled !== false ? card('💬 MEL — Chat IA', `
@@ -213,7 +232,12 @@ ${settings.melUsageStatsEnabled !== false ? card('💬 MEL — Chat IA', `
   }</div></div>` : ''}`) : ''}
 
 ${svcRows ? card('🛠️ Services utilisés aujourd\'hui',
-  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">${svcRows}</table>`) : ''}
+  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">${svcRows}</table>
+   <div style="${FONT};font-size:11px;color:#5a7065;line-height:1.6;padding-top:10px">
+     Ne comptent que les écrans ouverts : la météo, les actualités, l'alerte et la prochaine
+     manifestation se lisent depuis l'accueil, sans clic — donc sans ligne ici.
+     ${resumesToday > 0 ? `↩️ Retours en avant-plan : <strong>${resumesToday}</strong> (navigation, pas un service).` : ''}
+   </div>`) : ''}
 
 ${card('🔔 Abonnements push', statGrid([
   [subs.length, 'Abonnés notifications'],
@@ -291,8 +315,12 @@ ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? card('📋 En attente d
     'FRÉQUENTATION',
     `- Visiteurs uniques aujourd'hui : ${uToday}${uYest > 0 ? ` (${trend(uToday, uYest)} vs hier)` : ''}`,
     `- Visiteurs uniques ce mois : ${uMonth}${uPrevM > 0 ? ` (${trend(uMonth, uPrevM)} vs mois préc.)` : ''}`,
-    `- Accès app aujourd'hui : ${accessToday}${accessYest > 0 ? ` (${trend(accessToday, accessYest)} vs hier)` : ''}`,
-    `- Accès app ce mois : ${accessMonth}`,
+    openTracked
+      ? `- Ouvertures de l'app aujourd'hui : ${opensToday}${opensYest > 0 ? ` (${trend(opensToday, opensYest)} vs hier)` : ''}`
+      : `- Ouvertures de l'app : comptage désactivé dans les réglages`,
+    ...(openTracked ? [`- Ouvertures de l'app ce mois : ${opensMonth}`] : []),
+    `- Écrans ouverts aujourd'hui : ${accessToday}${accessYest > 0 ? ` (${trend(accessToday, accessYest)} vs hier)` : ''}`,
+    `- Écrans ouverts ce mois : ${accessMonth}`,
     ...(settings.melUsageStatsEnabled !== false ? [
       '',
       'MEL — CHAT IA',
@@ -301,7 +329,8 @@ ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? card('📋 En attente d
       `- Coût IA ce mois : ${iaEurMonth > 0 ? '€' + iaEurMonth.toFixed(2) : '—'}`
     ] : []),
     ...(svcList.length ? ['', "SERVICES UTILISÉS AUJOURD'HUI",
-      ...svcList.map(([k, v]) => `- ${SVC_LABELS[k] || k} : ${v}`)] : []),
+      ...svcList.map(([k, v]) => `- ${SVC_LABELS[k] || k} : ${v}`),
+      ...(resumesToday > 0 ? [`(hors classement : ↩️ retours en avant-plan ${resumesToday} — navigation, pas un service)`] : [])] : []),
     '',
     'ABONNEMENTS PUSH',
     `- Abonnés notifications : ${subs.length}`,

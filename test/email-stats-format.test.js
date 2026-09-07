@@ -80,3 +80,20 @@ test("une variante texte lisible accompagne le HTML", () => {
   assert.match(sent.text, /ABONNEMENTS PUSH/);
   assert.match(sent.text, /REDIS UPSTASH/);
 });
+
+test("« Accès app » a disparu : ce total ne comptait pas les accès à l'app", () => {
+  // Il sommait tout `parJour[jour]`, `app_open` compris, donc le lancement de
+  // l'app n'était visible ni là ni dans le tableau des services (qui l'excluait).
+  // Voir test/stats-frequentation.test.js pour l'arithmétique du mail réel.
+  assert.ok(!/Accès app/.test(sent.html), "le libellé trompeur « Accès app » est revenu");
+  assert.ok(!/Accès app/.test(sent.text), "le libellé trompeur « Accès app » est revenu (variante texte)");
+  assert.match(sent.html, /Écrans ouverts aujourd'hui/);
+  assert.match(sent.text, /Écrans ouverts aujourd'hui/);
+});
+
+test("les ouvertures de l'app ont leur propre pastille, même si le comptage est coupé", () => {
+  // Coupé, `app_open` vaut 0 alors que les visiteurs uniques continuent d'être
+  // comptés : le mail doit dire pourquoi, sinon l'écart est inexplicable.
+  assert.match(sent.html, /Ouvertures de l'app/);
+  assert.match(sent.text, /Ouvertures de l'app/);
+});
