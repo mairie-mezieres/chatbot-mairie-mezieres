@@ -476,6 +476,36 @@ le texte reçoit un rapport lisible, pas un HTML dépouillé.
 d'un `class=`, d'une mise en page `grid`/`flex` ou d'un envoi sans variante texte.
 Détail de la décision : `docs/adr/0014-mail-html-sans-feuille-de-style.md`.
 
+### Lire la carte « Fréquentation » — quatre compteurs, quatre choses différentes
+
+⛔ **`app_open`, `app_resume`, `mel` et `installation` ne sont pas des services.**
+Les mélanger aux autres rend le mail incompréhensible, et ça s'est produit : le
+rapport du **6 septembre 2026** annonçait **182 visiteurs uniques (+98 % vs hier)**
+au-dessus d'un classement de services plafonnant à **36**. L'écart n'était pas une
+erreur de mesure — c'était le lancement de l'app, l'événement le plus nombreux de
+la journée, qui n'apparaissait **nulle part** : exclu du tableau des services, et
+fondu dans un total baptisé « Accès app » qui, lui non plus, n'en comptait rien.
+Voir `docs/adr/0015-un-total-qui-absorbe-l-evenement-qu-il-devait-montrer.md`.
+
+| Pastille | Ce que c'est | Piège |
+|---|---|---|
+| **Visiteurs uniques** | appareils distincts (`x-device-id`) ayant tapé `/stats/track` | **toujours comptés**, quel que soit le réglage de stats |
+| **Ouvertures de l'app** | `app_open` — une fois par appareil et par jour | comptage **optionnel** : réglage « Ouvertures de l'application ». Coupé, la pastille affiche « — comptage désactivé », jamais un `0` muet |
+| **Écrans ouverts** | MEL + les services | ni un lancement, ni un retour en avant-plan, ni une installation n'ouvre un écran |
+| **↩️ Retours en avant-plan** | `app_resume`, sous le tableau | signal de navigation : il **trustait la 1re place** du classement (79 contre 36 pour le vrai n° 1) |
+
+⚠️ **« Visiteurs uniques » nettement supérieur à la somme des services est normal** :
+météo, actualités, alerte et prochaine manifestation se lisent **depuis l'accueil**,
+sans ouvrir d'écran, donc sans le moindre événement. Le mail le dit sous le tableau.
+
+⚠️ **Si « Ouvertures de l'app » affiche « comptage désactivé »**, c'est le réglage
+qui est décoché : admin → **Réglages** → « Ouvertures de l'application ». Les
+visiteurs uniques continuent d'être comptés, mais `parJour[jour].app_open` reste à
+`0` et les courbes d'ouvertures du tableau de bord restent plates.
+
+La décomposition est faite par `splitDayStats` (`lib/stats.js`), verrouillée par
+`test/stats-frequentation.test.js` — qui rejoue la journée réelle du 6 septembre.
+
 ---
 
 ## 6ter. Le compteur d'installations (badge de l'app)
