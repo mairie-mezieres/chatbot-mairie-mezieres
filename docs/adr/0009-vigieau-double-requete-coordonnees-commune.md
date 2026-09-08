@@ -23,7 +23,7 @@ chemins de résolution distincts** (code source : `MTES-MCT/vigieau-api`,
 
 Ces deux chemins **peuvent diverger** quand les données amont sont incohérentes :
 ici, la zone **AEP** (eau potable, réseau de distribution) en alerte renforcée
-couvre géométriquement le bourg mais n'était pas rattachée à la commune 45203
+couvre géométriquement le bourg mais n'était pas rattachée à la commune 45204
 dans l'index — la requête par commune ne renvoyait que des zones en vigilance.
 L'app (frontend `mat-eau8.js` et backend `lib/vigieau.js`) interrogeait
 uniquement par commune.

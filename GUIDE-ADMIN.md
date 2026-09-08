@@ -262,6 +262,9 @@ La **vigilance Météo-France** (orages, canicule…) et les **restrictions séc
   adresse) **et** par **code commune** ; le niveau **le plus grave** est retenu.
   Les deux chemins de l'API peuvent diverger (zone AEP « eau potable » absente de
   l'index par commune, constaté le 15/07/2026) — on ne sous-estime jamais.
+  Le résultat de **chaque** requête est journalisé dans le champ `attempts`
+  (`path` = `coordonnees` / `commune`, `ok`, `reason`, `detail`) : c'est ce qui
+  permet au check 🧪 Services de dire **laquelle** des deux est tombée, et pourquoi.
 - Au passage à **Alerte ou plus**, il crée une **actualité** `source: vigieau`,
   envoie un **push** aux abonnés actus, et publie sur **Facebook** si
   `AUTO_POST_DROUGHT_ALERTS=true`. Les consignes clés (usages interdits/réduits)
@@ -303,7 +306,8 @@ un simple changement d'arrêté (le texte publié serait identique) :
 | Symptôme | Piste |
 |---|---|
 | Niveau 🟡 « indéterminé » dans 🧪 Services | API VigiEau injoignable sur les deux requêtes (coordonnées + commune) — réessai au prochain cycle |
-| 🟡 « lecture partielle » dans 🧪 Services | Une seule des deux requêtes VigiEau a abouti : le niveau affiché peut être sous-estimé. Aucune baisse n'est actée dans cet état (ADR-0011) — réessai au prochain cycle |
+| 🟡 « lecture partielle » dans 🧪 Services | Une seule des deux requêtes VigiEau a abouti : le niveau affiché peut être sous-estimé. Aucune baisse n'est actée dans cet état (ADR-0011) — réessai au prochain cycle. **Le message nomme la requête tombée et sa cause** (« requête par commune en échec (409 multi-zones) », « … (HTTP 503) », « … (API injoignable) ») ; le détail par requête est dans `attempts` (JSON du check, et `GET /eau/restrictions`) |
+| « lecture partielle » qui **dure** (plusieurs cycles) alors que le niveau est ≥ Alerte | ⚠️ Dans cet état, une **levée** des restrictions ne serait **jamais** publiée (règle 3 d'ADR-0011) — le message du check le dit. Lire la cause : `409 multi-zones` sur la requête **par commune** est structurel (la commune relève de plusieurs zones d'un même type) et peut persister ; `HTTP 5xx` / `API injoignable` sont passagers. Dans le cas structurel, la requête par coordonnées suffit pour alerter, mais il faut publier la levée **à la main** (actu) plutôt que d'attendre |
 | Deux notifications sécheresse pour le même niveau | Ne devrait plus arriver (ADR-0011) : seul un changement de niveau notifie. Si ça se reproduit, regarder les logs `🚱 VigiEau` — la ligne indique la raison retenue (`unchanged`, `escalation`, `descent-incomplete`, `descent-pending`…) |
 | « Fin des restrictions » annoncée alors que la sécheresse continue | Ne devrait plus arriver : une baisse exige 2 lectures complètes consécutives (ADR-0011) |
 | La levée des restrictions tarde à être annoncée | Normal : ~12 h (2 cycles) le temps de confirmer, pour ne pas annoncer une fausse levée |

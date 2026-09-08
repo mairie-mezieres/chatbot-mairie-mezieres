@@ -15,7 +15,7 @@
 // garde que la persistance (Redis + miroir mémoire) et le verrou anti-course.
 
 const router = require("express").Router();
-const { fetchVigieauStatus, vigieauSignature, decideDroughtAction, buildDroughtActu, droughtImageUrl } = require("../lib/vigieau");
+const { fetchVigieauStatus, vigieauSignature, decideDroughtAction, buildDroughtActu, droughtImageUrl, partialReadReason } = require("../lib/vigieau");
 const { readNews, writeNews } = require("../lib/store");
 const { sendActuPush, publishActuToFacebook } = require("../lib/actu");
 const { redisGet, redisSet, redisSetex, redisSetNxEx, redisDel } = require("../lib/redis");
@@ -135,9 +135,13 @@ router.get("/eau/restrictions/check", async (req, res) => {
       if (decision.memorize) await _writeLast(memorized);
       await _writePending(decision.pending);
       if (decision.reason !== "unchanged" && decision.reason !== "below-threshold") {
-        console.log(`🚱 VigiEau : niveau ${status.level} — ${decision.reason} (aucune notification)`);
+        // `descent-incomplete` est le cas muet : la baisse est vraie mais bloquée
+        // par une lecture partielle. Sans la raison de l'échec dans le log, il ne
+        // reste rien pour comprendre pourquoi la levée n'est jamais annoncée.
+        const why = decision.reason === "descent-incomplete" ? partialReadReason(status) : null;
+        console.log(`🚱 VigiEau : niveau ${status.level} — ${decision.reason} (aucune notification)${why ? " — " + why : ""}`);
       }
-      return res.json({ status: decision.reason, level: status.level, complete: !!status.complete });
+      return res.json({ status: decision.reason, level: status.level, complete: !!status.complete, attempts: status.attempts || null });
     }
 
     // Verrou anti-course : deux instances ne publient pas la même transition.
