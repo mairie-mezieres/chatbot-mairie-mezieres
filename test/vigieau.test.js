@@ -18,7 +18,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const axios = require("axios");
-const { fetchVigieauStatus, vigieauSignature, decideDroughtAction } = require("../lib/vigieau");
+const { fetchVigieauStatus, vigieauSignature, decideDroughtAction, partialReadReason } = require("../lib/vigieau");
 
 // handlers = { coords(params), commune(params), detail(url) } — chacun renvoie la
 // réponse axios ({ status, data }) ou jette (erreur réseau).
@@ -121,6 +121,55 @@ test("lecture partielle (une requête en échec) → complete: false", async () 
 
   assert.equal(status.level, 2);
   assert.equal(status.complete, false);
+});
+
+// ── Diagnostic d'une lecture partielle ───────────────────────────────────────
+// `complete: false` seul est indépannable : le tableau de bord affichait
+// « lecture partielle (une requête VigiEau en échec) » sans dire laquelle ni
+// pourquoi, alors que cet état bloque durablement toute publication de baisse.
+test("lecture partielle : `attempts` nomme la requête tombée et sa cause", async () => {
+  const status = await withAxiosMock({
+    coords:  () => ({ status: 200, data: [{ id: "z2", type: "SUP", niveauGravite: "alerte" }] }),
+    commune: () => ({ status: 409, data: {} }),
+  }, () => fetchVigieauStatus("45204"));
+
+  assert.equal(status.complete, false);
+  assert.equal(status.attempts.length, 2);
+  assert.deepEqual(status.attempts.map((a) => [a.path, a.ok]), [["coordonnees", true], ["commune", false]]);
+  assert.equal(status.attempts[1].reason, "multi-zone");
+  assert.equal(partialReadReason(status), "requête par commune en échec (409 multi-zones)");
+});
+
+test("lecture partielle : un échec HTTP porte son code", async () => {
+  const status = await withAxiosMock({
+    coords:  () => ({ status: 503, data: {} }),
+    commune: () => ({ status: 200, data: [{ id: "z2", type: "SUP", niveauGravite: "alerte" }] }),
+  }, () => fetchVigieauStatus("45204"));
+
+  assert.equal(partialReadReason(status), "requête par coordonnées en échec (HTTP 503)");
+});
+
+test("les deux requêtes en échec : `attempts` reste renseigné", async () => {
+  const status = await withAxiosMock({
+    coords:  () => { throw new Error("boom"); },
+    commune: () => ({ status: 500, data: {} }),
+  }, () => fetchVigieauStatus("45204"));
+
+  assert.equal(status.level, null);
+  assert.equal(status.attempts.length, 2);
+  assert.equal(
+    partialReadReason(status),
+    "requête par coordonnées en échec (API injoignable) ; requête par commune en échec (HTTP 500)"
+  );
+});
+
+test("lecture complète → aucune raison d'échec à afficher", async () => {
+  const status = await withAxiosMock({
+    coords:  () => ({ status: 200, data: [] }),
+    commune: () => ({ status: 200, data: [] }),
+  }, () => fetchVigieauStatus("45204"));
+
+  assert.equal(partialReadReason(status), null);
 });
 
 test("les deux requêtes abouties → complete: true", async () => {

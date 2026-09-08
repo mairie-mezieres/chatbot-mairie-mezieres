@@ -14,7 +14,7 @@ const { adminAuth } = require("../lib/middleware");
 const { getGoogleCalendarClient } = require("../lib/calendar");
 const { getCachedMeteoForecast, fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance } = require("../lib/meteo");
 const { lireNormales, normaleDuMois, MOIS_FR } = require("../lib/normales");
-const { fetchVigieauStatus } = require("../lib/vigieau");
+const { fetchVigieauStatus, partialReadReason } = require("../lib/vigieau");
 const { resolveFacebookPageId } = require("../lib/facebook");
 const { redisGet, redisSet, redisPipeline, _isRedis429 } = require("../lib/redis");
 const { readSubs, readStats } = require("../lib/store");
@@ -619,19 +619,25 @@ services.push(await runCheck("facebook", "Facebook Page", "📘", async () => {
       return {
         status: "warn",
         message: `Statut indéterminé (${status.reason || "?"}) — API VigiEau injoignable ou ambiguë`,
-        details: { reason: status.reason || null, ambiguous: !!status.ambiguous }
+        details: { reason: status.reason || null, ambiguous: !!status.ambiguous, attempts: status.attempts || null }
       };
     }
     const labels = { 0: "Aucune restriction", 1: "Vigilance", 2: "Alerte", 3: "Alerte renforcée", 4: "Crise" };
     // Lecture partielle = une seule des deux requêtes (coordonnées / commune) a
     // abouti : le niveau peut être sous-estimé, aucune baisse n'est actée dessus.
     const partial = status.complete === false;
+    // « Lecture partielle » sans plus de précision est indépannable : on nomme la
+    // requête tombée et sa cause, et on dit la conséquence concrète — tant qu'elle
+    // dure, aucune BAISSE n'est publiée (decideDroughtAction, « descent-incomplete »),
+    // donc la fin des restrictions ne serait jamais annoncée aux habitants.
+    const why = partial ? partialReadReason(status) : null;
     return {
       status: partial ? "warn" : "ok",
       message: `Niveau : ${labels[status.level] || status.level}`
         + (status.level >= 2 ? " — actu/push/Facebook actifs" : " (pas de notification à ce niveau)")
-        + (partial ? " — lecture partielle (une requête VigiEau en échec)" : ""),
-      details: { level: status.level, complete: !partial, zones: (status.zones || []).length, consignes: (status.consignes || []).length, auto_post: AUTO_POST_DROUGHT_ALERTS }
+        + (partial ? ` — lecture partielle : ${why || "une requête VigiEau en échec"}` : "")
+        + (partial && status.level >= 2 ? " — une levée des restrictions ne serait pas publiée" : ""),
+      details: { level: status.level, complete: !partial, partial_reason: why, attempts: status.attempts || null, zones: (status.zones || []).length, consignes: (status.consignes || []).length, auto_post: AUTO_POST_DROUGHT_ALERTS }
     };
   }));
 
