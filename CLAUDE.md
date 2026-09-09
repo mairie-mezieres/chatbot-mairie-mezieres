@@ -27,6 +27,7 @@ Règle d'or : **vérifier qu'une fonctionnalité n'existe pas déjà (code + UI 
 | **Inventaire des domaines / hébergeurs, alertes CERT-FR** | repo `app-mezieres` → `docs/surface-exposition.md` |
 | **Cerfa d'urbanisme** (DP, permis de construire) — ⚠️ les 13703, 13702 et 13404 sont **abrogés** depuis le 1er janvier 2025 ; ne jamais écrire de **millésime** (« 16702\*02 ») ; quatre endroits à garder en phase | `app-mezieres/docs/adr/0029-un-numero-de-formulaire-mort-ne-se-voit-pas.md` puis `test/urbanisme-cerfa.test.js` |
 | **Prix carburant** (`routes/carburant.js`) — ⚠️ `maj` est une chaîne d'affichage **sans année**, seul `majISO` (horodatage brut) se compare d'une station à l'autre ; ⛔ **la clé Redis suit la forme du payload** (`mat:carburant:v8`) : ajouter un champ sans changer la clé sert l'ancien format pendant une heure | `app-mezieres/docs/adr/0033-un-prix-sans-sa-date-est-un-prix-du-jour.md` puis `app-mezieres/docs/specifications-techniques/STD-07-services-pratiques.md` |
+| **École de la Forêt & périscolaire** (règles `ecole_*`, `periscolaire_services`, `cantine`, `vacances_scolaires` + blocs du `SYSTEM_PROMPT`) — ⛔ **aucun nom de personnel**, ⛔ **aucun montant** (tarifs votés chaque année, quotient familial CAF), ⚠️ dates de vacances **toujours datées de leur année scolaire** | `app-mezieres/docs/adr/0038-un-nom-de-personnel-perime-plus-vite-qu-un-horaire.md` puis `test/ecole.test.js` |
 | **Décisions d'architecture** (pourquoi Trello, pourquoi les tokens individuels, pourquoi `sub=null` sur 410…) | `docs/adr/` — un fichier par décision |
 | **« Le saviez-vous ? »** — routes `GET`/`POST /saviezvous/:id` (`routes/reactions.js`). ⚠️ Le **contenu** des faits n'est PAS ici : il vit dans `app-mezieres/data/saviez-vous.json`, versionné et relu. Le backend ne connaît que des identifiants et des compteurs. **Aucune IA ne doit jamais écrire ces faits** | `app-mezieres/docs/adr/0012-…` puis `SFD-16` |
 | **Atelier fichiers** (onglet 📎 de l'admin) — ⛔ **aucune route, aucune clé Redis, aucun log** : tout se calcule dans le navigateur. Ne pas lui inventer de contrepartie backend, c'est précisément ce qu'on évite. ⚠️ « Organiser un PDF » recopie les pages, « Compresser un PDF » les rasterise — ne pas confondre en dépannage. ⛔ des trois masques de photo, **seul le noir est irréversible** | `GUIDE-ADMIN.md` §3bis puis `app-mezieres/docs/adr/0035-…` et `0036-masquer-une-zone-seul-le-noir-est-irreversible.md` |
@@ -228,6 +229,22 @@ Architecture à connaître avant toute modification des notifications :
   `app-mezieres/js/mat-mel.js` (`pluAuthLink`), et les entrées `cloture-dp` /
   `gnau-cerfa-cloture` de `app-mezieres/data/saviez-vous.json`. Voir
   `app-mezieres/docs/adr/0029-…`.
+- ⚠️ **École et périscolaire : ni nom de personnel, ni montant.** Le règlement intérieur
+  scolaire et périscolaire 2026-2027 nomme onze personnes (équipe scolaire, équipe
+  périscolaire, inspection, association de parents d'élèves) : **aucune** ne doit entrer
+  dans le code, pas même en commentaire — on désigne une **fonction** (« la direction de
+  l'école », « le service enfance »), qui survit à un mouvement de personnel.
+  De même, aucun tarif : ils sont votés **chaque année par délibération du conseil
+  municipal** et calculés sur le **quotient familial CAF au 1er août**. `app-mezieres`
+  affichait encore, en septembre 2026, une grille de cantine datée de 2022-2023 — quatre
+  ans de retard, vus de personne. On dit **comment** le prix se forme et **où** trouver la
+  grille (portail parents, `https://parents.logiciel-enfance.fr/mezieres-lez-clery` — ou
+  09 67 28 01 20). ⚠️ Les **dates de vacances** portent leur **année scolaire** à chaque
+  borne : un calendrier sans millésime se lit comme celui de l'année en cours.
+  ⚠️ `demarches_etatcivil` a dû être restreinte : elle attrapait `certificat` nu, donc
+  « certificat de radiation » et « certificat médical » partaient sur les actes de
+  naissance. Verrouillé par `test/ecole.test.js` ; voir
+  `app-mezieres/docs/adr/0038-…`.
 - ⚠️ **Ne JAMAIS recopier les tarifs de location dans `lib/mel.js`.** Les prix (tables,
   chaises, barnums, caution) vivent dans l'arbre de décision, **que la mairie édite depuis
   l'admin sans passer par le code**. Les dupliquer ici créerait une double source vouée à
