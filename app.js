@@ -47,6 +47,11 @@ function _isLargeBodyRoute(p) {
   if (p === "/signal") return true;
   if (p === "/photos") return true;
   if (p === "/admin/actus/add") return true;
+  // ⚠️ La programmation transporte les MÊMES images que la publication immédiate
+  // (elles sont hébergées à la programmation, pas à l'heure dite) : absente de
+  // cette liste, elle répondait 413 dès qu'une photo dépassait 256 Ko — sans que
+  // l'admin puisse distinguer ce refus d'une panne réseau.
+  if (p === "/admin/actus/schedule") return true;
   if (p === "/admin/entreprises" || p.startsWith("/admin/entreprises/")) return true;
   if (p === "/admin/mascotte") return true;
   if (p === "/admin/docs/plui") return true; // PDF du PLUi envoyé en base64

@@ -6,7 +6,7 @@ const { adminAuth } = require("../lib/middleware");
 const { readNews, writeNews, readSubs, memGet, memSet } = require("../lib/store");
 const { redisGet, redisSet } = require("../lib/redis");
 const { uploadActuImageToCloudinary, deleteActuImageFromCloudinary } = require("../lib/cloudinary");
-const { publishActuToFacebook, sendActuPush } = require("../lib/actu");
+const { publishActuToFacebook, sendActuPush, normalizePhotoInputs, actuPhotoList, MAX_ACTU_PHOTOS } = require("../lib/actu");
 const { getGoogleCalendarClient, upsertGoogleCalendarEvent } = require("../lib/calendar");
 
 const PUSH_HISTORY_KEY = 'mat:push:history';
@@ -35,41 +35,64 @@ async function writeScheduled(key, d) {
 
 // ── Cœur de publication multi-canal (réutilisé : immédiat + programmé) ──
 // Publie une actu sur les canaux choisis. Lève une erreur taguée (er.cloudFail /
-// er.fbFail) en cas d'échec atomique, avec rollback de l'image Cloudinary si elle
-// vient d'être uploadée. imageBase64 = upload + post photo multipart ; imageUrl =
-// image déjà hébergée (post photo par URL — cas des publications programmées).
+// er.fbFail) en cas d'échec atomique, avec rollback des images Cloudinary qui
+// viennent d'être uploadées. imagesBase64 = upload + post photo(s) ; imageUrls =
+// images déjà hébergées (cas des publications programmées).
+// ⚠️ La PREMIÈRE image est la couverture : c'est elle que reprennent `photo`
+// (compatibilité des actus d'avant la v4.109, vignette bureau, carte « prochaine
+// manifestation ») et l'image de la notification push.
 async function publishActu(opts) {
   const {
     title, description,
     imageBase64 = null, imageUrl = null, photoPublicId = null,
+    imagesBase64 = null, imageUrls = null, photoPublicIds = null,
     eventDate = null, eventLocation = null,
     publishFacebook = true, sendPush = true, createCalendar = true
   } = opts || {};
+
+  const b64List = normalizePhotoInputs(imagesBase64 || imageBase64);
+  const urlList = normalizePhotoInputs(imageUrls || imageUrl);
+  const knownPublicIds = Array.isArray(photoPublicIds)
+    ? photoPublicIds
+    : (photoPublicId ? [photoPublicId] : []);
 
   const cleanTitle = String(title).trim().substring(0, 150);
   const cleanDescription = String(description || "").trim().substring(0, 3000);
   const result = { ok: true, actu: null, facebook: null, cloudinary: null, push: null, calendar: null, warnings: [] };
 
-  // 1. Image : upload Cloudinary si base64 fourni (sinon URL déjà hébergée).
-  let finalPhotoUrl = imageUrl || null;
-  let finalPhotoPublicId = photoPublicId || null;
-  if (imageBase64) {
+  // 1. Images : upload Cloudinary des base64 fournis (sinon URL déjà hébergées).
+  let photos = urlList.map((url, i) => ({ url, publicId: knownPublicIds[i] || null }));
+  const uploadedPublicIds = [];
+  if (b64List.length) {
+    photos = [];
     try {
-      const upload = await uploadActuImageToCloudinary(imageBase64);
-      finalPhotoUrl = upload.secure_url || upload.url || finalPhotoUrl;
-      finalPhotoPublicId = upload.public_id || finalPhotoPublicId;
-      result.cloudinary = { ok: true, public_id: upload.public_id, asset_id: upload.asset_id || null, secure_url: upload.secure_url || upload.url || null };
+      for (const b64 of b64List) {
+        const upload = await uploadActuImageToCloudinary(b64);
+        const url = upload.secure_url || upload.url || null;
+        if (!url) continue;
+        photos.push({ url, publicId: upload.public_id || null });
+        if (upload.public_id) uploadedPublicIds.push(upload.public_id);
+      }
+      result.cloudinary = { ok: true, count: photos.length, public_ids: uploadedPublicIds, secure_url: photos[0] ? photos[0].url : null };
     } catch (e) {
+      // Les images déjà montées avant l'échec ne doivent pas rester orphelines.
+      for (const pid of uploadedPublicIds) { try { await deleteActuImageFromCloudinary(pid); } catch (_) {} }
       const er = new Error("Cloudinary: " + e.message); er.cloudFail = true; throw er;
     }
   }
+  const finalPhotoUrl = photos.length ? photos[0].url : null;
+  const finalPhotoPublicId = photos.length ? photos[0].publicId : null;
 
-  // 2. Facebook (atomique : rollback de l'image fraîchement uploadée si échec).
+  // 2. Facebook (atomique : rollback des images fraîchement uploadées si échec).
   if (publishFacebook) {
     try {
-      result.facebook = await publishActuToFacebook(cleanTitle, cleanDescription, imageBase64, eventDate, eventLocation, finalPhotoUrl);
+      result.facebook = await publishActuToFacebook(
+        cleanTitle, cleanDescription,
+        b64List, eventDate, eventLocation,
+        photos.map(p => p.url)
+      );
     } catch (e) {
-      if (imageBase64 && finalPhotoPublicId) { try { await deleteActuImageFromCloudinary(finalPhotoPublicId); } catch (_) {} }
+      for (const pid of uploadedPublicIds) { try { await deleteActuImageFromCloudinary(pid); } catch (_) {} }
       const er = new Error("Facebook: " + e.message); er.fbFail = true; throw er;
     }
   }
@@ -82,15 +105,19 @@ async function publishActu(opts) {
     description: cleanDescription || null,
     date: new Date().toLocaleDateString("fr-FR"),
     dateISO: new Date().toISOString().slice(0, 10),
+    // `photo` / `photoPublicId` = la couverture. Conservés TELS QUELS même avec
+    // plusieurs images : tout ce qui n'affiche qu'une vignette (bureau, agenda,
+    // push, webhook Facebook) continue de lire ces deux champs sans le savoir.
     photo: finalPhotoUrl,
     photoPublicId: finalPhotoPublicId,
+    photos: photos.length ? photos : undefined,
     eventDate: eventDate || null,
     eventLocation: eventLocation || null,
     source: "admin",
     // Trace du post Facebook (badge + lien dans l'admin) : sans elle, impossible
     // de savoir après coup si une actu est réellement partie sur la page.
     fb: (publishFacebook && result.facebook && result.facebook.ok)
-      ? { postId: result.facebook.post_id || null, mode: result.facebook.mode || null, fallback: !!result.facebook.fallbackUsed }
+      ? { postId: result.facebook.post_id || null, mode: result.facebook.mode || null, fallback: !!result.facebook.fallbackUsed, count: result.facebook.photo_count || (result.facebook.mode === 'photo' ? 1 : 0) }
       : null
   };
   actus.unshift(actu);
@@ -116,7 +143,7 @@ async function publishActu(opts) {
 // ── Route : publier une actualité (multi-canal, immédiat) ───
 router.post("/admin/actus/add", adminAuth, async (req, res) => {
   const {
-    title, description, imageBase64, imageUrl,
+    title, description, imageBase64, imageUrl, imagesBase64, imageUrls,
     eventDate, eventLocation,
     publishFacebook = true, sendPush = true, createCalendar = true
   } = req.body || {};
@@ -128,7 +155,7 @@ router.post("/admin/actus/add", adminAuth, async (req, res) => {
   // texte seul existe — postTextOnly — et la publication programmée l'utilise déjà.)
 
   try {
-    const result = await publishActu({ title, description, imageBase64, imageUrl, eventDate, eventLocation, publishFacebook, sendPush, createCalendar });
+    const result = await publishActu({ title, description, imageBase64, imageUrl, imagesBase64, imageUrls, eventDate, eventLocation, publishFacebook, sendPush, createCalendar });
     res.json(result);
   } catch (e) {
     if (e.cloudFail) return res.status(500).json({ ok: false, error: e.message });
@@ -153,12 +180,14 @@ router.patch("/admin/actus/:id", adminAuth, async (req, res) => {
   await writeNews(actus);
   const result = { ok: true, actu, facebook: null, push: null, calendar: null, warnings: [] };
   if (publishFacebook) {
-    try { result.facebook = await publishActuToFacebook(actu.title, actu.description, null, actu.eventDate, actu.eventLocation); }
+    // Re-publication : les images sont déjà hébergées (Cloudinary) → post par URL,
+    // toutes les photos de l'actu, pas seulement la couverture.
+    try { result.facebook = await publishActuToFacebook(actu.title, actu.description, null, actu.eventDate, actu.eventLocation, actuPhotoList(actu).map(p => p.url)); }
     catch (e) { result.warnings.push("Facebook: " + e.message); result.facebook = { ok: false, error: e.message }; }
     // Même trace que la publication initiale : le badge 📘 de l'admin doit
     // refléter aussi les republications.
     if (result.facebook && result.facebook.ok) {
-      actu.fb = { postId: result.facebook.post_id || null, mode: result.facebook.mode || null, fallback: !!result.facebook.fallbackUsed };
+      actu.fb = { postId: result.facebook.post_id || null, mode: result.facebook.mode || null, fallback: !!result.facebook.fallbackUsed, count: result.facebook.photo_count || (result.facebook.mode === 'photo' ? 1 : 0) };
       actus[idx] = actu;
       await writeNews(actus);
       result.actu = actu;
@@ -292,7 +321,7 @@ const ACTUS_SCHEDULED_MAX_RETRIES = 3;
 // diffusion (Facebook + push + agenda, selon les canaux) a lieu à la date choisie.
 router.post("/admin/actus/schedule", adminAuth, async (req, res) => {
   const {
-    title, description, imageBase64, imageUrl,
+    title, description, imageBase64, imageUrl, imagesBase64, imageUrls,
     eventDate, eventLocation,
     publishFacebook = true, sendPush = true, createCalendar = true,
     scheduledAt
@@ -304,18 +333,25 @@ router.post("/admin/actus/schedule", adminAuth, async (req, res) => {
   if (isNaN(when.getTime())) return res.status(400).json({ error: "scheduledAt invalide" });
   if (when.getTime() <= Date.now()) return res.status(400).json({ error: "La date de programmation doit être dans le futur" });
 
-  // Héberger l'image dès maintenant (évite de stocker du base64 lourd en Redis).
-  let photoUrl = imageUrl || null;
-  let photoPublicId = null;
-  if (imageBase64) {
+  // Héberger les images dès maintenant (évite de stocker du base64 lourd en Redis).
+  const b64List = normalizePhotoInputs(imagesBase64 || imageBase64);
+  let photos = normalizePhotoInputs(imageUrls || imageUrl).map(url => ({ url, publicId: null }));
+  if (b64List.length) {
+    photos = [];
     try {
-      const up = await uploadActuImageToCloudinary(imageBase64);
-      photoUrl = up.secure_url || up.url || photoUrl;
-      photoPublicId = up.public_id || null;
+      for (const b64 of b64List) {
+        const up = await uploadActuImageToCloudinary(b64);
+        const url = up.secure_url || up.url || null;
+        if (url) photos.push({ url, publicId: up.public_id || null });
+      }
     } catch (e) {
+      // Rollback : une programmation refusée ne laisse rien sur Cloudinary.
+      for (const p of photos) { if (p.publicId) { try { await deleteActuImageFromCloudinary(p.publicId); } catch (_) {} } }
       return res.status(500).json({ ok: false, error: "Cloudinary: " + e.message });
     }
   }
+  const photoUrl = photos.length ? photos[0].url : null;
+  const photoPublicId = photos.length ? photos[0].publicId : null;
 
   const scheduled = await readScheduled(ACTUS_SCHEDULED_KEY);
   const draft = {
@@ -323,7 +359,8 @@ router.post("/admin/actus/schedule", adminAuth, async (req, res) => {
     scheduledAt: when.toISOString(),
     title: String(title).trim().substring(0, 150),
     description: String(description || "").trim().substring(0, 3000),
-    photoUrl, photoPublicId,
+    photoUrl, photoPublicId,          // couverture (compatibilité des brouillons existants)
+    photos,                           // toutes les images, dans l'ordre d'affichage
     eventDate: eventDate || null,
     eventLocation: eventLocation ? String(eventLocation).substring(0, 200) : null,
     publishFacebook: !!publishFacebook,
@@ -353,8 +390,11 @@ router.delete("/admin/actus/scheduled/:id", adminAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const scheduled = await readScheduled(ACTUS_SCHEDULED_KEY);
   const target = scheduled.find(s => s.id === id);
-  if (target && target.photoPublicId) {
-    try { await deleteActuImageFromCloudinary(target.photoPublicId); } catch (_) {}
+  // ⚠️ `photos` depuis la v4.109 — les brouillons plus anciens n'ont que
+  // photoPublicId. actuPhotoList couvre les deux formes : l'oublier laisserait
+  // des images payantes sur Cloudinary sans trace.
+  for (const p of actuPhotoList({ photos: target && target.photos, photo: target && target.photoUrl, photoPublicId: target && target.photoPublicId })) {
+    if (p.publicId) { try { await deleteActuImageFromCloudinary(p.publicId); } catch (_) {} }
   }
   await writeScheduled(ACTUS_SCHEDULED_KEY, scheduled.filter(s => s.id !== id));
   res.json({ ok: true, deleted: id });
@@ -372,9 +412,10 @@ setInterval(async () => {
       draft.status = 'sent';
       draft.sentAt = new Date().toISOString();
       try {
+        const draftPhotos = actuPhotoList({ photos: draft.photos, photo: draft.photoUrl, photoPublicId: draft.photoPublicId });
         await publishActu({
           title: draft.title, description: draft.description,
-          imageUrl: draft.photoUrl, photoPublicId: draft.photoPublicId,
+          imageUrls: draftPhotos.map(p => p.url), photoPublicIds: draftPhotos.map(p => p.publicId),
           eventDate: draft.eventDate, eventLocation: draft.eventLocation,
           publishFacebook: draft.publishFacebook, sendPush: draft.sendPush, createCalendar: draft.createCalendar
         });

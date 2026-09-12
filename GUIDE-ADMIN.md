@@ -44,7 +44,7 @@ Aucune donnée citoyenne ne transite par un CDN tiers côté application.
 |--------|----------------|
 | 📎 **Atelier fichiers** | Compresser des images ou un PDF, **masquer un visage ou une plaque sur une photo**, **organiser les pages d'un PDF** (garder, pivoter, réordonner), extraire les pages en images, assembler plusieurs documents, extraire le texte (voir §3bis) |
 | 📊 **Vue générale** | Synthèse : activité, visiteurs, coûts Redis, état global |
-| 🔔 **Actualités** | Liste des actus (issues de Facebook `#MAT` ou créées à la main) ; suppression ; publication manuelle |
+| 🔔 **Actualités** | Liste des actus (issues de Facebook `#MAT` ou créées à la main) ; suppression ; publication manuelle, **jusqu'à 6 photos** (voir §5quater) |
 | 📢 **Info/Alerte** | Bandeau d'information/alerte affiché en haut de l'app |
 | 🚨 **Signalements** | Signalements citoyens (remontés vers Trello) |
 | 💡 **Idées** | Boîte à idées citoyenne — puces de filtre par statut de résolution (⏳ Sans statut / 🔍 En cours d'étude / ✅ Retenues / ❌ Non retenues / Toutes), avec compteurs |
@@ -314,6 +314,53 @@ un simple changement d'arrêté (le texte publié serait identique) :
 | Niveau plus bas que vigieau.gouv.fr pour une adresse du bourg | Ne devrait plus arriver (double requête, ADR-0009). Vérifier `VIGIEAU_LAT`/`VIGIEAU_LON` (point dans la commune) et comparer avec `GET /eau/restrictions` |
 | Pas de post Facebook en Alerte | `AUTO_POST_DROUGHT_ALERTS` ≠ `true` sur Render (le push + l'actu partent quand même) |
 | Forcer un test | `GET /eau/restrictions/check?force=1` (recrée l'actu même sans changement) |
+
+---
+
+## 5quater. Publier une actualité à plusieurs photos
+
+Depuis la v4.109, une actualité peut porter **jusqu'à 6 photos**.
+
+### Côté admin (onglet 🔔 Actualités)
+
+- Le sélecteur de photos accepte **plusieurs fichiers** d'un coup (ou plusieurs
+  passages : les images s'ajoutent à la liste).
+- Chaque vignette se **déplace** (◀ ▶) et se **retire** (✕). La **première** porte
+  l'étiquette « Couverture ».
+- ⚠️ **La couverture n'est pas un détail** : c'est la seule image qu'on voit dans la
+  liste des actualités, sur la **notification push** et dans la version ordinateur de
+  l'app. Les autres ne se découvrent qu'en ouvrant l'article.
+- Les photos sont **redimensionnées dans le navigateur** avant l'envoi (1600 px). Inutile
+  de les préparer : envoyez les originaux.
+
+### Côté habitant
+
+Les photos se parcourent par **balayage horizontal**, sur la carte comme dans l'article.
+Un compteur (« 2 / 5 ») et deux boutons ◀ ▶ sous l'image permettent aussi de naviguer à la
+souris, au clavier ou au lecteur d'écran. Une actualité à **une seule** photo s'affiche
+exactement comme avant.
+
+### Côté Facebook
+
+Un **seul** post porte toutes les images (elles sont d'abord envoyées « non publiées »,
+puis attachées au post). Le récapitulatif de publication l'indique : « 📘 Facebook — avec
+4 photos ».
+
+| Ce que dit le récapitulatif | Ce qui s'est passé |
+|---|---|
+| `avec N photos` | Un post, N images. Normal. |
+| `avec N photos (1 photo(s) refusée(s) par Facebook)` | Le post est parti avec les autres. Une image a été rejetée (format, poids, modération) — l'actu de l'app, elle, les a toutes. |
+| `texte seul` + *(photo non envoyée, fallback texte)* | **Aucune** photo n'a été acceptée. Le post existe, sans image. Regarder 🪲 Logs (module `facebook`). |
+| `Publication photo incertaine (délai ou réseau)` | Le post a **peut-être** été créé. ⚠️ **Vérifier la page Facebook avant de réessayer**, sinon doublon. |
+
+### Dépannage
+
+| Symptôme | Piste |
+|---|---|
+| « Seules les N premières photos ont été ajoutées » | Plafond de 6 par actualité. |
+| Une photo manque dans l'app mais est sur Facebook | Regarder 🪲 Logs : l'envoi Cloudinary de cette image a pu échouer. L'actu est alors refusée en bloc (rollback) — si elle existe, c'est qu'elles sont toutes passées. |
+| Publication **programmée** refusée avec une erreur sans texte clair | Corrigé en v4.109 : la route n'était pas en « corps large » et répondait 413 dès 256 Ko de photo. |
+| La mairie supprime une actu : les images sont-elles libérées ? | Oui, **toutes** (v4.109). Avant, seule la couverture l'était. |
 
 ---
 
