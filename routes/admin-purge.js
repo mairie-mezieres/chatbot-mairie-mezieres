@@ -5,6 +5,7 @@ const router = require("express").Router();
 const { adminAuth } = require("../lib/middleware");
 const { readNews, writeNews, readSignals, writeSignals, readStats, writeStats, readIaStats, writeIaStats } = require("../lib/store");
 const { deleteActuImageFromCloudinary } = require("../lib/cloudinary");
+const { actuPhotoList } = require("../lib/actu");
 const { redisDel } = require("../lib/redis");
 const { logAudit } = require("../lib/logger");
 
@@ -16,22 +17,27 @@ router.post("/admin/purge", adminAuth, async (req, res) => {
   let deleted = 0;
   const cloudinaryResults = [];
 
+  // ⚠️ actuPhotoList, pas actu.photoPublicId : depuis la v4.109 une actu peut
+  // porter plusieurs images, et la purge est le dernier moment où elles sont
+  // encore référencées quelque part.
   async function cleanupActusImages(actusToDelete = []) {
     for (const actu of actusToDelete) {
-      if (!actu.photoPublicId) continue;
-      try {
-        const r = await deleteActuImageFromCloudinary(actu.photoPublicId);
-        cloudinaryResults.push({
-          id: actu.id,
-          publicId: actu.photoPublicId,
-          result: r?.result || "ok"
-        });
-      } catch (e) {
-        cloudinaryResults.push({
-          id: actu.id,
-          publicId: actu.photoPublicId,
-          error: e.message
-        });
+      for (const p of actuPhotoList(actu)) {
+        if (!p.publicId) continue;
+        try {
+          const r = await deleteActuImageFromCloudinary(p.publicId);
+          cloudinaryResults.push({
+            id: actu.id,
+            publicId: p.publicId,
+            result: r?.result || "ok"
+          });
+        } catch (e) {
+          cloudinaryResults.push({
+            id: actu.id,
+            publicId: p.publicId,
+            error: e.message
+          });
+        }
       }
     }
   }

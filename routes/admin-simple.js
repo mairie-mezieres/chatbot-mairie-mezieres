@@ -6,6 +6,7 @@ const { adminAuth } = require("../lib/middleware");
 const { readAdminSettings, writeAdminSettings, readMelTreeConfig, writeMelTreeConfig, readIdeas, writeIdeas, readNews, writeNews } = require("../lib/store");
 const { redisLRange } = require("../lib/redis");
 const { deleteActuImageFromCloudinary } = require("../lib/cloudinary");
+const { actuPhotoList } = require("../lib/actu");
 const { sendPushToToken } = require("../lib/push-notify");
 const { logAudit } = require("../lib/logger");
 
@@ -219,14 +220,19 @@ router.delete("/admin/actus/:id", adminAuth, async (req, res) => {
   const actu = actus.find(a => a.id === id);
   if (!actu) return res.status(404).json({ error: "Actu non trouvée" });
 
-  let cloudinaryResult = null;
-  if (actu.photoPublicId) {
+  // ⚠️ Une actu peut porter PLUSIEURS images depuis la v4.109 : ne supprimer que
+  // `photoPublicId` (la couverture) laisserait les autres sur Cloudinary, sans
+  // rien pour les retrouver — l'actu qui les référençait vient de disparaître.
+  const cloudinaryResults = [];
+  for (const p of actuPhotoList(actu)) {
+    if (!p.publicId) continue;
     try {
-      cloudinaryResult = await deleteActuImageFromCloudinary(actu.photoPublicId);
+      cloudinaryResults.push(await deleteActuImageFromCloudinary(p.publicId));
     } catch (e) {
       return res.status(502).json({ error: "Suppression Cloudinary impossible : " + e.message });
     }
   }
+  const cloudinaryResult = cloudinaryResults.length === 1 ? cloudinaryResults[0] : (cloudinaryResults.length ? cloudinaryResults : null);
 
   const filtered = actus.filter(a => a.id !== id);
   await writeNews(filtered);
