@@ -601,11 +601,64 @@ curl -X POST https://chatbot-mairie-mezieres.onrender.com/admin/stats/installati
 # → {"ok":true,"previous":585,"total":361}
 ```
 
-⚠️ **Ne jamais écrire `mat:stats` directement dans Redis** (console Upstash,
-script) : le serveur garde les stats en **cache mémoire** et les réécrit au flush
-suivant (≤ 5 min), ce qui écraserait la correction. Elle doit passer par le
-process en cours, donc par la route ci-dessus. Le badge des habitants suit à leur
-prochaine ouverture de l'app ; le mail, dès l'envoi suivant.
+⚠️ **Ne jamais écrire les clés de statistiques directement dans Redis** (console
+Upstash, script) : le serveur garde les stats en **cache mémoire** et les réécrit
+au flush suivant (≤ 5 min), ce qui écraserait la correction. Elle doit passer par
+le process en cours, donc par la route ci-dessus. Le badge des habitants suit à
+leur prochaine ouverture de l'app ; le mail, dès l'envoi suivant.
+
+---
+
+## 6ter bis. Ce que consomment les statistiques (et ce que la commune peut encaisser)
+
+### Deux quotas, et ce n'est pas celui qu'on regarde qui limite
+
+L'offre gratuite Upstash tient en trois plafonds : **500 000 commandes par
+mois**, **256 Mo** de données et une enveloppe de **bande passante** (~10 Go/mois).
+Le tableau de bord affiche les deux premiers ; la bande passante, non — elle se
+lit dans la console Upstash.
+
+Or **les statistiques ne coûtent quasiment aucune commande** : `POST /stats/track`
+n'écrit qu'en mémoire, et un flush périodique persiste le tout. Couper les
+réglages « statistiques détaillées » ne libère donc **rien** sur le quota de
+commandes : le visiteur unique est enregistré dans tous les cas, si bien que la
+journée en cours est de toute façon réécrite à chaque flush.
+
+Ce que les statistiques coûtent, ce sont des **octets**. Jusqu'à la v6.6,
+`mat:stats` était un seul JSON réécrit **intégralement** toutes les 5 minutes,
+soit 288 fois par jour : à 1 Mo de blob, ~300 Mo par jour et ~10 Go par mois —
+toute l'enveloppe, pour une commune de 1 500 habitants. Depuis, la persistance
+est coupée en deux (voir ADR-0017) :
+
+| Clé | Contenu | Réécrite |
+|---|---|---|
+| `mat:stats:courant` | jour + mois en cours, compteurs cumulés | à chaque flush (288 ×/jour) |
+| `mat:stats:socle` | tout l'historique clos | quand il change (bascule de jour, purge) ou 1 ×/jour |
+
+### Où lire la consommation réelle
+
+Onglet **Vue générale** → bloc Redis, champ `stats` :
+`tailleCourant`, `tailleSocle` et `bandePassanteJourMo` (l'estimation
+`courant × 288 + socle`). C'est le chiffre à surveiller ; s'il dépasse quelques
+dizaines de Mo par jour, chercher ce qui a regrossi dans la tranche du jour.
+
+### Combien d'utilisateurs l'installation peut-elle encaisser
+
+Ordres de grandeur, sur le plan gratuit et une seule instance Render :
+
+| | Limite par commandes | Limite par bande passante |
+|---|---|---|
+| Avant (blob unique) | ~3 000 visiteurs/jour | **~30 visiteurs/jour** ← le vrai mur |
+| Après (socle + tranche) | ~10 000 visiteurs/jour | non contraignante |
+
+Le plancher de commandes, trafic nul, est de quelques centaines par jour (flush
+des stats, miroirs des listes programmées, cache météo). Chaque visite ajoute
+ensuite **1 à 3 commandes** au plus.
+
+⚠️ **La carte « Commandes aujourd'hui » compare encore à 10 000/jour**, le
+plafond de l'ancienne formule Upstash, abandonné depuis mars 2025 au profit des
+500 000/mois. Le pourcentage journalier est donc pessimiste : c'est la carte
+**« Commandes ce mois »** qui fait foi.
 
 ---
 

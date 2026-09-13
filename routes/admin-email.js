@@ -13,6 +13,7 @@ const {
   readSignals, readIdeas, readAdminSettings
 } = require("../lib/store");
 const { calcIaCost, splitDayStats } = require("../lib/stats");
+const { nbUniques } = require("../lib/stats-store");
 const { filterRealProfils } = require("../lib/partager");
 const {
   fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance,
@@ -43,10 +44,13 @@ async function sendDailyStatsEmail() {
   const services = stats.services || {};
 
   // Fréquentation
-  const uToday   = (uniqueU.byDay   || {})[today]?.length   || 0;
-  const uYest    = (uniqueU.byDay   || {})[yesterday]?.length || 0;
-  const uMonth   = (uniqueU.byMonth || {})[month]?.length    || 0;
-  const uPrevM   = (uniqueU.byMonth || {})[prevMonth]?.length || 0;
+  // ⚠️ `nbUniques` et non `.length` : une période close est réduite à son
+  // COMPTE (voir lib/stats-store.js). `?.length` y renverrait `undefined`,
+  // donc `0` — le mail d'hier aurait annoncé « aucun visiteur ».
+  const uToday   = nbUniques((uniqueU.byDay   || {})[today]);
+  const uYest    = nbUniques((uniqueU.byDay   || {})[yesterday]);
+  const uMonth   = nbUniques((uniqueU.byMonth || {})[month]);
+  const uPrevM   = nbUniques((uniqueU.byMonth || {})[prevMonth]);
   // ⛔ « Accès app » sommait TOUT `parJour[jour]`, `app_open` compris — donc le
   // lancement de l'app n'apparaissait nulle part : ni dans ce total (fondu dedans),
   // ni dans le tableau des services (explicitement exclu). splitDayStats sépare les

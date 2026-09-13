@@ -4,6 +4,7 @@
 const router = require("express").Router();
 const axios = require("axios");
 const { redisGet, redisSetex } = require("../lib/redis");
+const { memGet, memSet } = require("../lib/store");
 const { dlog } = require("../lib/middleware");
 
 // v8 : ajout de `majISO`. La clé change avec la forme du payload, sinon
@@ -65,11 +66,26 @@ async function fetchStationPrices(cp, brandKey) {
   return null;
 }
 
+// Miroir mémoire du cache Redis : l'app appelle `/carburant` à CHAQUE
+// ouverture (js/mat-boot.js), et le cache navigateur ne vit que le temps de la
+// session. Sans ce miroir, c'était une commande Redis par visite pour servir
+// une donnée qui ne change qu'une fois par heure. Même motif que les autres
+// lectures publiques (info-banner, horaires, mascotte). TTL mémoire court : le
+// TTL qui fait autorité reste celui de Redis, partagé entre redémarrages.
+const CARBURANT_MEM_KEY = 'mem:' + CARBURANT_REDIS_KEY;
+const CARBURANT_MEM_TTL = 60 * 1000;
+
 router.get('/carburant', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   try {
+    const memo = memGet(CARBURANT_MEM_KEY);
+    if (memo && memo._ts && Date.now() - memo._ts < CARBURANT_TTL_S * 1000) return res.json(memo);
+
     const cached = await redisGet(CARBURANT_REDIS_KEY);
-    if (cached && cached._ts && Date.now() - cached._ts < CARBURANT_TTL_S * 1000) return res.json(cached);
+    if (cached && cached._ts && Date.now() - cached._ts < CARBURANT_TTL_S * 1000) {
+      memSet(CARBURANT_MEM_KEY, cached, CARBURANT_MEM_TTL);
+      return res.json(cached);
+    }
 
     const data = { _ts: Date.now() };
     await Promise.all(CARBURANT_STATIONS.map(async s => {
@@ -77,6 +93,7 @@ router.get('/carburant', async (req, res) => {
       catch (_) { data[s.key] = { label: s.label, sp95: null, gazole: null, maj: null }; }
     }));
     await redisSetex(CARBURANT_REDIS_KEY, CARBURANT_TTL_S, data);
+    memSet(CARBURANT_MEM_KEY, data, CARBURANT_MEM_TTL);
     res.json(data);
   } catch(e) {
     console.error('❌ /carburant:', e.message);

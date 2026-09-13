@@ -130,8 +130,10 @@ async function _gracefulShutdown(sig) {
   _shuttingDown = true;
   console.log(`🔻 ${sig} reçu — fermeture gracieuse…`);
   try {
-    await flushStatsNow();
-    console.log("   ✓ mat:stats / mat:ia:stats flushés");
+    // `force` : on écrit aussi le socle, même inchangé — c'est le moment où
+    // l'on est sûr que le processus ne reviendra pas (redéploiement Render).
+    await flushStatsNow({ force: true });
+    console.log("   ✓ statistiques flushées (socle + tranche du jour)");
     await flushMelQuotas();
     console.log("   ✓ mat:mel:quotas flushé");
   } catch (e) {
