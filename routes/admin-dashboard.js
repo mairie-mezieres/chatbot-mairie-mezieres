@@ -6,6 +6,7 @@ const axios = require("axios");
 const { REDIS_URL, REDIS_TOKEN, ANTHROPIC_API_KEY, MISTRAL_API_KEY, CLAUDE_PRICE_IN, CLAUDE_PRICE_OUT, MISTRAL_PRICE_IN, MISTRAL_PRICE_OUT } = require("../config");
 const { adminAuth } = require("../lib/middleware");
 const { pctTrend, calcIaCost, computeIaCategoryTrends } = require("../lib/stats");
+const { nbUniques, statsDebug } = require("../lib/stats-store");
 const { getParisDateParts } = require("../lib/dates");
 const { readStats, readIaStats, readSubs, readNews, readIdeas, readSignals, readAdminSettings } = require("../lib/store");
 const { getUpstashRedisStats } = require("../lib/redis");
@@ -116,6 +117,16 @@ router.get("/admin/dashboard", adminAuth, async (req, res) => {
         error: upstashStats?.error || null
       },
 
+      // Ce que coûte VRAIMENT la persistance des statistiques : la tranche du
+      // jour est réécrite toutes les 5 min (288 fois/jour), le socle une fois
+      // par jour. `bandePassanteJourMo` est l'estimation qui manquait au
+      // diagnostic — le quota de commandes ne dit rien des octets.
+      stats: (() => {
+        const d = statsDebug();
+        const parJour = (d.tailleCourant || 0) * 288 + (d.tailleSocle || 0);
+        return { ...d, bandePassanteJourMo: parseFloat((parJour / 1024 / 1024).toFixed(2)) };
+      })(),
+
       keys: {
         subs: subs.length,
         actus: news.length,
@@ -143,10 +154,12 @@ router.get("/admin/dashboard", adminAuth, async (req, res) => {
         const pFmt = new Intl.DateTimeFormat('fr-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(prevMonthDate);
         const pGet = t => pFmt.find(p => p.type === t)?.value || '';
         const prevMonth = `${pGet('year')}-${pGet('month')}`;
-        const uniqueToday = (appStats.uniqueUsers?.byDay?.[today] || []).length;
-        const uniqueMonth = (appStats.uniqueUsers?.byMonth?.[month] || []).length;
-        const uniqueYesterday = (appStats.uniqueUsers?.byDay?.[yesterday] || []).length;
-        const uniquePrevMonth = (appStats.uniqueUsers?.byMonth?.[prevMonth] || []).length;
+        // ⚠️ `nbUniques` : une période close est réduite à son compte (voir
+        // lib/stats-store.js) — `(… || []).length` y renverrait 0.
+        const uniqueToday = nbUniques(appStats.uniqueUsers?.byDay?.[today]);
+        const uniqueMonth = nbUniques(appStats.uniqueUsers?.byMonth?.[month]);
+        const uniqueYesterday = nbUniques(appStats.uniqueUsers?.byDay?.[yesterday]);
+        const uniquePrevMonth = nbUniques(appStats.uniqueUsers?.byMonth?.[prevMonth]);
         const dayAccess = Object.values(appStats.parJour?.[today] || {}).reduce((a,b) => a + Number(b || 0), 0);
         const prevDayAccess = Object.values(appStats.parJour?.[yesterday] || {}).reduce((a,b) => a + Number(b || 0), 0);
         const monthAccess = Object.entries(appStats.parJour || {}).filter(([d]) => d.startsWith(month)).reduce((sum, [, svcs]) => sum + Object.values(svcs || {}).reduce((a,b)=>a + Number(b || 0), 0), 0);
@@ -168,7 +181,7 @@ router.get("/admin/dashboard", adminAuth, async (req, res) => {
             accessTrendDay: pctTrend(dayAccess, prevDayAccess),
             accessTrendMonth: pctTrend(monthAccess, prevMonthAccess)
           },
-          uniqueUsers: { total: appStats.uniqueUsers?.total || 0, today: uniqueToday, month: uniqueMonth, byDay: Object.fromEntries(Object.entries(appStats.uniqueUsers?.byDay || {}).map(([d, ids]) => [d, Array.isArray(ids) ? ids.length : 0])) },
+          uniqueUsers: { total: appStats.uniqueUsers?.total || 0, today: uniqueToday, month: uniqueMonth, byDay: Object.fromEntries(Object.entries(appStats.uniqueUsers?.byDay || {}).map(([d, ids]) => [d, nbUniques(ids)])) },
           devices: {
             today: appStats.deviceStats?.byDay?.[today] || {},
             month: appStats.deviceStats?.byMonth?.[month] || {},

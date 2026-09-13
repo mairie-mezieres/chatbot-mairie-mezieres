@@ -19,6 +19,7 @@ Règle d'or : **vérifier qu'une fonctionnalité n'existe pas déjà (code + UI 
 | **Carte « Fréquentation » du mail** — ⛔ `app_open`, `app_resume`, `mel` et `installation` **ne sont pas des services** : `splitDayStats` (`lib/stats.js`) les sépare. ⚠️ Le comptage `app_open` est **optionnel** alors que le visiteur unique est enregistré **dans tous les cas** — coupé, il vaut `0`, et le mail annonçait **182 visiteurs uniques** au-dessus d'un top des services plafonnant à **36**, sans rien pour l'expliquer. ⛔ Ne jamais afficher ce `0` tel quel : il se lit « personne n'a ouvert l'app ». ⚠️ Un écart uniques ↔ services est **normal** (météo, actus, alerte se lisent depuis l'accueil, sans clic) | `docs/adr/0015-un-total-qui-absorbe-l-evenement-qu-il-devait-montrer.md` puis `GUIDE-ADMIN.md` §6sexies et `test/stats-frequentation.test.js` |
 | **Mail de stats quotidien** (`routes/admin-email.js`) — ⛔ **ni feuille de style, ni classe CSS, ni `display:grid`** : un bloc `<style>` est supprimé par Gmail/Outlook.com/Yahoo à la réception et le mail arrive **en texte brut**, sans la moindre erreur visible (il s'affiche très bien dans un navigateur — le seul endroit où on le teste). Styles en attribut, mise en page en `<table>`, `font-family` sur chaque `<td>`, et une variante `text` dans le payload Resend | `GUIDE-ADMIN.md` §6sexies puis `docs/adr/0014-mail-html-sans-feuille-de-style.md` |
 | **Compteur d'installations** (badge app, mail, tableau de bord) — source unique `services.installation` | `GUIDE-ADMIN.md` §6ter + `docs/adr/0010-…` |
+| **Persistance des statistiques** (`lib/stats-store.js`) — ⛔ les stats ne coûtent presque aucune **commande** Redis, elles coûtent des **octets** : couper les « stats détaillées » ne libère rien (le visiteur unique est enregistré **dans tous les cas**). ⛔ `uniqueUsers.byDay`/`byMonth` valent une **liste d'identifiants** pour la période en cours et un **nombre** pour une période close → `nbUniques()`, **jamais `.length`** (`?.length` y vaut `undefined`, donc 0 : « aucun visiteur hier »). ⛔ Toute lecture **suivie d'une réécriture** passe par `redisGetResult` — `redisGet` renvoie `null` aussi bien pour « clé absente » que pour « Redis tombé », et le flush suivant publiait l'objet vide par-dessus l'historique. ⚠️ `monthSeen` n'existe plus ; `daySeen` ne garde que le jour en cours | `docs/adr/0017-statistiques-socle-et-tranche-du-jour.md` puis `GUIDE-ADMIN.md` §6ter bis et `test/stats-persistance.test.js` |
 | **Documents du PLUi-H-D** — routes `/docs/plui`, envoi de PDF (Cloudinary `raw`, 4 Mo max) ou lien, pastille « Nouveau » | `GUIDE-ADMIN.md` §6quater + `app-mezieres/docs/adr/0014-…` |
 | Présentation du backend, architecture, routes, démarrage | `README.md` |
 | Conformité de l'assistant MEL (AI Act, RGPD, sécurité) | `docs/note-conformite-MEL.md` |
@@ -330,12 +331,26 @@ Architecture à connaître avant toute modification des notifications :
 - Toujours tolérer un Redis en mode dégradé (429 Upstash) : voir `_isRedis429` et les
   `.catch(() => {})` sur les écritures non critiques. Ne jamais faire dépendre une
   réponse HTTP d'une écriture Redis best-effort.
-- **Quota (10 000 commandes/jour, plan gratuit)** : aucun cron fréquent ne doit
-  interroger Redis à chaque tick. Pattern à suivre : cache mémoire mis à jour par les
-  routes d'écriture + re-synchro Redis périodique (voir `readScheduled`/`writeScheduled`
-  dans `routes/admin-actus.js`, le buffer stats de `lib/store.js`, et l'ADR-0007).
+- **Quota (plan gratuit : 500 000 commandes/mois, 256 Mo, ~10 Go de bande passante)** :
+  aucun cron fréquent ne doit interroger Redis à chaque tick. Pattern à suivre : cache
+  mémoire mis à jour par les routes d'écriture + re-synchro Redis périodique (voir
+  `readScheduled`/`writeScheduled` dans `routes/admin-actus.js`, le buffer stats de
+  `lib/stats-store.js`, et l'ADR-0007).
   La consommation attendue est de quelques centaines de commandes/jour — si le mail
   quotidien annonce des milliers, chercher un polling Redis dans un `setInterval`.
+  ⚠️ Le plafond « 10 000 commandes/jour » a disparu en mars 2025 (formule mensuelle
+  depuis) : la carte « Commandes aujourd'hui » du tableau de bord le compare pourtant
+  encore à 10 000, donc son pourcentage est **pessimiste** — la carte mensuelle fait foi.
+- ⛔ **Le quota de commandes ne dit rien des octets.** Une donnée écrite souvent doit
+  être **petite**, pas seulement peu écrite : `mat:stats` tenait dans le quota de
+  commandes (288 écritures/jour) tout en consommant à lui seul l'enveloppe mensuelle de
+  bande passante, parce qu'on réécrivait tout l'historique à chaque fois. Avant
+  d'ajouter un champ à une clé réécrite périodiquement, se demander ce qu'il pèsera
+  **multiplié par 288**. Voir ADR-0017.
+- ⛔ **Toute lecture suivie d'une réécriture passe par `redisGetResult`**, jamais
+  `redisGet` : ce dernier renvoie `null` pour « clé absente » ET pour « Redis
+  injoignable ». Repartir d'un objet vide sur un timeout, puis le persister, détruit la
+  donnée qu'on croyait relire.
 
 ## ⛔ Édition de fichiers — règles non négociables
 

@@ -12,8 +12,9 @@ const { adminAuth } = require("../lib/middleware");
 const { logAudit } = require("../lib/logger");
 const {
   shouldTrackService, shouldTrackDeviceBreakdown,
-  pctTrend, sanitizeDeviceInfo, bumpDeviceBreakdown, compactSeenMap
+  pctTrend, sanitizeDeviceInfo, bumpDeviceBreakdown
 } = require("../lib/stats");
+const { nbUniques, MAX_DEVICES } = require("../lib/stats-store");
 
 // ── Stats usage ──────────────────────────────────────────────
 router.post("/stats/track", async (req, res) => {
@@ -50,23 +51,29 @@ router.post("/stats/track", async (req, res) => {
         stats.uniqueUsers = { total: 0, byDay: {}, byMonth: {}, allDevices: [] };
       }
       const u = stats.uniqueUsers;
-      if (!u.byDay[today]) u.byDay[today] = [];
-      if (!u.byMonth[month]) u.byMonth[month] = [];
-      if (!Array.isArray(u.allDevices)) u.allDevices = [];
+      // ⚠️ Seules les périodes EN COURS gardent la liste des identifiants (il
+      // faut pouvoir dédupliquer) ; les périodes closes sont réduites à leur
+      // compte par `lib/stats-store.js`. D'où `Array.isArray` et non `!u.byDay[…]` :
+      // un 0 hérité d'un jour clos ne doit pas être écrasé par une liste vide.
+      if (!Array.isArray(u.byDay[today]))   u.byDay[today] = [];
+      if (!Array.isArray(u.byMonth[month])) u.byMonth[month] = [];
+      if (!Array.isArray(u.allDevices))     u.allDevices = [];
 
-      if (!u.byDay[today].includes(deviceId)) {
-        u.byDay[today].push(deviceId);
-        changed = true;
-      }
-      if (!u.byMonth[month].includes(deviceId)) {
-        u.byMonth[month].push(deviceId);
-        changed = true;
-      }
+      const nouveauJour = !u.byDay[today].includes(deviceId);
+      const nouveauMois = !u.byMonth[month].includes(deviceId);
+      if (nouveauJour) { u.byDay[today].push(deviceId); changed = true; }
+      if (nouveauMois) { u.byMonth[month].push(deviceId); changed = true; }
+
+      // `total` est désormais un COMPTEUR, pas `allDevices.length` : la liste
+      // ne sert plus qu'à dédupliquer et elle est plafonnée (MAX_DEVICES).
+      // Sinon un identifiant par appareil, conservé à vie, finissait par peser
+      // plus lourd que tout le reste des statistiques.
       if (!u.allDevices.includes(deviceId)) {
         u.allDevices.push(deviceId);
+        if (u.allDevices.length > MAX_DEVICES) u.allDevices.splice(0, u.allDevices.length - MAX_DEVICES);
+        u.total = (Number(u.total) || 0) + 1;
         changed = true;
       }
-      u.total = u.allDevices.length;
 
       // ── 3) Breakdown appareils / ouvertures app : optionnels
       if (trackBreakdown) {
@@ -75,7 +82,6 @@ router.post("/stats/track", async (req, res) => {
             byDay: {},
             byMonth: {},
             daySeen: {},
-            monthSeen: {},
             appOpensByDay: {},
             appOpensByMonth: {}
           };
@@ -83,34 +89,27 @@ router.post("/stats/track", async (req, res) => {
 
         const ds = stats.deviceStats;
         if (!ds.daySeen[today]) ds.daySeen[today] = {};
-        if (!ds.monthSeen[month]) ds.monthSeen[month] = {};
         if (!ds.byDay[today]) ds.byDay[today] = {};
         if (!ds.byMonth[month]) ds.byMonth[month] = {};
         if (!ds.appOpensByDay) ds.appOpensByDay = {};
         if (!ds.appOpensByMonth) ds.appOpensByMonth = {};
 
-        let cleanDevice;
-        if (device) {
-          cleanDevice = sanitizeDeviceInfo(device);
-        } else if (ds.daySeen[today][deviceId]) {
-          cleanDevice = ds.daySeen[today][deviceId];
-        } else if (ds.monthSeen[month][deviceId]) {
-          cleanDevice = ds.monthSeen[month][deviceId];
-        } else {
-          cleanDevice = sanitizeDeviceInfo({});
-        }
+        // ⛔ `monthSeen` n'existe plus : c'était l'union des `daySeen` du mois,
+        // soit une fiche d'appareil complète par visiteur et par mois sur 24
+        // mois — la structure la plus lourde de `mat:stats`, pour une
+        // déduplication que `uniqueUsers.byMonth` faisait déjà juste au-dessus.
+        // `daySeen` ne sert plus qu'au jour en cours, comme repli de fiche
+        // quand l'appel ne porte pas de `device` (trackStat en envoie toujours un).
+        const cleanDevice = device
+          ? sanitizeDeviceInfo(device)
+          : (ds.daySeen[today][deviceId] || sanitizeDeviceInfo({}));
 
         if (!ds.daySeen[today][deviceId]) {
           ds.daySeen[today][deviceId] = cleanDevice;
-          bumpDeviceBreakdown(ds.byDay[today], cleanDevice);
           changed = true;
         }
-
-        if (!ds.monthSeen[month][deviceId]) {
-          ds.monthSeen[month][deviceId] = cleanDevice;
-          bumpDeviceBreakdown(ds.byMonth[month], cleanDevice);
-          changed = true;
-        }
+        if (nouveauJour) { bumpDeviceBreakdown(ds.byDay[today], cleanDevice); changed = true; }
+        if (nouveauMois) { bumpDeviceBreakdown(ds.byMonth[month], cleanDevice); changed = true; }
 
         // Nombre d'ouvertures d'app : option dédiée
         if (service === "app_open" && settings.appOpenStatsEnabled !== false) {
@@ -119,15 +118,13 @@ router.post("/stats/track", async (req, res) => {
           changed = true;
         }
 
-        const keepDays = Object.keys(ds.daySeen).sort().slice(-90);
-        compactSeenMap(ds.daySeen, keepDays);
-        compactSeenMap(ds.byDay, keepDays);
-        compactSeenMap(ds.appOpensByDay, keepDays);
-
-        const keepMonths = Object.keys(ds.monthSeen).sort().slice(-24);
-        compactSeenMap(ds.monthSeen, keepMonths);
-        compactSeenMap(ds.byMonth, keepMonths);
-        compactSeenMap(ds.appOpensByMonth, keepMonths);
+        // ⛔ Plus d'élagage ici. Il se faisait à partir des clés de `daySeen`
+        // (« garder les 90 dernières ») : maintenant que `daySeen` ne contient
+        // que le jour en cours, la même ligne aurait réduit `byDay` et
+        // `appOpensByDay` à UN jour, et `monthSeen` ayant disparu, elle aurait
+        // vidé tous les compteurs mensuels. Les rétentions sont désormais
+        // centralisées dans `lib/stats-store.js` (`normaliser`), appliquées au
+        // chargement et à chaque flush — un seul endroit qui les connaît.
       }
     } catch (e) {
       console.warn("stats/track unique device:", e.message);
@@ -228,20 +225,29 @@ router.get("/stats", async (req, res) => {
     derniers30jours: installations,
     uniqueUsers: {
       total: stats.uniqueUsers?.total || 0,
-      byDay: stats.uniqueUsers?.byDay || {},
-      byMonth: stats.uniqueUsers?.byMonth || {}
-      // allDevices supprimé pour RGPD
+      // ⛔ Des COMPTES, jamais les identifiants. `allDevices` était bien retiré
+      // « pour RGPD », mais `byDay`/`byMonth` exposaient la même chose :
+      // la liste des identifiants d'appareils, jour par jour, sur une route
+      // PUBLIQUE. Même raison pour `daySeen` ci-dessous (identifiant → modèle,
+      // OS, navigateur, taille d'écran : de quoi recouper un visiteur).
+      byDay: Object.fromEntries(Object.entries(stats.uniqueUsers?.byDay || {}).map(([d, v]) => [d, nbUniques(v)])),
+      byMonth: Object.fromEntries(Object.entries(stats.uniqueUsers?.byMonth || {}).map(([m, v]) => [m, nbUniques(v)]))
     },
-    deviceStats: stats.deviceStats || {},
+    deviceStats: {
+      byDay: stats.deviceStats?.byDay || {},
+      byMonth: stats.deviceStats?.byMonth || {},
+      appOpensByDay: stats.deviceStats?.appOpensByDay || {},
+      appOpensByMonth: stats.deviceStats?.appOpensByMonth || {}
+    },
     overview: {
       today, month,
-      uniqueToday: (stats.uniqueUsers?.byDay?.[today] || []).length,
-      uniqueMonth: (stats.uniqueUsers?.byMonth?.[month] || []).length,
-      uniqueYesterday: (stats.uniqueUsers?.byDay?.[yesterday] || []).length,
-      uniquePrevMonth: (stats.uniqueUsers?.byMonth?.[prevMonth] || []).length,
+      uniqueToday: nbUniques(stats.uniqueUsers?.byDay?.[today]),
+      uniqueMonth: nbUniques(stats.uniqueUsers?.byMonth?.[month]),
+      uniqueYesterday: nbUniques(stats.uniqueUsers?.byDay?.[yesterday]),
+      uniquePrevMonth: nbUniques(stats.uniqueUsers?.byMonth?.[prevMonth]),
       accessToday, accessYesterday, accessMonth, accessPrevMonth,
-      uniqueTrendDay: pctTrend((stats.uniqueUsers?.byDay?.[today] || []).length, (stats.uniqueUsers?.byDay?.[yesterday] || []).length),
-      uniqueTrendMonth: pctTrend((stats.uniqueUsers?.byMonth?.[month] || []).length, (stats.uniqueUsers?.byMonth?.[prevMonth] || []).length),
+      uniqueTrendDay: pctTrend(nbUniques(stats.uniqueUsers?.byDay?.[today]), nbUniques(stats.uniqueUsers?.byDay?.[yesterday])),
+      uniqueTrendMonth: pctTrend(nbUniques(stats.uniqueUsers?.byMonth?.[month]), nbUniques(stats.uniqueUsers?.byMonth?.[prevMonth])),
       accessTrendDay: pctTrend(accessToday, accessYesterday),
       accessTrendMonth: pctTrend(accessMonth, accessPrevMonth)
     }

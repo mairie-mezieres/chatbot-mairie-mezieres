@@ -2,7 +2,7 @@
 // Copyright (c) 2024-2026 Commune de Mézières-lez-Cléry
 "use strict";
 const router = require("express").Router();
-const { readSondages, writeSondages, readSondageResults, writeSondageResults, readAdminSettings } = require("../lib/store");
+const { readSondages, writeSondages, readSondageResults, writeSondageResults, forgetSondageResults, readAdminSettings } = require("../lib/store");
 const { redisDel, redisSismember, redisSadd, _isRedis429 } = require("../lib/redis");
 const { adminAuth } = require("../lib/middleware");
 const { logAudit } = require("../lib/logger");
@@ -144,6 +144,7 @@ router.delete("/admin/sondages/:id", adminAuth, async (req, res) => {
   const sondages = (await readSondages()).filter(s => s.id !== id);
   await writeSondages(sondages);
   await redisDel("mat:sondage:results:" + id);
+  forgetSondageResults(id);   // ⚠️ le miroir mémoire survivrait à la suppression
   logAudit("Suppression sondage", `id=${id}`).catch(() => {});
   res.json({ ok: true, sondages });
 });

@@ -124,6 +124,36 @@ test("GET /api/install-count sans stats → { count: 0 }", async () => {
   assert.deepEqual(await r.json(), { count: 0 });
 });
 
+// ── Comptage des visiteurs uniques (routes/stats-public.js) ──
+// Deux propriétés : le même appareil ne compte qu'une fois dans la journée, et
+// la route PUBLIQUE /stats ne restitue que des COMPTES — jamais les
+// identifiants d'appareils, qui permettraient de suivre un visiteur d'un jour
+// sur l'autre. `allDevices` avait bien été retiré « pour RGPD », mais
+// `byDay`/`byMonth` et `deviceStats.daySeen` exposaient la même information.
+test("POST /stats/track dédoublonne l'appareil et /stats ne publie que des comptes", async () => {
+  const store = require("../lib/store");
+  await store.writeStats({});
+
+  const track = (deviceId) => fetch(base + "/stats/track", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-device-id": deviceId },
+    body: JSON.stringify({ service: "meteo", device: { type: "Mobile", model: "Pixel 8" } }),
+  });
+
+  assert.equal((await track("mat-test-aaa")).status, 200);
+  assert.equal((await track("mat-test-aaa")).status, 200);   // même appareil
+  assert.equal((await track("mat-test-bbb")).status, 200);
+
+  const j = await (await fetch(base + "/stats")).json();
+  assert.equal(j.overview.uniqueToday, 2, "deux appareils, trois appels");
+  assert.equal(j.parService.meteo, 3, "les accès, eux, comptent chaque appel");
+
+  const brut = JSON.stringify(j);
+  assert.equal(brut.includes("mat-test-aaa"), false, "aucun identifiant d'appareil dans la réponse publique");
+  assert.equal(j.uniqueUsers.byDay[j.overview.today], 2, "byDay expose un compte, pas une liste");
+  assert.equal(j.deviceStats.daySeen, undefined, "daySeen (identifiant → modèle/OS) n'est pas publié");
+});
+
 test("POST /admin/stats/installations sans token → 401", async () => {
   const r = await fetch(base + "/admin/stats/installations", {
     method: "POST",

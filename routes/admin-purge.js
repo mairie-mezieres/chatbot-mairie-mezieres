@@ -3,7 +3,7 @@
 "use strict";
 const router = require("express").Router();
 const { adminAuth } = require("../lib/middleware");
-const { readNews, writeNews, readSignals, writeSignals, readStats, writeStats, readIaStats, writeIaStats } = require("../lib/store");
+const { readNews, writeNews, readSignals, writeSignals, readStats, writeStats, readIaStats, writeIaStats, flushStatsNow } = require("../lib/store");
 const { deleteActuImageFromCloudinary } = require("../lib/cloudinary");
 const { actuPhotoList } = require("../lib/actu");
 const { redisDel } = require("../lib/redis");
@@ -106,7 +106,7 @@ router.post("/admin/purge", adminAuth, async (req, res) => {
         for (const key of Object.keys(ds.daySeen || {}).filter(d => d < beforeDate)) { delete ds.daySeen[key]; deleted++; }
         for (const key of Object.keys(ds.byDay || {}).filter(d => d < beforeDate)) { delete ds.byDay[key]; deleted++; }
         for (const key of Object.keys(ds.byMonth || {}).filter(m => m < cutoffMonth)) { delete ds.byMonth[key]; deleted++; }
-        for (const key of Object.keys(ds.monthSeen || {}).filter(m => m < cutoffMonth)) { delete ds.monthSeen[key]; deleted++; }
+        // (`monthSeen` n'existe plus : supprimé au chargement par lib/stats-store.js)
         for (const key of Object.keys(ds.appOpensByMonth || {}).filter(m => m < cutoffMonth)) { delete ds.appOpensByMonth[key]; deleted++; }
       }
 
@@ -135,6 +135,12 @@ router.post("/admin/purge", adminAuth, async (req, res) => {
     } else {
       return res.status(400).json({ error: "type inconnu" });
     }
+
+    // ⚠️ Une purge modifie l'HISTORIQUE, qui vit dans `mat:stats:socle` — une
+    // clé qui n'est réécrite que quand elle change (voir ADR-0017). Sans ce
+    // flush forcé, l'admin verrait les données disparaître de l'écran… et
+    // revenir au redémarrage suivant.
+    await flushStatsNow({ force: true }).catch(() => {});
 
     logAudit("Purge données", `type=${type} avant=${beforeDate} → ${deleted} supprimé(s)`).catch(() => {});
     const extra = cloudinaryResults.length ? { cloudinary: cloudinaryResults } : {};
