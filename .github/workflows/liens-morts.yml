@@ -78,6 +78,17 @@ jobs:
           # qu'un scan lent : il faut le ré-instruire à la main, et il apprend
           # à se méfier du signal. 8 requêtes en parallèle et 30 s de patience
           # suffisent — le scan tient largement dans les 10 minutes du job.
+          # ⚠️ Un 403 n'est PAS un lien mort : c'est la réponse d'un serveur À UN
+          # ROBOT. L'issue #450 de app-mezieres portait trois « erreurs » sur
+          # quatre de cette nature (xpfibre.com/loiret-thd, cité ici aussi par la
+          # règle `fibre`) — des pages qui s'ouvrent normalement dans un
+          # navigateur. La réponse n'est pas d'allonger la liste d'exclusions
+          # ci-dessous : un domaine exclu n'est PLUS JAMAIS vérifié, y compris le
+          # jour où il meurt pour de bon — c'est précisément ce que ce scan
+          # existe pour attraper (valdeloire-fibre.fr, domaine inexistant,
+          # annoncé aux habitants pendant des mois). L'étape suivante re-teste
+          # donc chaque URL signalée avec des en-têtes de navigateur : ce qui
+          # répond sort du rapport, ce qui ne répond pas y reste.
           args: >-
             --no-progress
             --max-retries 2
@@ -113,9 +124,20 @@ jobs:
             --exclude 'api\.upstash\.com'
             --exclude 'mezieres-lez-clery\.fr/img/'
             'lib/*.js' 'routes/*.js' '*.md' 'docs/**/*.md'
-          format: markdown
-          output: ./lychee/rapport.md
+          # JSON : le rapport lisible est construit par l'étape suivante, une
+          # fois les faux positifs écartés.
+          format: json
+          output: ./lychee/rapport.json
           fail: false
+
+      # Re-vérification « pour de vrai » : chaque URL que lychee a rejetée est
+      # rappelée avec des en-têtes de navigateur. Celles qui répondent sont
+      # écartées du rapport (et listées dans un bloc repliable, pour qu'un faux
+      # positif reste visible sans faire de bruit) ; les autres y restent.
+      # C'est cette étape qui décide, pas le code de sortie de lychee.
+      - name: Re-vérifier les liens signalés
+        id: verif
+        run: node scripts/verifier-liens-signales.js ./lychee/rapport.json ./lychee/rapport.md
 
       # ⚠️ Sans cette recherche, chaque passage hebdomadaire ouvrait une issue
       # DE PLUS, au lieu de mettre à jour l'existante : #176 et #181 étaient
@@ -133,7 +155,7 @@ jobs:
           echo "Issue liens-morts ouverte : ${numero:-aucune}"
 
       - name: Créer ou mettre à jour l'issue si des liens sont cassés
-        if: steps.lychee.outputs.exit_code != 0
+        if: steps.verif.outputs.restants != '0'
         uses: peter-evans/create-issue-from-file@v6
         with:
           title: 🔗 Liens morts détectés dans les réponses de MEL
@@ -145,7 +167,7 @@ jobs:
       # Symétrique : quand tout repasse au vert, l'issue n'a plus de raison de
       # rester ouverte. Sans ça elle traîne jusqu'à ce que quelqu'un y pense.
       - name: Refermer l'issue si plus aucun lien n'est cassé
-        if: steps.lychee.outputs.exit_code == 0 && steps.issue_ouverte.outputs.numero != ''
+        if: steps.verif.outputs.restants == '0' && steps.issue_ouverte.outputs.numero != ''
         env:
           GH_TOKEN: ${{ github.token }}
           NUMERO: ${{ steps.issue_ouverte.outputs.numero }}

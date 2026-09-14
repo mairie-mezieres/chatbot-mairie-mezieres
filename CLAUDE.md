@@ -271,6 +271,24 @@ Architecture à connaître avant toute modification des notifications :
   jour au lieu d'une nouvelle issue à chaque passage. Il la **referme** aussi quand le
   scan repasse au vert. Sans ce garde-fou, chaque exécution hebdomadaire en créait une
   de plus — #176 et #181 étaient identiques mot pour mot, à un jour d'intervalle.
+- ⛔ **Un « 403 » n'est pas un lien mort non plus — et on ne l'exclut PAS, on le
+  re-teste.** Un 403 est la réponse d'un serveur **à un robot** : sans en-têtes de
+  navigateur (User-Agent, `Accept`, `Accept-Language`), Cloudflare et la plupart des
+  éditeurs de sites refusent la requête. L'issue #450 de `app-mezieres` portait ainsi
+  trois « erreurs » sur quatre, dont `https://www.xpfibre.com/loiret-thd` — cité ici
+  même par la règle `fibre`, et l'étape bloquante du raccordement d'une construction
+  neuve. Pendant ce temps, la seule erreur réelle (une photo supprimée, donc un carré
+  vide en production) se noyait dans le lot. Depuis, une étape
+  `node scripts/verifier-liens-signales.js` rappelle **chaque URL rejetée** avec des
+  en-têtes de navigateur : ce qui répond sort du rapport (bloc repliable), ce qui ne
+  répond pas y reste, et les erreurs non-HTTP (`file://`, chemin local) sont conservées
+  telles quelles. C'est le nombre de liens **restants** qui ouvre, met à jour ou referme
+  l'issue — plus le code de sortie de lychee. ⛔ **Ne jamais « corriger » un faux positif
+  en ajoutant un `--exclude`** : un domaine exclu n'est plus jamais vérifié, y compris le
+  jour où il meurt pour de bon — c'est exactement l'histoire de `valdeloire-fibre.fr`
+  ci-dessous. ⚠️ Le script vit en **double** (ici et dans `app-mezieres`), comme le
+  workflow : les garder identiques. Voir
+  `app-mezieres/docs/adr/0042-un-403-n-est-pas-un-lien-mort.md`.
 - ⚠️ **Un « TIMEOUT » n'est pas un lien mort.** Le scan du 24 août 2026 a ouvert l'issue
   #201 sur trois expirations (`R11193` ×2, `R16396`) : trois pages parfaitement vivantes.
   lychee lance par défaut **128 requêtes en parallèle** et abandonne au bout de **20 s** ;
