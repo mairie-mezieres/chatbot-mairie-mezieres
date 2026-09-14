@@ -44,8 +44,13 @@ require.cache[cheminRedis] = {
 const S = require("../lib/stats-store.js");
 const { SOCLE_KEY, COURANT_KEY, LEGACY_KEY, MAX_DEVICES, nbUniques } = S;
 
-const JOUR = "2026-09-13";
-const MOIS = "2026-09";
+/* ⚠️ JOUR/MOIS suivent l'horloge, comme `lib/stats-store.js` (Europe/Paris) :
+   figés en dur, ils désignent « aujourd'hui » le jour où on les écrit, et
+   plus jamais ensuite — la tranche du jour part alors dans le socle et les
+   assertions tombent. Le "2026-09-13" d'origine a verdi le 13 septembre 2026
+   et rougit tous les jours depuis. */
+const { getParisDateParts } = require("../lib/dates.js");
+const { day: JOUR, month: MOIS } = getParisDateParts();
 
 function statsExemple() {
   return {
