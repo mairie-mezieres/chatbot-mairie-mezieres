@@ -281,10 +281,22 @@ Architecture à connaître avant toute modification des notifications :
   neuve. Pendant ce temps, la seule erreur réelle (une photo supprimée, donc un carré
   vide en production) se noyait dans le lot. Depuis, une étape
   `node scripts/verifier-liens-signales.js` rappelle **chaque URL rejetée** avec des
-  en-têtes de navigateur : ce qui répond sort du rapport (bloc repliable), ce qui ne
-  répond pas y reste, et les erreurs non-HTTP (`file://`, chemin local) sont conservées
-  telles quelles. C'est le nombre de liens **restants** qui ouvre, met à jour ou referme
-  l'issue — plus le code de sortie de lychee. ⛔ **Ne jamais « corriger » un faux positif
+  en-têtes de navigateur : ce qui répond sort du rapport (bloc repliable), et les
+  erreurs non-HTTP (`file://`, chemin local) sont conservées telles quelles. C'est le
+  nombre de liens **restants** qui ouvre, met à jour ou referme l'issue — plus le code
+  de sortie de lychee.
+- ⛔ **Un 403 qui PERSISTE au re-test n'est toujours pas un lien mort.** Des en-têtes de
+  navigateur ne suffisent pas à ressembler à un navigateur : Cloudflare lit aussi
+  l'**empreinte TLS** et le protocole (Node parle HTTP/1.1, Chrome parle h2), que rien
+  ne falsifie depuis `fetch`. L'issue #453 de `app-mezieres` a donc rouvert sur
+  `xpfibre.com/loiret-thd` — l'URL même qui avait motivé le script — avec la mention
+  « re-test navigateur : HTTP 403 », pour une page parfaitement vivante. Le verdict a
+  désormais **trois** états : `vivant` (< 400), `bloque` (**403, 429, 999** → listé dans
+  le rapport, re-testé chaque semaine, **non compté** dans `restants`) et `casse` (404,
+  410, 401, 5xx, DNS, connexion refusée, expiration → ouvre l'issue). Ce n'est pas un
+  `--accept 403` déguisé : l'URL reste mesurée et affichée, elle cesse seulement
+  d'alerter. Quand il ne reste que des `bloque`, aucune issue n'est ouverte : le rapport
+  part dans le **résumé du run** (`$GITHUB_STEP_SUMMARY`). ⛔ **Ne jamais « corriger » un faux positif
   en ajoutant un `--exclude`** : un domaine exclu n'est plus jamais vérifié, y compris le
   jour où il meurt pour de bon — c'est exactement l'histoire de `valdeloire-fibre.fr`
   ci-dessous. ⚠️ Le script vit en **double** (ici et dans `app-mezieres`), comme le

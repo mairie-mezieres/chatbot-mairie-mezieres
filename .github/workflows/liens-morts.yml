@@ -88,7 +88,14 @@ jobs:
           # existe pour attraper (valdeloire-fibre.fr, domaine inexistant,
           # annoncé aux habitants pendant des mois). L'étape suivante re-teste
           # donc chaque URL signalée avec des en-têtes de navigateur : ce qui
-          # répond sort du rapport, ce qui ne répond pas y reste.
+          # répond sort du rapport.
+          # ⛔ Et un 403 qui PERSISTE au re-test n'est toujours pas un lien mort
+          # (issue #453 de app-mezieres, encore xpfibre.com) : des en-têtes de
+          # navigateur ne suffisent pas à ressembler à un navigateur — Cloudflare
+          # regarde aussi l'empreinte TLS et le protocole, qu'aucun script ne
+          # falsifie. Un tel lien est déclaré INVÉRIFIABLE, pas cassé : il reste
+          # listé et re-testé chaque semaine, mais il n'ouvre pas d'issue. Seule
+          # une ressource absente (404/410, DNS, expiration) compte.
           args: >-
             --no-progress
             --max-retries 2
@@ -133,8 +140,12 @@ jobs:
       # Re-vérification « pour de vrai » : chaque URL que lychee a rejetée est
       # rappelée avec des en-têtes de navigateur. Celles qui répondent sont
       # écartées du rapport (et listées dans un bloc repliable, pour qu'un faux
-      # positif reste visible sans faire de bruit) ; les autres y restent.
-      # C'est cette étape qui décide, pas le code de sortie de lychee.
+      # positif reste visible sans faire de bruit) ; celles qui se font encore
+      # refuser (403/429) partent dans un second bloc, sans être comptées ; les
+      # autres restent dans le corps du rapport.
+      # C'est cette étape qui décide, pas le code de sortie de lychee. Elle écrit
+      # aussi le rapport dans le résumé du run — sans quoi les liens « bloqués »
+      # ne seraient visibles nulle part les semaines où rien n'est cassé.
       - name: Re-vérifier les liens signalés
         id: verif
         run: node scripts/verifier-liens-signales.js ./lychee/rapport.json ./lychee/rapport.md

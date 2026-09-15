@@ -3,6 +3,10 @@
  * Ce que le test verrouille (issue #450 de app-mezieres) :
  *  - un 403 servi AU ROBOT mais pas au navigateur est un FAUX POSITIF : il sort
  *    du rapport ;
+ *  - un 403 qui PERSISTE malgré les en-têtes de navigateur n'est toujours pas un
+ *    lien mort (issue #453, xpfibre.com) : Cloudflare regarde aussi l'empreinte
+ *    TLS et le protocole, qu'aucun script ne peut imiter. Il est déclaré
+ *    « invérifiable », pas « cassé », et n'ouvre donc pas d'issue ;
  *  - un vrai 404 reste, quoi qu'il arrive ;
  *  - une erreur non-HTTP (fichier local introuvable) reste : c'était la seule
  *    vraie erreur de #450, et elle se noyait dans trois faux positifs ;
@@ -41,6 +45,9 @@ function demarrerServeur() {
         }
         res.writeHead(403); return res.end('refus');
       }
+      // Le cas xpfibre : 403 quoi qu'on envoie comme en-têtes — la page est
+      // pourtant vivante pour un habitant.
+      if (req.url === '/bloque-toujours') { res.writeHead(403); return res.end('refus'); }
       if (req.url === '/vraiment-mort') { res.writeHead(404); return res.end('nope'); }
       res.writeHead(500); res.end();
     });
@@ -61,6 +68,7 @@ test('un 403 servi au robot mais pas au navigateur sort du rapport ; le reste y 
     error_map: {
       'lib/mel.js': [
         { url: `${base}/bloque-aux-robots`, status: { code: 403, text: 'Rejected status code (403 Forbidden)' } },
+        { url: `${base}/bloque-toujours`, status: { code: 403, text: 'Rejected status code (403 Forbidden)' } },
         { url: `${base}/vraiment-mort`, status: { code: 404, text: 'Rejected status code (404 Not Found)' } },
       ],
       // La même URL, recomptée depuis un autre fichier — cas « Error (cached) ».
@@ -87,7 +95,16 @@ test('un 403 servi au robot mais pas au navigateur sort du rapport ; le reste y 
   assert.match(rapport, /<details>[\s\S]*bloque-aux-robots/,
     'le faux positif doit être relégué dans le bloc repliable, pas dans les erreurs');
 
-  // Deux entrées restantes (le 404 et le fichier), pas quatre.
+  // Le 403 qui persiste : présent dans le rapport, mais dans le bloc des refus
+  // aux robots — jamais dans le corps des erreurs, qui seul ouvre l'issue.
+  const corps = rapport.split('<details>')[0];
+  assert.doesNotMatch(corps, /bloque-toujours/,
+    'un 403 persistant ne doit PAS compter comme un lien cassé (issue #453)');
+  assert.match(rapport, /refuse de servir à un robot[\s\S]*bloque-toujours/,
+    'un 403 persistant doit rester visible dans le bloc « refus aux robots »');
+  assert.match(out, /^bloques=1$/m, `sortie inattendue : ${out}`);
+
+  // Deux entrées restantes (le 404 et le fichier), pas cinq.
   assert.match(out, /^restants=2$/m, `sortie inattendue : ${out}`);
 
   fs.rmSync(dossier, { recursive: true, force: true });
