@@ -53,12 +53,14 @@
 
 'use strict';
 
-const fs = require('fs');
+/* Socle partagé avec `dependabot-auto-merge.js` : client d'API, lecture de
+   l'état de CI, commentaires idempotents. ⛔ Ne pas le réimplémenter ici — un
+   suivi qui lit « CI verte » pendant que l'auto-merge lit « rouge » serait une
+   divergence invisible sur la décision la plus lourde des deux (fusionner). */
+const {
+  TOKEN, REPO, DRY_RUN, gh, ghListe, ageJours, commenterUneFois, resume, etatCI, pastille,
+} = require('./lib/gh');
 
-const TOKEN = process.env.GITHUB_TOKEN || '';
-const REPO = process.env.GITHUB_REPOSITORY || '';
-const API = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
-const DRY_RUN = /^(1|true|oui)$/i.test(String(process.env.SUIVI_DRY_RUN || '').trim());
 const RELANCE_JOURS = Math.max(0, Number(process.env.SUIVI_PR_RELANCE_JOURS || 14) || 0);
 const RAPPEL_JOURS = Math.max(0, Number(process.env.SUIVI_ISSUE_RAPPEL_JOURS || 0) || 0);
 
@@ -68,123 +70,9 @@ const BRANCHES_AUTO = ['dependabot/', 'claude/'];
 /* Issues qui ont déjà un gardien : les toucher ici, c'est doubler leur canal. */
 const LABELS_ECARTES = ['liens-morts'];
 
-function entetes(json) {
-  const h = {
-    Authorization: `Bearer ${TOKEN}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'mat-suivi-depot',
-  };
-  if (json) h['Content-Type'] = 'application/json';
-  return h;
-}
-
-/** Appel API. Renvoie `{ ok, status, data }` ; ne lève pas sur un statut HTTP. */
-async function gh(chemin, options = {}) {
-  const methode = options.method || 'GET';
-  const ecriture = methode !== 'GET';
-  if (ecriture && DRY_RUN) {
-    console.log(`[dry-run] ${methode} ${chemin}`);
-    return { ok: true, status: 0, data: { dryRun: true } };
-  }
-  const res = await fetch(`${API}${chemin}`, {
-    method: methode,
-    headers: entetes(ecriture),
-    body: ecriture && options.body ? JSON.stringify(options.body) : undefined,
-  });
-  let data = null;
-  try { data = await res.json(); } catch { data = null; }
-  if (!res.ok) console.log(`::warning title=Suivi du dépôt::${methode} ${chemin} → HTTP ${res.status}`);
-  return { ok: res.ok, status: res.status, data };
-}
-
-/** Pagination simple, plafonnée : ce dépôt n'a pas des milliers d'items. */
-async function ghListe(chemin, pagesMax = 5) {
-  const tout = [];
-  for (let page = 1; page <= pagesMax; page += 1) {
-    const sep = chemin.includes('?') ? '&' : '?';
-    const { ok, data } = await gh(`${chemin}${sep}per_page=100&page=${page}`);
-    if (!ok || !Array.isArray(data) || data.length === 0) break;
-    tout.push(...data);
-    if (data.length < 100) break;
-  }
-  return tout;
-}
-
-/**
- * Âge en JOURS d'un horodatage ISO — une DURÉE, comparée à un seuil.
- * (Ce quotient ne conviendrait pas pour dire « demain » à un habitant.)
- */
-function ageJours(iso) {
-  const t = Date.parse(iso || '');
-  if (Number.isNaN(t)) return 0;
-  return Math.floor((Date.now() - t) / 86400000);
-}
-
-/** ⛔ C'est le marqueur qui rend le suivi idempotent, pas la ressemblance des textes. */
-function marqueur(nom) {
-  return `<!-- suivi-depot:${nom} -->`;
-}
-
-/** Publie un commentaire au plus une fois par marqueur. */
-async function commenterUneFois(numero, nomMarqueur, corps) {
-  const commentaires = await ghListe(`/repos/${REPO}/issues/${numero}/comments`, 3);
-  const cible = marqueur(nomMarqueur);
-  if (commentaires.some((c) => c && typeof c.body === 'string' && c.body.includes(cible))) {
-    console.log(`#${numero} : commentaire « ${nomMarqueur} » déjà publié — rien à faire.`);
-    return false;
-  }
-  const { ok } = await gh(`/repos/${REPO}/issues/${numero}/comments`, {
-    method: 'POST', body: { body: `${cible}\n${corps}` },
-  });
-  if (ok) console.log(`#${numero} : commentaire « ${nomMarqueur} » ${DRY_RUN ? 'simulé (dry-run)' : 'publié'}.`);
-  return ok;
-}
-
-function resume(texte) {
-  const fichier = process.env.GITHUB_STEP_SUMMARY;
-  if (fichier) fs.appendFileSync(fichier, `${texte}\n`);
-  console.log(texte);
-}
-
 function categorie(pr) {
   const ref = (pr.head && pr.head.ref) || '';
   return BRANCHES_AUTO.some((p) => ref.startsWith(p)) ? 'auto' : 'humaine';
-}
-
-/**
- * État de la CI sur la tête d'une PR : `{ etat, echecs }`.
- * Deux sources, et il faut les deux : les **check runs** (jobs GitHub Actions)
- * et les **commit statuses** de l'API, qu'aucun check run ne rapporte.
- */
-async function etatCI(sha) {
-  const echecs = [];
-  let vus = 0;
-  let enCours = false;
-
-  const runs = await gh(`/repos/${REPO}/commits/${sha}/check-runs?per_page=100`);
-  for (const run of (runs.data && runs.data.check_runs) || []) {
-    vus += 1;
-    if (run.status !== 'completed') { enCours = true; continue; }
-    // `neutral` et `skipped` ne sont pas des échecs : un job conditionnel ignoré
-    // est un fonctionnement normal, le compter en rouge rendrait le signal faux.
-    if (['failure', 'timed_out', 'action_required'].includes(run.conclusion)) echecs.push(run.name);
-  }
-
-  const st = await gh(`/repos/${REPO}/commits/${sha}/status`);
-  for (const s of (st.data && st.data.statuses) || []) {
-    vus += 1;
-    if (s.state === 'pending') { enCours = true; continue; }
-    if (s.state === 'failure' || s.state === 'error') echecs.push(s.context);
-  }
-
-  if (echecs.length > 0) return { etat: 'rouge', echecs };
-  if (enCours) return { etat: 'en cours', echecs };
-  return { etat: vus > 0 ? 'verte' : 'aucune', echecs };
-}
-
-function pastille(etat) {
-  return { verte: '✅ verte', rouge: '❌ rouge', 'en cours': '⏳ en cours', aucune: '➖ aucune' }[etat] || etat;
 }
 
 async function traiterPr(numero) {
