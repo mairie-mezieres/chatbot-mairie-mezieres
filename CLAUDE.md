@@ -289,7 +289,7 @@ Architecture à connaître avant toute modification des notifications :
   jour où il meurt pour de bon — c'est exactement l'histoire de `valdeloire-fibre.fr`
   ci-dessous. ⚠️ Le script vit en **double** (ici et dans `app-mezieres`), comme le
   workflow : les garder identiques. Voir
-  `app-mezieres/docs/adr/0042-un-403-n-est-pas-un-lien-mort.md`.
+  `app-mezieres/docs/adr/0044-un-403-n-est-pas-un-lien-mort.md`.
 - ⚠️ **Un « TIMEOUT » n'est pas un lien mort.** Le scan du 24 août 2026 a ouvert l'issue
   #201 sur trois expirations (`R11193` ×2, `R16396`) : trois pages parfaitement vivantes.
   lychee lance par défaut **128 requêtes en parallèle** et abandonne au bout de **20 s** ;
