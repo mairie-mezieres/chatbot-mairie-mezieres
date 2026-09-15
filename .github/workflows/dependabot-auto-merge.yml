@@ -1,0 +1,69 @@
+name: Fusion automatique Dependabot (backend)
+
+# ════════════════════════════════════════════════════════════════════
+# Fusionne les PR Dependabot à faible risque, une fois la CI VERTE.
+#
+# ⛔ Complète le suivi du dépôt, ne le remplace pas : `suivi-depot.yml` n'a que
+# `contents: read` et ne fusionnera jamais. Ici on fusionne, donc les barrières
+# sont dans le script (`scripts/dependabot-auto-merge.js`), pas dans un prompt :
+# auteur `dependabot[bot]` lu sur l'API, PR ne touchant QUE `package.json` /
+# `package-lock.json`, correctif ou mineure ≥ 1.0.0, jamais une majeure ni une
+# mineure en 0.x, CI verte sur les DEUX sources, `mergeable_state: clean`.
+#
+# ⚠️ POURQUOI PAS L'AUTO-MERGE NATIF DE GITHUB : `main` n'est pas protégée dans
+# ce dépôt. Sans règle de protection exigeant des checks, `gh pr merge --auto`
+# fusionne IMMÉDIATEMENT, sans attendre la CI. Ce workflow lit l'état réel des
+# checks lui-même — il reste correct que la branche soit protégée ou non.
+# ════════════════════════════════════════════════════════════════════
+
+on:
+  # À la fin de la CI : avant, il n'y a rien à lire. `workflow_run` s'exécute
+  # dans le contexte du dépôt de base, avec un token complet — c'est ce qui
+  # permet d'agir sur une PR Dependabot (dont le token, lui, est restreint).
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  # Filet : une PR dont la CI est passée avant la mise en place, ou un run
+  # d'événement manqué, ne doit pas rester en rade indéfiniment.
+  schedule:
+    - cron: '25 8 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Essai à blanc (aucune fusion)"
+        type: boolean
+        required: false
+        default: false
+      mineures:
+        description: "Accepter les mises à jour mineures (≥ 1.0.0)"
+        type: boolean
+        required: false
+        default: true
+
+# contents / pull-requests : fusionner. checks / statuses : lire les verdicts.
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: dependabot-auto-merge
+  cancel-in-progress: false
+
+jobs:
+  fusionner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      # Aucun `npm ci` : ce script n'a aucune dépendance (fetch global, Node 20+).
+      - name: Fusionner les PR Dependabot éligibles
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUIVI_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          AUTOMERGE_MINEURES: ${{ inputs.mineures == false && '0' || '1' }}
+        run: node scripts/dependabot-auto-merge.js
