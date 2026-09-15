@@ -1,0 +1,73 @@
+name: Suivi du dépôt (backend)
+
+# ════════════════════════════════════════════════════════════════════
+# Vérification et traitement des PR et issues OUVERTES du backend.
+#
+# ⛔ Le principe : plus une PR est « à nous », plus on agit.
+#    auto    → commentaire quand c'est actionnable (conflit, CI rouge), relance
+#              unique après N jours ; jamais de fermeture
+#    humaine → aucun commentaire, jamais. Elle figure au résumé.
+#
+# Le canal par défaut est le RÉSUMÉ DU RUN (onglet « Summary »). Un robot qui
+# commente sur la PR d'un humain ce que GitHub lui affiche déjà en rouge est du
+# bruit — et le bruit fait qu'on cesse de lire le canal.
+#
+# ⚠️ Jumeau du workflow du même nom dans `app-mezieres` (là-bas, les PR de la
+# veille sont ignorées : elles ont leur propre canal). Voir
+# `app-mezieres/docs/adr/0043-suivi-du-depot-agir-selon-qui-tient-la-pr.md`.
+# ════════════════════════════════════════════════════════════════════
+
+on:
+  # Le point d'entrée manuel : le bouton « Run workflow » répond à « je veux
+  # voir l'état de mes PR et issues maintenant ».
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Essai à blanc (aucun commentaire)"
+        type: boolean
+        required: false
+        default: false
+      relance_jours:
+        description: "Relancer une PR automatique inactive depuis N jours (0 = jamais)"
+        type: string
+        required: false
+        default: "14"
+      rappel_issues_jours:
+        description: "Rappel sur une issue inactive depuis N jours (0 = jamais)"
+        type: string
+        required: false
+        default: "0"
+  schedule:
+    - cron: '55 7 * * *'
+
+# contents      : lecture seule — ce workflow ne pousse RIEN
+# issues / pull-requests : commenter (jamais fermer)
+# checks / statuses      : lire les verdicts de CI
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: suivi-depot
+  cancel-in-progress: false
+
+jobs:
+  suivi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      # Aucun `npm ci` : ce script n'a aucune dépendance (fetch global, Node 20+).
+      - name: Vérifier et traiter les PR et issues ouvertes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUIVI_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          SUIVI_PR_RELANCE_JOURS: ${{ inputs.relance_jours || '14' }}
+          SUIVI_ISSUE_RAPPEL_JOURS: ${{ inputs.rappel_issues_jours || '0' }}
+        run: node scripts/suivi-depot.js
