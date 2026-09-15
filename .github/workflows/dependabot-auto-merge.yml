@@ -65,5 +65,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SUIVI_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
-          AUTOMERGE_MINEURES: ${{ inputs.mineures == false && '0' || '1' }}
+          # ⚠️ `inputs.mineures` n'existe QUE sur workflow_dispatch ; ailleurs il vaut
+          # null. Or Actions caste les deux opérandes en nombre avant de comparer :
+          # null → 0 et false → 0, donc `inputs.mineures == false` est VRAI sur un
+          # déclenchement automatique. Écrit sans la garde sur `github.event_name`,
+          # ce champ désactivait les mineures partout sauf en lancement manuel — un
+          # workflow plus restrictif en vrai qu'à l'essai, donc invisible à l'essai.
+          AUTOMERGE_MINEURES: ${{ (github.event_name == 'workflow_dispatch' && inputs.mineures == false) && '0' || '1' }}
         run: node scripts/dependabot-auto-merge.js
