@@ -5,8 +5,8 @@ const router = require("express").Router();
 const axios = require("axios");
 const { VERIFY_TOKEN } = require("../config");
 const { readSeenPosts, writeSeenPosts, readNews, writeNews } = require("../lib/store");
-const { sendActuPush } = require("../lib/actu");
-const { fetchFacebookFullPicture } = require("../lib/facebook");
+const { sendActuPush, MAX_ACTU_PHOTOS } = require("../lib/actu");
+const { fetchFacebookPostImages } = require("../lib/facebook");
 const { uploadActuImageToCloudinary, CLOUDINARY_ENABLED } = require("../lib/cloudinary");
 
 // ── Webhook Facebook (feed only) ──────────────────────────────
@@ -55,32 +55,71 @@ router.post("/webhook", async (req, res) => {
           console.log(`📡 Webhook Facebook : feed reçu sans #MAT (item=${item}) — ignoré`);
           continue;
         }
-        const photo = change.value.photo || null;
+        // Un post à UNE photo porte `photo` (une chaîne) ; un post à PLUSIEURS
+        // porte `photos` (un tableau d'URL) et pas de `photo`. Lire le seul
+        // `photo`, c'était n'avoir aucune image du tout sur un post multiple
+        // quand la Graph API ne répondait pas.
+        const photos = normalizeWebhookPhotos(change.value);
         const postId = change.value.post_id || null;
         const postKey =
           change.value.post_id ||
           change.value.comment_id ||
           change.value.sender_id ||
-          (msg.replace(/\s+/g, " ").trim() + "|" + (photo || ""));
+          (msg.replace(/\s+/g, " ").trim() + "|" + (photos[0] || ""));
 
-        console.log("📰 Publication #MAT détectée", postKey);
-        await handleFacebookPublication(msg, photo, postKey, postId);
+        console.log(`📰 Publication #MAT détectée ${postKey} (${photos.length} image(s) annoncée(s))`);
+        await handleFacebookPublication(msg, photos, postKey, postId);
       }
     }
   }
 });
 
-// ── Récupérer et persister l'image du post Facebook ──────────
-async function resolvePostImage(postId, fallbackPhoto) {
-  // Essai 1 : Graph API pour obtenir la full_picture
-  let fullPicture = null;
-  if (postId) {
-    fullPicture = await fetchFacebookFullPicture(postId);
+// ── Images annoncées par le webhook lui-même ─────────────────
+// `photos` (tableau) pour un post multi-images, `photo` (chaîne) pour un post à
+// une image. Les deux ne sont pas censés coexister ; on les concatène quand
+// même, l'ordre restant celui de Facebook (la couverture en tête).
+function normalizeWebhookPhotos(value) {
+  const brut = []
+    .concat(Array.isArray(value?.photos) ? value.photos : [])
+    .concat(value?.photo ? [value.photo] : []);
+  const out = [];
+  for (const u of brut) {
+    if (typeof u !== "string") continue;
+    const s = u.trim();
+    if (!s || out.includes(s)) continue;
+    out.push(s);
+    if (out.length >= MAX_ACTU_PHOTOS) break;
   }
-  const sourceUrl = fullPicture || fallbackPhoto;
-  if (!sourceUrl) return { photoUrl: null, photoPublicId: null };
+  return out;
+}
 
-  // Essai 2 : upload Cloudinary si configuré
+// ── Récupérer et persister les images du post Facebook ───────
+//
+// Deux sources décrivent les mêmes images, et on ne les FUSIONNE jamais : une
+// même photo n'a pas la même URL dans le corps du webhook et dans la Graph API
+// (deux hôtes CDN, deux jeux de paramètres signés). Les concaténer publierait
+// chaque image en double sans qu'aucune comparaison de chaînes ne s'en aperçoive.
+// On choisit donc CELLE QUI EN DÉCRIT LE PLUS, la Graph API l'emportant à
+// égalité (URL de meilleure définition, et seule source quand le corps du
+// webhook n'annonce rien). La Graph API rend un tableau vide sans
+// `PAGE_ACCESS_TOKEN` : le corps du webhook reste alors le seul recours.
+async function resolvePostImages(postId, fallbackPhotos) {
+  const parGraph = await fetchFacebookPostImages(postId);
+  const parWebhook = Array.isArray(fallbackPhotos) ? fallbackPhotos : [];
+  const sources = (parGraph.length >= parWebhook.length ? parGraph : parWebhook)
+    .slice(0, MAX_ACTU_PHOTOS);
+  if (!sources.length) return [];
+
+  const photos = [];
+  for (const sourceUrl of sources) {
+    photos.push(await persistImage(sourceUrl));
+  }
+  return photos;
+}
+
+// Une image ratée n'annule pas les autres : elle retombe sur l'URL Facebook
+// directe, exactement comme avant la v4.115 quand il n'y en avait qu'une.
+async function persistImage(sourceUrl) {
   if (CLOUDINARY_ENABLED) {
     try {
       const imgResp = await axios.get(sourceUrl, { responseType: 'arraybuffer', timeout: 10000 });
@@ -88,19 +127,17 @@ async function resolvePostImage(postId, fallbackPhoto) {
       const base64 = `data:${mimeType};base64,` + Buffer.from(imgResp.data).toString('base64');
       const cloudResult = await uploadActuImageToCloudinary(base64);
       if (cloudResult?.secure_url) {
-        return { photoUrl: cloudResult.secure_url, photoPublicId: cloudResult.public_id };
+        return { url: cloudResult.secure_url, publicId: cloudResult.public_id || null };
       }
     } catch (e) {
       console.warn("⚠️ Upload Cloudinary image FB échoué, fallback URL directe:", e.message);
     }
   }
-
-  // Fallback : URL directe (full_picture ou change.value.photo)
-  return { photoUrl: sourceUrl, photoPublicId: null };
+  return { url: sourceUrl, publicId: null };
 }
 
 // ── Publication Facebook → stockage + push + anti-doublon ────
-async function handleFacebookPublication(msg, photoUrl, postKey, postId) {
+async function handleFacebookPublication(msg, photoUrls, postKey, postId) {
   const seen = await readSeenPosts();
 
   if (postKey && seen[postKey]) {
@@ -121,7 +158,7 @@ async function handleFacebookPublication(msg, photoUrl, postKey, postId) {
   // Détection de doublon : même titre + même photo
   const alreadyInNews = actus.some(a =>
     (a.title || "").trim() === title &&
-    (a.photo || null) === (photoUrl || null)
+    (a.photo || null) === (photoUrls[0] || null)
   );
 
   if (alreadyInNews) {
@@ -133,8 +170,10 @@ async function handleFacebookPublication(msg, photoUrl, postKey, postId) {
     return { duplicate: true };
   }
 
-  // Résolution de l'image (Graph API → Cloudinary ou URL directe)
-  const { photoUrl: finalPhotoUrl, photoPublicId } = await resolvePostImage(postId, photoUrl);
+  // Résolution des images (Graph API / corps du webhook → Cloudinary ou URL directe)
+  const photos = await resolvePostImages(postId, photoUrls);
+  const finalPhotoUrl = photos.length ? photos[0].url : null;
+  const photoPublicId = photos.length ? photos[0].publicId : null;
 
   const actu = {
     id: Date.now(),
@@ -142,15 +181,19 @@ async function handleFacebookPublication(msg, photoUrl, postKey, postId) {
     description,
     date: new Date().toLocaleDateString("fr-FR"),
     dateISO: new Date().toISOString().slice(0, 10),
-    photo: finalPhotoUrl || null,
+    // `photo` reste LA COUVERTURE, et reste seule à être lue par le push, la
+    // vignette bureau et la carte « prochaine manifestation » : `photos` s'y
+    // ajoute, ne la remplace pas (ADR-0039).
+    photo: finalPhotoUrl,
     ...(photoPublicId ? { photoPublicId } : {}),
+    ...(photos.length ? { photos } : {}),
     source: "facebook"
   };
 
   actus.unshift(actu);
   if (actus.length > 30) actus.splice(30);
   await writeNews(actus);
-  console.log(`💾 Actu FB stockée: "${title}" (photo: ${finalPhotoUrl ? 'oui' : 'non'})`);
+  console.log(`💾 Actu FB stockée: "${title}" (${photos.length} photo(s))`);
 
   if (postKey) {
     seen[postKey] = Date.now();
@@ -168,3 +211,6 @@ async function handleFacebookPublication(msg, photoUrl, postKey, postId) {
 }
 
 module.exports = router;
+// Exportés pour les tests (aucun appel réseau : voir test/webhook-photos.test.js).
+module.exports.normalizeWebhookPhotos = normalizeWebhookPhotos;
+module.exports.resolvePostImages = resolvePostImages;

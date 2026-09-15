@@ -211,7 +211,15 @@ Depuis mai 2026, le webhook **valide la signature HMAC** de Facebook :
    ou la photo.
 3. Le `#MAT` doit être dans le **texte** du post (un post photo seule sans
    légende n'est pas détecté).
-4. **Les logs ne montrent rien du tout** : Facebook n'a pas envoyé d'événement
+4. **Un post à plusieurs photos crée une actu à plusieurs photos** (depuis la
+   v4.115, jusqu'à **6**, voir §5quater). La **première** photo du post devient la
+   **couverture** — celle du push et de la version ordinateur. Avant, seule
+   celle-là était reprise et les autres disparaissaient **sans aucun signe** :
+   l'actu paraissait normale, simplement avec une image. Si vous voyez encore ce
+   comportement, le log `📰 Publication #MAT détectée … (N image(s) annoncée(s))`
+   dit combien Facebook en a annoncées, et `💾 Actu FB stockée … (N photo(s))`
+   combien sont arrivées. Un écart entre les deux se regarde dans 🪲 Logs.
+5. **Les logs ne montrent rien du tout** : Facebook n'a pas envoyé d'événement
    webhook pour ce post. Causes fréquentes : Story, Reel, ou **transfert/partage**
    publié depuis un profil personnel (pas depuis la Page elle-même). Seuls les
    posts **publiés directement sur la Page** avec `#MAT` dans le texte déclenchent
@@ -226,8 +234,9 @@ Depuis mai 2026, le webhook **valide la signature HMAC** de Facebook :
 > | `📡 Webhook Facebook : feed reçu sans #MAT (item=photo)` | Photo/post sans `#MAT` dans le texte |
 > | `⚠️ Webhook Facebook : signature HMAC invalide` | `FACEBOOK_APP_SECRET` incorrect ou périmé |
 > | `❌ Webhook Facebook : FACEBOOK_APP_SECRET manquant` | Variable absente de Render |
-> | `📰 Publication #MAT détectée` | Post reconnu, traitement en cours |
-> | `💾 Actu FB stockée` | Actualité créée avec succès |
+> | `📰 Publication #MAT détectée … (N image(s) annoncée(s))` | Post reconnu, traitement en cours — N = ce que Facebook annonce |
+> | `💾 Actu FB stockée … (N photo(s))` | Actualité créée avec succès, avec N images |
+> | `Récupération des images Facebook impossible` | Graph API muette (`PAGE_ACCESS_TOKEN` périmé ?) — on retombe sur les images du webhook, l'actu n'est pas perdue |
 > | `⏭️ Actualité déjà présente` | Doublon détecté (même titre + même photo) |
 
 ---
@@ -353,11 +362,23 @@ puis attachées au post). Le récapitulatif de publication l'indique : « 📘 F
 | `texte seul` + *(photo non envoyée, fallback texte)* | **Aucune** photo n'a été acceptée. Le post existe, sans image. Regarder 🪲 Logs (module `facebook`). |
 | `Publication photo incertaine (délai ou réseau)` | Le post a **peut-être** été créé. ⚠️ **Vérifier la page Facebook avant de réessayer**, sinon doublon. |
 
+### Depuis Facebook vers l'app (le sens inverse, v4.115)
+
+Cela marche aussi dans l'autre sens : un post `#MAT` publié **sur la page
+Facebook** avec plusieurs photos crée une actualité qui les porte **toutes**, dans
+le même ordre, la première servant de couverture. Même plafond de 6.
+
+⚠️ Jusqu'à la v4.115, seule la couverture était reprise, et **rien ne le disait** :
+l'actualité s'affichait normalement, avec une image. Si une actu ancienne n'a
+qu'une photo alors que le post en avait six, c'est cela — il faut la republier
+depuis l'admin pour récupérer les autres.
+
 ### Dépannage
 
 | Symptôme | Piste |
 |---|---|
 | « Seules les N premières photos ont été ajoutées » | Plafond de 6 par actualité. |
+| Un post Facebook à 6 photos n'en donne qu'une (ou aucune) dans l'app | 🪲 Logs : comparer `📰 … (N image(s) annoncée(s))` et `💾 … (N photo(s))`. Un `Récupération des images Facebook impossible` pointe un `PAGE_ACCESS_TOKEN` à régénérer. |
 | Une photo manque dans l'app mais est sur Facebook | Regarder 🪲 Logs : l'envoi Cloudinary de cette image a pu échouer. L'actu est alors refusée en bloc (rollback) — si elle existe, c'est qu'elles sont toutes passées. |
 | Publication **programmée** refusée avec une erreur sans texte clair | Corrigé en v4.109 : la route n'était pas en « corps large » et répondait 413 dès 256 Ko de photo. |
 | La mairie supprime une actu : les images sont-elles libérées ? | Oui, **toutes** (v4.109). Avant, seule la couverture l'était. |
