@@ -9,10 +9,13 @@ const { dlog } = require("../lib/middleware");
 const { CARBURANT_STATIONS, pickStationRecord, extractPrices } = require("../lib/carburant");
 
 // v9 : chaque carburant porte SA date (`sp95Maj*`, `gazoleMaj*`), et `majISO`
-// vaut désormais le PLUS ANCIEN des relevés affichés. La clé change avec la
-// forme du payload, sinon l'app recevrait pendant une heure des relevés à
-// l'ancien format — donc un bandeau daté au hasard des deux carburants.
-const CARBURANT_REDIS_KEY = 'mat:carburant:v9';
+// vaut le PLUS ANCIEN des relevés. La clé change avec la forme du payload,
+// sinon l'app recevrait pendant une heure des relevés à l'ancien format.
+// v10 : la forme n'a PAS changé, la clé si — et c'est délibéré. Le cache tient
+// une heure : après un correctif qui touche à la DÉSIGNATION des stations,
+// garder la clé, c'est servir les mauvaises stations jusqu'à l'expiration et
+// laisser conclure que le correctif ne marche pas. Changer la clé purge.
+const CARBURANT_REDIS_KEY = 'mat:carburant:v10';
 const CARBURANT_TTL_S     = 3600; // 1 heure
 
 async function fetchStationPrices(station) {
