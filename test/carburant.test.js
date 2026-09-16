@@ -10,10 +10,18 @@
 //      16/09 : l'app datait les DEUX du 08/09. Le prix du jour passait pour un
 //      prix de la semaine passée — et la même ligne pouvait dater un SP95
 //      périmé de l'horodatage du gazole du matin.
-//   2. « À défaut, le premier enregistrement du code postal. » Olivet (45160)
-//      porte le E.Leclerc ET le relais TotalEnergies du Coudray : ce repli
-//      affichait les prix de l'un sous le nom de l'autre, sans rien qui puisse
-//      le trahir à l'écran.
+//   2. « À défaut, le premier enregistrement du code postal. » Deux stations
+//      dans un même code postal, et ce repli affiche les prix de l'une sous le
+//      nom de l'autre, sans rien qui puisse le trahir à l'écran.
+//      ⛔ MAIS restreindre ce repli aux codes postaux à un seul enregistrement
+//      a vidé TROIS cartes sur six en production : le flux instantané v2 ne
+//      porte AUCUNE enseigne, donc la correspondance par marque ne matche
+//      jamais et `liste[0]` désignait seul les cinq stations. Les tests ne
+//      l'ont pas vu parce qu'ils fabriquaient des enregistrements avec un
+//      champ `ensigne` que le vrai jeu de données n'a pas — un test qui
+//      invente ses données ne mesure que l'idée qu'on s'en fait. Le repli
+//      n'est donc refusé que là où DEUX DE NOS STATIONS partagent le code
+//      postal.
 "use strict";
 const test = require('node:test');
 const assert = require('node:assert');
@@ -21,34 +29,59 @@ const {
   CARBURANT_STATIONS, pickStationRecord, extractPrices, formatMaj
 } = require('../lib/carburant');
 
-const LECLERC_OLIVET = { id: '45160003', ensigne: 'E.Leclerc', nom: 'OLIVET', adresse: 'Rue du Clos Renard' };
-const COUDRAY        = { id: '45160006', ensigne: 'TotalEnergies', nom: 'RELAIS DU COUDRAY', adresse: '3091 rue Marcel Belot' };
+// ⚠️ LA FORME RÉELLE d'un enregistrement du flux instantané v2 : un `id`, un
+// `cp`, une `adresse`, une `ville`, des prix. AUCUNE enseigne, aucun nom
+// commercial. Tout test qui en invente un ment sur ce que le code reçoit.
+const OLIVET_A = { id: '45160003', cp: '45160', adresse: 'RUE DU CLOS RENARD',   ville: 'OLIVET' };
+const OLIVET_B = { id: '45160006', cp: '45160', adresse: '3091 RUE MARCEL BELOT', ville: 'OLIVET' };
+const CLERY_A  = { id: '45370001', cp: '45370', adresse: 'ROUTE DE BLOIS',       ville: 'CLERY-SAINT-ANDRE' };
+const CLERY_B  = { id: '45370002', cp: '45370', adresse: 'RUE DU GATINAIS',      ville: 'CLERY-SAINT-ANDRE' };
+
+test('⛔ LA RÉGRESSION : chaque station suivie ressort d’un lot SANS enseigne', () => {
+  // C'est le test qui manquait. Le 16 septembre 2026, Cléry, Meung et Olivet
+  // affichaient « Prix non communiqué » en production pendant que la suite
+  // était verte.
+  for (const station of CARBURANT_STATIONS) {
+    const lot = station.cp === '45370' ? [CLERY_A, CLERY_B] : [OLIVET_A, OLIVET_B];
+    const rec = pickStationRecord(lot, station);
+    assert.ok(rec, `${station.key} : aucune station désignée`);
+  }
+});
 
 test('une station qui déclare un id se reconnaît à son id', () => {
-  const recs = [LECLERC_OLIVET, COUDRAY];
-  const station = CARBURANT_STATIONS.find(s => s.key === 'coudray');
-  assert.strictEqual(pickStationRecord(recs, station).id, '45160006');
+  assert.strictEqual(pickStationRecord([OLIVET_A, OLIVET_B], { key: 'x', id: '45160006' }).id, '45160006');
 });
 
 test('id absent du lot : AUCUNE station, jamais un repli', () => {
-  const station = CARBURANT_STATIONS.find(s => s.key === 'coudray');
-  assert.strictEqual(pickStationRecord([LECLERC_OLIVET], station), null);
+  assert.strictEqual(pickStationRecord([OLIVET_A], { key: 'x', id: '45160006' }), null);
 });
 
-test('deux stations dans le même code postal : pas de repli sur la première', () => {
-  // Sans `id` et sans marque reconnue, rendre `records[0]` afficherait les
-  // prix du Leclerc sous le nom du Total (ou l'inverse).
-  const recs = [LECLERC_OLIVET, COUDRAY];
-  assert.strictEqual(pickStationRecord(recs, { key: 'x', brand: 'carrefour' }), null);
+test('deux de NOS stations sur un même code postal : pas de repli', () => {
+  // Le seul cas où le repli est refusé — sinon on afficherait les prix de
+  // l'une sous le nom de l'autre. (Aucun code postal n'est dans ce cas
+  // aujourd'hui : on le simule.)
+  const jumelles = [{ key: 'a', cp: '45160' }, { key: 'b', cp: '45160' }];
+  const avant = CARBURANT_STATIONS.slice();
+  CARBURANT_STATIONS.push(...jumelles);
+  try {
+    assert.strictEqual(pickStationRecord([OLIVET_A, OLIVET_B], jumelles[0]), null);
+  } finally {
+    CARBURANT_STATIONS.length = 0;
+    CARBURANT_STATIONS.push(...avant);
+  }
 });
 
-test('un seul enregistrement : le repli reste admis (aucune ambiguïté)', () => {
-  assert.strictEqual(pickStationRecord([LECLERC_OLIVET], { key: 'x', brand: 'carrefour' }).id, '45160003');
+test('code postal à une seule de nos stations : le repli désigne le premier', () => {
+  const clery = CARBURANT_STATIONS.find(s => s.key === 'clery');
+  assert.strictEqual(pickStationRecord([CLERY_A, CLERY_B], clery).id, '45370001');
 });
 
-test('la marque désigne la station quand il n’y a pas d’id', () => {
-  const recs = [LECLERC_OLIVET, COUDRAY];
-  assert.strictEqual(pickStationRecord(recs, { key: 'olivet', brand: 'leclerc' }).id, '45160003');
+test('la marque désigne la station quand elle est là (elle ne l’est jamais)', () => {
+  // ⚠️ Conservé pour la forme : si le jeu de données se remet à porter une
+  // enseigne un jour, elle doit primer sur le repli.
+  const avecEnseigne = [{ id: '1', cp: '45160', ensigne: 'TotalEnergies' },
+                        { id: '2', cp: '45160', ensigne: 'E.Leclerc' }];
+  assert.strictEqual(pickStationRecord(avecEnseigne, { key: 'x', cp: '45160', brand: 'leclerc' }).id, '2');
 });
 
 test('chaque carburant porte SA date', () => {
@@ -101,16 +134,15 @@ test('une date illisible ne produit pas de date', () => {
   assert.deepStrictEqual(formatMaj(null), { maj: null, majISO: null });
 });
 
-test('les six stations ont une clé unique et un libellé', () => {
+test('chaque station a une clé unique, un libellé — et un id si son cp est partagé', () => {
   const cles = CARBURANT_STATIONS.map(s => s.key);
   assert.strictEqual(new Set(cles).size, cles.length);
-  assert.ok(cles.includes('coudray'));
   for (const s of CARBURANT_STATIONS) {
     assert.ok(s.label && s.cp, s.key);
-    // ⚠️ Deux stations partagent le 45160 : celles-là DOIVENT porter un `id`,
-    // sinon la marque seule décide — et une enseigne s'écrit de dix façons.
+    // ⛔ Deux de nos stations sur un même code postal ne sont désignables que
+    // par leur `id` : sans lui, aucune des deux n'affichera de prix.
     const memeCp = CARBURANT_STATIONS.filter(x => x.cp === s.cp);
-    if (memeCp.length > 1) assert.ok(s.id || s.brand, `${s.key} : ni id ni marque`);
+    if (memeCp.length > 1) assert.ok(s.id, `${s.key} : cp partagé et pas d'id`);
   }
 });
 
