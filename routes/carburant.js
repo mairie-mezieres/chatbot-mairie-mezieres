@@ -15,7 +15,11 @@ const { CARBURANT_STATIONS, pickStationRecord, extractPrices } = require("../lib
 // une heure : après un correctif qui touche à la DÉSIGNATION des stations,
 // garder la clé, c'est servir les mauvaises stations jusqu'à l'expiration et
 // laisser conclure que le correctif ne marche pas. Changer la clé purge.
-const CARBURANT_REDIS_KEY = 'mat:carburant:v10';
+// v11 : même raison. Le 45160 porte désormais DEUX stations désignées par leur
+// `id` — le relais du Coudray apparaît, et le E.Leclerc d'Olivet cesse
+// d'afficher les prix du relais. Garder la clé, c'est laisser une heure de
+// prix attribués à la mauvaise enseigne.
+const CARBURANT_REDIS_KEY = 'mat:carburant:v11';
 const CARBURANT_TTL_S     = 3600; // 1 heure
 
 async function fetchStationPrices(station) {
