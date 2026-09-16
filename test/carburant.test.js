@@ -32,20 +32,41 @@ const {
 // ⚠️ LA FORME RÉELLE d'un enregistrement du flux instantané v2 : un `id`, un
 // `cp`, une `adresse`, une `ville`, des prix. AUCUNE enseigne, aucun nom
 // commercial. Tout test qui en invente un ment sur ce que le code reçoit.
-const OLIVET_A = { id: '45160003', cp: '45160', adresse: 'RUE DU CLOS RENARD',   ville: 'OLIVET' };
+const OLIVET_A = { id: '45160005', cp: '45160', adresse: 'RN 20',               ville: 'OLIVET' };
 const OLIVET_B = { id: '45160006', cp: '45160', adresse: '3091 RUE MARCEL BELOT', ville: 'OLIVET' };
 const CLERY_A  = { id: '45370001', cp: '45370', adresse: 'ROUTE DE BLOIS',       ville: 'CLERY-SAINT-ANDRE' };
 const CLERY_B  = { id: '45370002', cp: '45370', adresse: 'RUE DU GATINAIS',      ville: 'CLERY-SAINT-ANDRE' };
+
+/* ⚠️ Le lot que renvoie l'API pour un code postal. `liste[0]` est ce que
+   l'ancien code désignait : pour le 45160, c'est le RELAIS — c'est ainsi que
+   l'app a servi ses prix sous le nom du Leclerc jusqu'à la v4.120. */
+const LOTS = { '45160': [OLIVET_B, OLIVET_A], '45370': [CLERY_A, CLERY_B] };
+const lotPour = station => LOTS[station.cp] || LOTS['45370'];
 
 test('⛔ LA RÉGRESSION : chaque station suivie ressort d’un lot SANS enseigne', () => {
   // C'est le test qui manquait. Le 16 septembre 2026, Cléry, Meung et Olivet
   // affichaient « Prix non communiqué » en production pendant que la suite
   // était verte.
   for (const station of CARBURANT_STATIONS) {
-    const lot = station.cp === '45370' ? [CLERY_A, CLERY_B] : [OLIVET_A, OLIVET_B];
-    const rec = pickStationRecord(lot, station);
+    const rec = pickStationRecord(lotPour(station), station);
     assert.ok(rec, `${station.key} : aucune station désignée`);
   }
+});
+
+test('⛔ les deux stations du 45160 ne se confondent pas', () => {
+  // Le Leclerc affichait les prix du relais du Coudray depuis l'origine :
+  // `liste[0]`, pour ce code postal, c'est le relais. Chacune doit désormais
+  // ressortir sur SON identifiant, à partir du MÊME lot.
+  const leclerc = CARBURANT_STATIONS.find(s => s.key === 'olivet');
+  const relais  = CARBURANT_STATIONS.find(s => s.key === 'coudray');
+  assert.ok(relais, 'le relais du Coudray a disparu de la liste');
+  assert.strictEqual(pickStationRecord(LOTS['45160'], leclerc).id, '45160005');
+  assert.strictEqual(pickStationRecord(LOTS['45160'], relais).id,  '45160006');
+  // ⛔ Et surtout : pas le même enregistrement pour les deux.
+  assert.notStrictEqual(
+    pickStationRecord(LOTS['45160'], leclerc).id,
+    pickStationRecord(LOTS['45160'], relais).id
+  );
 });
 
 test('une station qui déclare un id se reconnaît à son id', () => {
@@ -58,17 +79,9 @@ test('id absent du lot : AUCUNE station, jamais un repli', () => {
 
 test('deux de NOS stations sur un même code postal : pas de repli', () => {
   // Le seul cas où le repli est refusé — sinon on afficherait les prix de
-  // l'une sous le nom de l'autre. (Aucun code postal n'est dans ce cas
-  // aujourd'hui : on le simule.)
-  const jumelles = [{ key: 'a', cp: '45160' }, { key: 'b', cp: '45160' }];
-  const avant = CARBURANT_STATIONS.slice();
-  CARBURANT_STATIONS.push(...jumelles);
-  try {
-    assert.strictEqual(pickStationRecord([OLIVET_A, OLIVET_B], jumelles[0]), null);
-  } finally {
-    CARBURANT_STATIONS.length = 0;
-    CARBURANT_STATIONS.push(...avant);
-  }
+  // l'une sous le nom de l'autre. Le 45160 EST dans ce cas : une station qui y
+  // oublierait son `id` ne doit rien afficher, pas hériter du premier venu.
+  assert.strictEqual(pickStationRecord(LOTS['45160'], { key: 'sans-id', cp: '45160' }), null);
 });
 
 test('code postal à une seule de nos stations : le repli désigne le premier', () => {
