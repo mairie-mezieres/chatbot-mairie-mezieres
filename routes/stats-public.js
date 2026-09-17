@@ -12,7 +12,7 @@ const { adminAuth } = require("../lib/middleware");
 const { logAudit } = require("../lib/logger");
 const {
   shouldTrackService, shouldTrackDeviceBreakdown,
-  pctTrend, sanitizeDeviceInfo, bumpDeviceBreakdown
+  pctTrend, sanitizeDeviceInfo, bumpDeviceBreakdown, isSyntheticTraffic
 } = require("../lib/stats");
 const { nbUniques, MAX_DEVICES } = require("../lib/stats-store");
 
@@ -21,6 +21,14 @@ router.post("/stats/track", async (req, res) => {
   let { service, device } = req.body || {};
   if (!service) return res.status(400).json({ error: "service requis" });
   service = String(service).substring(0, 60);
+
+  // ⛔ La CI n'est pas un habitant. Six specs Playwright ont appelé cette route
+  // pour de vrai du 31 août au 17 septembre 2026, avec un `deviceId` neuf à
+  // chaque test : jusqu'à ~550 « visiteurs uniques » dans une journée. On
+  // répond 200 — un test n'a pas à rougir pour ça, et un 4xx ferait
+  // diagnostiquer une panne là où il n'y en a pas — mais on n'écrit RIEN.
+  // Voir `isSyntheticTraffic` (lib/stats.js) et ADR-0048 côté app.
+  if (isSyntheticTraffic(req)) return res.json({ ok: true, ignored: "synthetic" });
 
   const settings = await readAdminSettings();
   const trackService = shouldTrackService(service, settings);
