@@ -378,6 +378,7 @@ depuis l'admin pour récupérer les autres.
 | Symptôme | Piste |
 |---|---|
 | « Seules les N premières photos ont été ajoutées » | Plafond de 6 par actualité. |
+| Post Facebook publié **sans aucune photo** alors que le récapitulatif annonçait « avec N photos » | Corrigé le 27/09/2026. Le `POST /feed` final partait en **JSON** avec des clés `attached_media[0]` : Graph API ignore ce nom inconnu **sans erreur** et publie le texte seul. Il part désormais en **formulaire** (`buildMultiPhotoFeedBody`, `lib/actu.js`), verrouillé par `test/actu-facebook-multiphoto.test.js`. Les posts concernés ne se réparent pas : les supprimer sur Facebook puis « Republier » depuis l'admin. |
 | Un post Facebook à 6 photos n'en donne qu'une (ou aucune) dans l'app | 🪲 Logs : comparer `📰 … (N image(s) annoncée(s))` et `💾 … (N photo(s))`. Un `Récupération des images Facebook impossible` pointe un `PAGE_ACCESS_TOKEN` à régénérer. |
 | Une photo manque dans l'app mais est sur Facebook | Regarder 🪲 Logs : l'envoi Cloudinary de cette image a pu échouer. L'actu est alors refusée en bloc (rollback) — si elle existe, c'est qu'elles sont toutes passées. |
 | Publication **programmée** refusée avec une erreur sans texte clair | Corrigé en v4.109 : la route n'était pas en « corps large » et répondait 413 dès 256 Ko de photo. |
