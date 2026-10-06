@@ -131,7 +131,8 @@ Architecture à connaître avant toute modification des notifications :
   **recensement citoyen**, **PACS**, **arrivée dans la commune (nouvel habitant, changement
   d'adresse, compteurs eau/énergie, inscription scolaire)**, clôtures/abris/piscine,
   déchets, santé, OPAH, SPANC, **bruits de voisinage (horaires de bricolage et de
-  jardinage)**, **LAEP (Lieu d'Accueil Enfants-Parents)**…
+  jardinage)**, **LAEP (Lieu d'Accueil Enfants-Parents)**, **randonnées** (renvoi vers la
+  carte interactive — aucun nom de circuit ni chiffre recopié, `test/randonnees.test.js`)…
 - ⚠️ **Le joker `.` ne suffit pas comme séparateur.** `normalizeQuestion` remplace toute
   ponctuation par une **espace** : « carte d'identité » devient `carte d identite`, soit
   **trois** caractères entre les deux mots. Un motif écrit `carte.identit` ne matche donc
