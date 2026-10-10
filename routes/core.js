@@ -11,7 +11,7 @@ router.get("/", (req, res) => {
   // Réponse instantanée sans Redis - health check Render
   res.json({
     status:  "MAT est en ligne 🌲",
-    version: "6.5 — Mistral principal + Claude secours + MEL améliorée",
+    version: "6.5 — Mistral seul + MEL améliorée",
     uptime:  Math.floor(process.uptime()) + "s",
     routes: [
       "/webhook","/mel","/signal","/signalements","/actus","/push/subscribe",
@@ -29,7 +29,7 @@ router.get("/status", async (req, res) => {
 
   res.json({
     status:  "MAT est en ligne 🌲",
-    version: "6.5 — Mistral principal + Claude secours + MEL améliorée",
+    version: "6.5 — Mistral seul + MEL améliorée",
     abonnes: subs.length,
     actus: news.length,
     idees: ideas.length,
