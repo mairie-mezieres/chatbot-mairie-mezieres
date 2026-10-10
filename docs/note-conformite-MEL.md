@@ -18,7 +18,10 @@ n'instruit aucun dossier.
 
 **Architecture technique :** application web (PWA) appelant un serveur (Node.js,
 hébergé chez Render). Le serveur relaie les questions à un **modèle d'IA tiers**
-(Mistral AI, modèle *mistral-small*, hébergé en France/UE), avec repli Anthropic.
+(Mistral AI, modèle *mistral-small*, hébergé en France/UE), **sans repli sur un
+autre fournisseur** : en cas d'indisponibilité, MEL renvoie vers la mairie.
+Anthropic n'est sollicité que pour extraire les horaires d'un PDF public (bus
+Rémi), sans aucune question d'habitant.
 Aucun modèle n'est entraîné ni affiné par la commune.
 
 ---
@@ -62,7 +65,7 @@ toute décision. Il n'est donc **pas** un système à haut risque.
 | Élément | Situation |
 |---|---|
 | **Responsable de traitement** | Commune de Mézières-lez-Cléry |
-| **Sous-traitants** | Mistral AI, Anthropic (modèle), Render (hébergement), Upstash (stockage) |
+| **Sous-traitants** | Mistral AI (modèle), Render (hébergement), Upstash (stockage) |
 | **Données traitées** | Contenu des questions ; identifiant technique d'appareil ; adresse IP (sécurité/quota) |
 | **Finalité** | Renseigner les habitants ; prévenir l'abus du service |
 | **Base légale** | Mission d'intérêt public (art. 6.1.e RGPD) |

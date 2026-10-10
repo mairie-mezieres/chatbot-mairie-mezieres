@@ -12,8 +12,8 @@ météo, signalements citoyens, agenda, publications Facebook et interface d'adm
 | Composant | Rôle |
 |-----------|------|
 | **Node.js 22 / Express** | Serveur HTTP, routing, middleware |
-| **Anthropic Claude** | LLM principal du chatbot (avec prompt caching) |
-| **Mistral AI** | LLM alternatif / fallback |
+| **Anthropic Claude** | Extraction des horaires du bus Rémi (PDF public) — aucune réponse de MEL, aucun repli |
+| **Mistral AI** | Seul LLM du chatbot MEL (hébergé UE) — pas de repli |
 | **Upstash Redis** | Cache en mémoire, souscriptions push web, rate-limiting |
 | **Web Push (VAPID)** | Notifications push vers les navigateurs abonnés |
 | **Cloudinary** | Hébergement des photos des signalements citoyens |
