@@ -15,6 +15,7 @@ const {
 const { calcIaCost, splitDayStats } = require("../lib/stats");
 const { nbUniques } = require("../lib/stats-store");
 const { filterRealProfils } = require("../lib/partager");
+const { lireEnAttente: lireVeillePresse, marquerEnvoyes: marquerVeillePresseEnvoyee } = require("../lib/veille-presse");
 const {
   fetchMeteoFranceVigilanceRaw, extractDepartmentVigilance,
   sendWeatherPush, weatherAlertSignature, claimWeatherPush, releaseWeatherPushClaim
@@ -122,6 +123,14 @@ async function sendDailyStatsEmail() {
     await redisLRange('mat:partager:profils', 0, 499).catch(() => [])
   );
   const partagerProfilsToday = partagerProfils.filter(p => String(p.date || '').startsWith(today));
+
+  // Veille presse « Ils parlent de MAT » : file remplie par le workflow
+  // app-mezieres/.github/workflows/veille-presse.yml, qui n'y pousse QUE des
+  // nouveautés (sa mémoire versionnée filtre déjà). Vidée après un envoi réussi.
+  // Redis injoignable → section absente ce soir, items gardés pour demain.
+  const veillePresse = (await lireVeillePresse().catch(() => ({ items: [] }))).items;
+  const PRESSE_TYPES = { presse:'📰 Presse', site:'🌐 Site', reseau:'💬 Réseau social', institution:'🏛️ Institution', autre:'🔗 Autre' };
+  const datePresse = (d) => d ? new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { day:'numeric', month:'short', year:'numeric' }) : '';
 
   // Services actifs aujourd'hui (hors mel, installation, app_open traités séparément)
   const SVC_LABELS = {
@@ -275,6 +284,17 @@ ${partagerVisitesTotal > 0 || partagerPromptsTotal > 0 || partagerProfils.length
       </tbody>
     </table></div>` : `<p style="${FONT};color:#6b7280;font-style:italic;font-size:13px;margin:10px 0 0">Aucun nouveau profil de commune aujourd'hui${partagerProfils.length > 0 ? ` (${partagerProfils.length} collecté${partagerProfils.length > 1 ? 's' : ''} au total)` : ''}.</p>`}`) : ''}
 
+${veillePresse.length > 0 ? card(`🗞️ Ils parlent de MAT (${veillePresse.length} nouveau${veillePresse.length > 1 ? 'x' : ''})`,
+  veillePresse.map((it, i) => `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:${i % 2 ? '#f4f0ea' : '#ffffff'};border-radius:6px">
+    <tr><td style="${FONT};font-size:13px;padding:8px 10px;line-height:1.5">
+      <a href="${esc(it.url)}" style="${FONT};color:#1a3d2b;font-weight:700;text-decoration:underline">${esc(it.titre)}</a><br>
+      <span style="${FONT};font-size:11px;color:#5a7065">${esc(PRESSE_TYPES[it.type] || PRESSE_TYPES.autre)}${it.source ? ' · ' + esc(it.source) : ''}${it.date ? ' · ' + esc(datePresse(it.date)) : ' · date non indiquée'}</span>
+      ${it.resume ? `<div style="${FONT};font-size:12px;color:#374151;padding-top:4px">${esc(it.resume)}</div>` : ''}
+    </td></tr>
+  </table>`).join('')
+  + `<div style="${FONT};font-size:11px;color:#5a7065;line-height:1.6;padding-top:10px">Trouvé par la veille automatique quotidienne. Un lien déjà envoyé ne revient jamais (mémoire : veille/presse-vues.json, dépôt de l'app).</div>`) : ''}
+
 ${card('⚡ Redis Upstash', statGrid([
   [redisCmdDay !== null ? redisCmdDay : '—',
    `Commandes aujourd'hui${redisPctDay !== null ? ' (' + redisPctDay + '% du quota)' : ''}`, redisBg],
@@ -340,6 +360,8 @@ ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? card('📋 En attente d
     `- Abonnés notifications : ${subs.length}`,
     ...(decSubs.length > 0 ? [`- Abonnés rappels déchets : ${decSubs.length}`] : []),
     `- Installations PWA : ${installToday > 0 ? `${installToday} aujourd'hui / ${installTotal} au total` : installTotal}`,
+    ...(veillePresse.length > 0 ? ['', `ILS PARLENT DE MAT (${veillePresse.length})`,
+      ...veillePresse.map(it => `- ${it.titre} — ${it.url}${it.source ? ` (${it.source}${it.date ? ', ' + datePresse(it.date) : ''})` : (it.date ? ` (${datePresse(it.date)})` : '')}`)] : []),
     '',
     'REDIS UPSTASH',
     `- Commandes aujourd'hui : ${redisCmdDay !== null ? redisCmdDay + pct : '—'}`,
@@ -374,6 +396,8 @@ ${pendingSignals.length > 0 || pendingIdeas.length > 0 ? card('📋 En attente d
   }
 
   console.log(`📧 Email stats quotidien envoyé à ${DAILY_STATS_EMAIL}`);
+  // APRÈS l'envoi seulement : un mail raté garde ses items pour le suivant.
+  await marquerVeillePresseEnvoyee(veillePresse).catch(e => console.warn('[veille-presse] vidage:', e.message));
 }
 
 // Envoi quotidien à partir de 22h heure de Paris (vérification toutes les 5 min)
