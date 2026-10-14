@@ -579,6 +579,23 @@ visiteurs uniques continuent d'être comptés, mais `parJour[jour].app_open` res
 La décomposition est faite par `splitDayStats` (`lib/stats.js`), verrouillée par
 `test/stats-frequentation.test.js` — qui rejoue la journée réelle du 6 septembre.
 
+### Section « 🗞️ Ils parlent de MAT » (veille presse)
+
+Presse, sites et publications publiques qui parlent de MAT. La recherche **n'a pas
+lieu ici** : le workflow quotidien `app-mezieres/.github/workflows/veille-presse.yml`
+(18h40 UTC) la confie à un agent, filtre le résultat contre sa mémoire versionnée
+(`app-mezieres/veille/presse-vues.json` — **un lien envoyé ne revient jamais**) et
+POSTe les seules nouveautés à `POST /cron/veille-presse` (en-tête `X-Cron-Key` =
+`CRON_SECRET` ; le paramètre `?key=` est refusé).
+
+- File d'attente Redis `mat:veille:presse` (`lib/veille-presse.js`), plafonnée à 30
+  items, **vidée après un envoi réussi** du mail — un mail raté garde ses items.
+- Section absente quand la file est vide ou Redis injoignable.
+- Route en `503` si la file n'a pas pu être écrite : le workflow ne committe alors pas
+  sa mémoire, les items repartent le lendemain.
+- Laisser revenir un lien : retirer son entrée de `veille/presse-vues.json` (dépôt app).
+- Tests : `test/veille-presse.test.js`. Voir `app-mezieres/docs/adr/0054-…`.
+
 ---
 
 ## 6ter. Le compteur d'installations (badge de l'app)

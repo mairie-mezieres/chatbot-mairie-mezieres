@@ -186,6 +186,9 @@ app.use(require("./routes/entreprises"));
 // ── Email stats + cron — voir routes/admin-email.js ────────
 app.use(require("./routes/admin-email"));
 
+// ── Veille presse « Ils parlent de MAT » (reçue du workflow app-mezieres) — voir routes/veille-presse.js ──
+app.use(require("./routes/veille-presse"));
+
 // ── Sauvegarde Upstash → base cible — voir routes/cron-backup.js ────────
 app.use(require("./routes/cron-backup"));
 
