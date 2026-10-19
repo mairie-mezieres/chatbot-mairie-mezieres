@@ -10,6 +10,7 @@ const { TRELLO_KEY, TRELLO_TOKEN, TRELLO_LIST_ID_SIG, TRELLO_LIST_ID_BUG, TRELLO
 const { registerNotifyToken, sendSignalStatusPush, sendDemandeStatusPush } = require("../lib/push-notify");
 const { trelloStatusFromListName } = require("../lib/trello-status");
 const { capStr, geoPointNear, inEnum } = require("../lib/validate");
+const { envoyerMailDemande } = require("../lib/demande-reponse");
 
 const signalLimiter = rateLimit({
   windowMs: 60 * 1000, max: 10,
@@ -289,17 +290,19 @@ router.post("/signal", signalLimiter, async (req, res) => {
       cardName = `[Signalement] ${cat || "Non précisé"}`;
     }
 
-    const mapsLine = mapsLink ? `\
-\
-📍 Voir sur la carte : ${mapsLink}` : "";
-    const dateLine = `\
-\
-📅 ${new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" })}`;
-    const typeLine = `\
-🏷️ Type : ${signalType}`;
+    const mapsLine = mapsLink ? `\n\n📍 Voir sur la carte : ${mapsLink}` : "";
+    const dateLine = `\n\n📅 ${new Date().toLocaleString("fr-FR", { timeZone: "Europe/Paris" })}`;
+    const typeLine = `\n🏷️ Type : ${signalType}`;
     const cardDesc = `${desc || "Aucune description."}${typeLine}${mapsLine}${dateLine}`;
 
-    await createTrelloCard(signalType, cardName, cardDesc, photoB64 || null, notifyToken || null);
+    const card = await createTrelloCard(signalType, cardName, cardDesc, photoB64 || null, notifyToken || null);
+    // Le secrétariat n'a pas de compte Trello : la demande lui part par mail,
+    // avec un lien signé pour répondre dans la carte (lib/demande-reponse.js).
+    if (signalType === "demande" && card && card.id) {
+      envoyerMailDemande({ cardId: card.id, desc: cardDesc })
+        .then(r => { if (!r.sent) console.warn("📩 Mail demande non envoyé:", r.reason); })
+        .catch(e => console.warn("📩 Mail demande échec:", (e.response && JSON.stringify(e.response.data)) || e.message));
+    }
     _invalidateSigCache(); // la nouvelle carte doit apparaître sans attendre le TTL
   } catch (trelloErr) {
     console.warn("⚠️ Trello échec (signal journalisé Redis quand même):", trelloErr.message);

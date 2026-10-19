@@ -186,6 +186,9 @@ app.use(require("./routes/entreprises"));
 // ── Email stats + cron — voir routes/admin-email.js ────────
 app.use(require("./routes/admin-email"));
 
+// ── Réponse du secrétariat à une demande, par lien signé envoyé par mail — voir routes/demande-reponse.js ──
+app.use(require("./routes/demande-reponse"));
+
 // ── Veille presse « Ils parlent de MAT » (reçue du workflow app-mezieres) — voir routes/veille-presse.js ──
 app.use(require("./routes/veille-presse"));
 
