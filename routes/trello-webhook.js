@@ -85,6 +85,9 @@ async function handleTrelloComment(action) {
   if (!isDemandeCard && !isSignalCard) return;
 
   const commentText = data.text || "";
+  // 🔒 en tête = note interne (ex. clôture depuis le lien du mail de demande,
+  // routes/demande-reponse.js) : jamais envoyée à l'habitant.
+  if (commentText.trimStart().startsWith("🔒")) return;
   const desc = await fetchCardDesc(cardId);
   const m = (desc || "").match(/MAT-REF:\s*([a-f0-9-]{36})/i);
   if (!m) return;

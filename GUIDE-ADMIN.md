@@ -172,6 +172,9 @@ Le fichier [`.env.example`](.env.example) liste tout en détail. Les **essentiel
 | `GOOGLE_CALENDAR_*` | Agenda public (lecture) et écriture |
 | `METEOFRANCE_VIGILANCE_URL` | Vigilance météo |
 | `RESEND_*` / `DAILY_STATS_EMAIL` | Rapport de stats quotidien par email. `RESEND_FROM` = `MAT Stats <numerique@mezieres-lez-clery.fr>` — le domaine est vérifié chez Resend depuis le 25/08/2026 ; sans cette variable l'expéditeur retombe sur `onboarding@resend.dev`. `DAILY_STATS_EMAIL` a pour repli l'adresse de la commune, jamais une adresse personnelle |
+| `DEMANDE_EMAIL` | Adresse(s) du secrétariat (séparées par des virgules) qui reçoivent chaque **demande « Contacter la mairie »** par mail — voir §5bis. Vide = aucun mail |
+| `DEMANDE_REPLY_SECRET` | Clé de signature des liens « Répondre ou clôturer » de ces mails (chaîne aléatoire longue, ex. `openssl rand -hex 32`). Absente = mail envoyé **sans** lien. La changer invalide tous les liens déjà envoyés |
+| `BACKEND_PUBLIC_URL` | URL publique du backend utilisée dans ces liens (défaut `https://chatbot-mairie-mezieres.onrender.com`) |
 | `CRON_SECRET` | Protection des routes cron internes |
 | `PARTAGER_IGNORE_COMMUNES` | Noms de communes à **ne pas enregistrer** dans les profils du kit « Partager » (séparés par des virgules), en plus des essais déjà écartés par défaut — voir §6bis |
 
@@ -407,6 +410,23 @@ Quand un citoyen soumet un signalement, une demande ou un bug depuis l'app :
 | `[Demande]` | ✅ push | ✅ push | Onglet Contact |
 
 > ⚠️ Le push ne fonctionne que si la carte contient `MAT-REF: {uuid}` dans sa description. Les cartes créées **manuellement** dans Trello (sans passer par l'app) ne notifient personne.
+
+### Le secrétariat répond sans compte Trello (demandes)
+
+Chaque **demande** (formulaire « Contacter la mairie ») part aussi par mail à `DEMANDE_EMAIL`, expéditeur `MAT — Demandes`. Le mail contient le nom, l'e-mail, le téléphone, le message et un bouton **« Répondre ou clôturer la demande »** :
+
+| Sur la page du lien | Dans Trello | Côté habitant |
+|---|---|---|
+| **Envoyer la réponse** (case « clôturer » cochée par défaut) | Commentaire = la réponse, carte → liste « Résolu » | Push « 💬 Nouveau message de la mairie » avec le texte (600 car. max — l'app n'affiche pas les réponses aux demandes, la notification est le seul endroit où il la lit) |
+| **J'ai répondu autrement — clôturer** (téléphone, e-mail, guichet) | Note interne `🔒 …` + carte → « Résolu » | Push « ✅ Votre demande a été traitée » |
+| **Marquer « en cours »** | Carte → « En cours » | Push « 🔵 … en cours de traitement » |
+
+- **Répondre** dans la messagerie écrit directement à l'habitant (`Reply-To` = son e-mail, s'il en a laissé un) — il faut ensuite clôturer avec le bouton.
+- Le lien vaut **pour cette seule carte** et **60 jours** (jeton HMAC, aucun état serveur). Ne pas le transférer : il suffit pour répondre au nom de la mairie.
+- La page dit au secrétariat si l'habitant a **effectivement** été notifié ; sinon, elle invite à l'appeler ou à lui écrire.
+- ⚠️ Un commentaire Trello qui **commence par 🔒** n'est **jamais** envoyé à l'habitant (note interne) — utilisable aussi depuis Trello.
+- Le push part de la page **et** du webhook Trello, avec le même `tag` : le téléphone remplace la notification sans sonner deux fois (même schéma que `PATCH /admin/signals/:id`).
+- Code : `lib/demande-reponse.js`, `routes/demande-reponse.js` ; tests : `test/demande-reponse.test.js`.
 
 ### Prérequis
 
