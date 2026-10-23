@@ -346,6 +346,11 @@ Architecture à connaître avant toute modification des notifications :
   `numerique` de `lib/mel.js`, les trois entrées `numerique` de l'arbre de décision
   (`app-mezieres/js/mat-mel.js` **et** `app-mezieres/data/mel-tree.json`), et la fiche fibre
   de `app-mezieres/js/mat-guide-arrivee.js`.
+- ⚠️ **Aide de l'État au raccordement fibre** (ASP, travaux en domaine privé après une
+  « attestation d'échec de raccordement » de l'opérateur) : règle `fibre_aide_raccordement`,
+  placée **avant** `fibre`. C'est **l'habitant** qui dépose la demande, pas la mairie.
+  ⛔ Ni montant, ni plafond de ressources, ni date limite (dispositif temporaire, déjà
+  modifié une fois) — `test/fibre-aide.test.js` le refuse.
 - ⚠️ **`SOURCES` ne contient plus que des pages CCTVL.** Le domaine
   `mezieres-lez-clery.fr` sert désormais l'application : l'ancien site WordPress
   n'existe plus, et ses 20 pages référencées ici renvoyaient toutes 404. `buildContext`
