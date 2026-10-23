@@ -44,6 +44,10 @@ test("l'habitant dépose, la mairie non", () => {
   assert.match(rule.answer, /attestation d'échec de raccordement/);
   assert.match(rule.answer, /La mairie n'instruit pas ce dossier et ne le dépose pas/);
   assert.match(rule.answer, /https:\/\/www\.asp\.gouv\.fr\//);
+  assert.match(rule.answer, /https:\/\/puma\.asp-public\.fr\/puma\/aide\/rcf-dpc/);
+  // La page ASP ouvre l'aide aux locataires et ne la restreint pas aux maisons.
+  assert.match(rule.answer, /propriétaire ou locataire/);
+  assert.doesNotMatch(rule.answer, /maison individuelle/);
 });
 
 test("aucun montant, aucune année, aucune date recopiés", () => {
