@@ -25,6 +25,12 @@
         seulement à partir de la 1.0.0. ⛔ **Jamais une majeure**, et **jamais une
         mineure en 0.x** : en pré-1.0, c'est la mineure qui porte les ruptures
         (semver §4) — `0.124 → 0.125` peut casser autant qu'un 1 → 2.
+        **Groupe** (« bump the X group … with N updates ») : chaque paquet est
+        lu sur une ligne « Updates `pkg` from A to B » du corps, et la règle
+        s'applique à **chacun** — un seul refusé, et le groupe entier attend.
+        ⛔ Il faut en lire exactement N : un corps tronqué (Dependabot coupe les
+        très longs) ne doit pas faire passer un groupe dont on n'a vu qu'une
+        partie.
      4. **CI** : verte, sur les deux sources (check runs ET commit statuses).
         ⛔ « aucune » n'est pas « verte » : l'absence de preuve ne vaut pas preuve.
      5. **Fusionnable** : `mergeable_state === 'clean'`.
@@ -86,6 +92,42 @@ function versionsDuTitre(titre) {
 }
 
 /**
+ * Versions d'une PR : `{ liste: [{ paquet, de, vers }] }` ou `{ motif }`.
+ *
+ * Une PR simple porte ses versions dans le titre. Un groupe ne les porte que
+ * dans le corps, une ligne « Updates `pkg` from A to B » par paquet, et annonce
+ * leur nombre dans le titre (« with 3 updates ») : on exige d'en lire autant.
+ */
+function versionsDeLaPR(pr) {
+  const simple = versionsDuTitre(pr.title);
+  if (simple) return { liste: [{ paquet: null, ...simple }] };
+
+  const annonce = /\bwith\s+(\d+)\s+updates?\b/i.exec(String(pr.title || ''));
+  if (!annonce) return { motif: 'versions illisibles' };
+  const vus = new Map();
+  const re = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+?)\.?\s*$/gim;
+  let m;
+  while ((m = re.exec(String(pr.body || '')))) vus.set(m[1], { paquet: m[1], de: m[2], vers: m[3] });
+  const attendu = Number(annonce[1]);
+  if (vus.size !== attendu) return { motif: `groupe : ${vus.size} paquet(s) lu(s) sur ${attendu} annoncé(s)` };
+  return { liste: [...vus.values()] };
+}
+
+/** Règle de portée pour UN paquet : `{ ok, motif }`. */
+function porteeAdmise({ paquet, de, vers }) {
+  const nom = paquet ? `${paquet} ` : '';
+  const saut = sautSemver(de, vers);
+  if (!saut) return { ok: false, motif: `${nom}versions non comparables (${de} → ${vers})` };
+  if (saut === 'majeure') return { ok: false, motif: `${nom}majeure ${de} → ${vers}` };
+  if (saut === 'mineure') {
+    if (!MINEURES_OK) return { ok: false, motif: `${nom}mineure ${de} → ${vers} (mineures désactivées)` };
+    // ⛔ En 0.x, c'est la mineure qui porte les ruptures (semver §4).
+    if (/^0\./.test(de)) return { ok: false, motif: `${nom}mineure en 0.x (${de} → ${vers})` };
+  }
+  return { ok: true, motif: `${nom}${saut} ${de} → ${vers}` };
+}
+
+/**
  * La PR est-elle éligible ? Renvoie `{ ok, motif }` — `motif` sert au résumé,
  * et il est écrit pour être lu par un humain qui se demande « pourquoi pas ? ».
  */
@@ -97,21 +139,15 @@ function eligibilite(pr, fichiers) {
   const horsPerimetre = fichiers.filter((f) => !FICHIERS_AUTORISES.test(f));
   if (horsPerimetre.length > 0) return { ok: false, motif: `touche ${horsPerimetre[0]}` };
 
-  const v = versionsDuTitre(pr.title);
-  if (!v) return { ok: false, motif: 'versions illisibles (groupe multiple ?)' };
-
-  const saut = sautSemver(v.de, v.vers);
-  if (!saut) return { ok: false, motif: `versions non comparables (${v.de} → ${v.vers})` };
-  if (saut === 'majeure') return { ok: false, motif: `majeure ${v.de} → ${v.vers}` };
-  if (saut === 'mineure') {
-    if (!MINEURES_OK) return { ok: false, motif: `mineure ${v.de} → ${v.vers} (mineures désactivées)` };
-    // ⛔ En 0.x, c'est la mineure qui porte les ruptures (semver §4).
-    if (/^0\./.test(v.de)) return { ok: false, motif: `mineure en 0.x (${v.de} → ${v.vers})` };
-  }
-  return { ok: true, motif: `${saut} ${v.de} → ${v.vers}` };
+  const v = versionsDeLaPR(pr);
+  if (!v.liste) return { ok: false, motif: v.motif };
+  const verdicts = v.liste.map(porteeAdmise);
+  const refus = verdicts.find((x) => !x.ok);
+  if (refus) return refus;
+  return { ok: true, motif: verdicts.map((x) => x.motif).join(', ') };
 }
 
-(async () => {
+async function principal() {
   if (!TOKEN || !REPO.includes('/')) {
     console.log('GITHUB_TOKEN ou GITHUB_REPOSITORY manquant — fusion automatique abandonnée.');
     process.exit(0);
@@ -175,11 +211,18 @@ function eligibilite(pr, fichiers) {
     ...corps,
     '',
     '> Règle : correctif toujours, mineure à partir de la 1.0.0, **jamais** une majeure',
-    '> ni une mineure en 0.x — et seulement CI verte, `mergeable_state: clean`, et PR ne',
+    '> ni une mineure en 0.x (pour un groupe : pour chacun de ses paquets) — et seulement CI verte, `mergeable_state: clean`, et PR ne',
     '> touchant que `package.json` / `package-lock.json`. Le reste attend un humain.',
     DRY_RUN ? '\n_(dry-run : aucune fusion)_' : '',
   ].join('\n'));
-})().catch((error) => {
-  console.log(`::warning title=Auto-merge::Erreur inattendue : ${error.message}`);
-  process.exit(0);
-});
+}
+
+module.exports = { sautSemver, versionsDeLaPR, eligibilite };
+
+// Exécuté seulement en ligne de commande : le test l'importe sans rien appeler.
+if (require.main === module) {
+  principal().catch((error) => {
+    console.log(`::warning title=Auto-merge::Erreur inattendue : ${error.message}`);
+    process.exit(0);
+  });
+}
