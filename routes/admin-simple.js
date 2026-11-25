@@ -5,8 +5,9 @@ const router = require("express").Router();
 const { adminAuth } = require("../lib/middleware");
 const { readAdminSettings, writeAdminSettings, readMelTreeConfig, writeMelTreeConfig, readIdeas, writeIdeas, readNews, writeNews } = require("../lib/store");
 const { redisLRange } = require("../lib/redis");
-const { deleteActuImageFromCloudinary } = require("../lib/cloudinary");
+const { deleteActuImageFromCloudinary, deleteActuMediaFromCloudinary } = require("../lib/cloudinary");
 const { actuPhotoList } = require("../lib/actu");
+const { actuMediaPublicIds } = require("../lib/actu-media");
 const { sendPushToToken } = require("../lib/push-notify");
 const { logAudit } = require("../lib/logger");
 
@@ -230,6 +231,14 @@ router.delete("/admin/actus/:id", adminAuth, async (req, res) => {
       cloudinaryResults.push(await deleteActuImageFromCloudinary(p.publicId));
     } catch (e) {
       return res.status(502).json({ error: "Suppression Cloudinary impossible : " + e.message });
+    }
+  }
+  // Vidéo ou son (v4.130) : jusqu'à 100 Mo, à libérer comme les photos.
+  for (const pid of actuMediaPublicIds(actu)) {
+    try {
+      cloudinaryResults.push(await deleteActuMediaFromCloudinary(pid));
+    } catch (e) {
+      return res.status(502).json({ error: "Suppression du média Cloudinary impossible : " + e.message });
     }
   }
   const cloudinaryResult = cloudinaryResults.length === 1 ? cloudinaryResults[0] : (cloudinaryResults.length ? cloudinaryResults : null);

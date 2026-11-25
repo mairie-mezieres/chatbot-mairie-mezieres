@@ -5,7 +5,8 @@ const router = require("express").Router();
 const { adminAuth } = require("../lib/middleware");
 const { readNews, writeNews, readSubs, memGet, memSet } = require("../lib/store");
 const { redisGet, redisSet } = require("../lib/redis");
-const { uploadActuImageToCloudinary, deleteActuImageFromCloudinary } = require("../lib/cloudinary");
+const { uploadActuImageToCloudinary, deleteActuImageFromCloudinary, signActuMediaUpload, getActuMediaResource, actuMediaPosterUrl, deleteActuMediaFromCloudinary } = require("../lib/cloudinary");
+const { resolveActuMedia, actuMediaPublicIds, MAX_ACTU_MEDIA_BYTES } = require("../lib/actu-media");
 const { publishActuToFacebook, sendActuPush, normalizePhotoInputs, actuPhotoList, MAX_ACTU_PHOTOS } = require("../lib/actu");
 const { getGoogleCalendarClient, upsertGoogleCalendarEvent } = require("../lib/calendar");
 
@@ -33,6 +34,31 @@ async function writeScheduled(key, d) {
   await redisSet(key, d);
 }
 
+// ── Vidéo / son : relecture chez Cloudinary + nettoyage ─────
+// Le fichier a été envoyé par l'admin AVANT cette requête (envoi direct, voir
+// lib/cloudinary.js). Un refus doit donc le supprimer, sans quoi chaque essai
+// raté laisserait jusqu'à 100 Mo orphelins sur Cloudinary.
+async function _dropMedia(publicId) {
+  if (!publicId) return;
+  try { await deleteActuMediaFromCloudinary(publicId); } catch (_) {}
+}
+async function _resolveMediaOrReply(req, res) {
+  const { media, description } = req.body || {};
+  try {
+    return { ok: true, media: await resolveActuMedia(media, description, { fetchResource: getActuMediaResource, posterUrl: actuMediaPosterUrl }) };
+  } catch (e) {
+    if (e.discard && media && typeof media.publicId === "string") await _dropMedia(media.publicId);
+    res.status(e.status || 400).json({ ok: false, error: e.message });
+    return { ok: false };
+  }
+}
+
+// Signature d'un envoi direct navigateur → Cloudinary (dossier imposé).
+router.post("/admin/actus/media/signature", adminAuth, (req, res) => {
+  try { res.json({ ok: true, maxBytes: MAX_ACTU_MEDIA_BYTES, ...signActuMediaUpload() }); }
+  catch (e) { res.status(503).json({ ok: false, error: e.message }); }
+});
+
 // ── Cœur de publication multi-canal (réutilisé : immédiat + programmé) ──
 // Publie une actu sur les canaux choisis. Lève une erreur taguée (er.cloudFail /
 // er.fbFail) en cas d'échec atomique, avec rollback des images Cloudinary qui
@@ -47,6 +73,7 @@ async function publishActu(opts) {
     imageBase64 = null, imageUrl = null, photoPublicId = null,
     imagesBase64 = null, imageUrls = null, photoPublicIds = null,
     eventDate = null, eventLocation = null,
+    media = null,
     publishFacebook = true, sendPush = true, createCalendar = true
   } = opts || {};
 
@@ -111,6 +138,9 @@ async function publishActu(opts) {
     photo: finalPhotoUrl,
     photoPublicId: finalPhotoPublicId,
     photos: photos.length ? photos : undefined,
+    // Vidéo ou son (v4.130) — affiché par l'app seulement : Facebook ne le
+    // reçoit pas (voir l'avertissement plus bas).
+    media: media || undefined,
     eventDate: eventDate || null,
     eventLocation: eventLocation || null,
     source: "admin",
@@ -124,6 +154,10 @@ async function publishActu(opts) {
   if (actus.length > 30) actus.splice(30);
   await writeNews(actus);
   result.actu = actu;
+
+  if (media && publishFacebook) {
+    result.warnings.push((media.kind === "audio" ? "Le son" : "La vidéo") + " n'est visible que dans l'application : Facebook a reçu le texte et les photos seulement.");
+  }
 
   // 4. Push.
   if (sendPush) {
@@ -154,10 +188,15 @@ router.post("/admin/actus/add", adminAuth, async (req, res) => {
   // (Règle historique « photo obligatoire pour Facebook » supprimée : le post
   // texte seul existe — postTextOnly — et la publication programmée l'utilise déjà.)
 
+  const m = await _resolveMediaOrReply(req, res);
+  if (!m.ok) return;
+
   try {
-    const result = await publishActu({ title, description, imageBase64, imageUrl, imagesBase64, imageUrls, eventDate, eventLocation, publishFacebook, sendPush, createCalendar });
+    const result = await publishActu({ title, description, imageBase64, imageUrl, imagesBase64, imageUrls, eventDate, eventLocation, media: m.media, publishFacebook, sendPush, createCalendar });
     res.json(result);
   } catch (e) {
+    // Même rollback que les photos : l'actu n'existe pas, le fichier non plus.
+    if (m.media) await _dropMedia(m.media.publicId);
     if (e.cloudFail) return res.status(500).json({ ok: false, error: e.message });
     if (e.fbFail) return res.status(502).json({ ok: false, error: e.message });
     return res.status(500).json({ ok: false, error: e.message });
@@ -333,6 +372,9 @@ router.post("/admin/actus/schedule", adminAuth, async (req, res) => {
   if (isNaN(when.getTime())) return res.status(400).json({ error: "scheduledAt invalide" });
   if (when.getTime() <= Date.now()) return res.status(400).json({ error: "La date de programmation doit être dans le futur" });
 
+  const m = await _resolveMediaOrReply(req, res);
+  if (!m.ok) return;
+
   // Héberger les images dès maintenant (évite de stocker du base64 lourd en Redis).
   const b64List = normalizePhotoInputs(imagesBase64 || imageBase64);
   let photos = normalizePhotoInputs(imageUrls || imageUrl).map(url => ({ url, publicId: null }));
@@ -347,6 +389,7 @@ router.post("/admin/actus/schedule", adminAuth, async (req, res) => {
     } catch (e) {
       // Rollback : une programmation refusée ne laisse rien sur Cloudinary.
       for (const p of photos) { if (p.publicId) { try { await deleteActuImageFromCloudinary(p.publicId); } catch (_) {} } }
+      if (m.media) await _dropMedia(m.media.publicId);
       return res.status(500).json({ ok: false, error: "Cloudinary: " + e.message });
     }
   }
@@ -361,6 +404,7 @@ router.post("/admin/actus/schedule", adminAuth, async (req, res) => {
     description: String(description || "").trim().substring(0, 3000),
     photoUrl, photoPublicId,          // couverture (compatibilité des brouillons existants)
     photos,                           // toutes les images, dans l'ordre d'affichage
+    media: m.media || null,           // vidéo ou son, déjà hébergé et validé
     eventDate: eventDate || null,
     eventLocation: eventLocation ? String(eventLocation).substring(0, 200) : null,
     publishFacebook: !!publishFacebook,
@@ -396,6 +440,7 @@ router.delete("/admin/actus/scheduled/:id", adminAuth, async (req, res) => {
   for (const p of actuPhotoList({ photos: target && target.photos, photo: target && target.photoUrl, photoPublicId: target && target.photoPublicId })) {
     if (p.publicId) { try { await deleteActuImageFromCloudinary(p.publicId); } catch (_) {} }
   }
+  for (const pid of actuMediaPublicIds(target)) await _dropMedia(pid);
   await writeScheduled(ACTUS_SCHEDULED_KEY, scheduled.filter(s => s.id !== id));
   res.json({ ok: true, deleted: id });
 });
@@ -417,6 +462,7 @@ setInterval(async () => {
           title: draft.title, description: draft.description,
           imageUrls: draftPhotos.map(p => p.url), photoPublicIds: draftPhotos.map(p => p.publicId),
           eventDate: draft.eventDate, eventLocation: draft.eventLocation,
+          media: draft.media || null,
           publishFacebook: draft.publishFacebook, sendPush: draft.sendPush, createCalendar: draft.createCalendar
         });
         console.log(`📅 Publication programmée diffusée : "${draft.title}"`);

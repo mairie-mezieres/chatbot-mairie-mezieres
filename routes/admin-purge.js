@@ -4,8 +4,9 @@
 const router = require("express").Router();
 const { adminAuth } = require("../lib/middleware");
 const { readNews, writeNews, readSignals, writeSignals, readStats, writeStats, readIaStats, writeIaStats, flushStatsNow } = require("../lib/store");
-const { deleteActuImageFromCloudinary } = require("../lib/cloudinary");
+const { deleteActuImageFromCloudinary, deleteActuMediaFromCloudinary } = require("../lib/cloudinary");
 const { actuPhotoList } = require("../lib/actu");
+const { actuMediaPublicIds } = require("../lib/actu-media");
 const { redisDel } = require("../lib/redis");
 const { logAudit } = require("../lib/logger");
 
@@ -37,6 +38,14 @@ router.post("/admin/purge", adminAuth, async (req, res) => {
             publicId: p.publicId,
             error: e.message
           });
+        }
+      }
+      for (const pid of actuMediaPublicIds(actu)) {
+        try {
+          const r = await deleteActuMediaFromCloudinary(pid);
+          cloudinaryResults.push({ id: actu.id, publicId: pid, result: r?.result || "ok" });
+        } catch (e) {
+          cloudinaryResults.push({ id: actu.id, publicId: pid, error: e.message });
         }
       }
     }

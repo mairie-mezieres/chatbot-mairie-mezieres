@@ -44,7 +44,7 @@ Aucune donnée citoyenne ne transite par un CDN tiers côté application.
 |--------|----------------|
 | 📎 **Atelier fichiers** | Compresser des images ou un PDF, **masquer un visage ou une plaque sur une photo**, **organiser les pages d'un PDF** (garder, pivoter, réordonner), extraire les pages en images, assembler plusieurs documents, extraire le texte (voir §3bis) |
 | 📊 **Vue générale** | Synthèse : activité, visiteurs, coûts Redis, état global |
-| 🔔 **Actualités** | Liste des actus (issues de Facebook `#MAT` ou créées à la main) ; suppression ; publication manuelle, **jusqu'à 6 photos** (voir §5quater) |
+| 🔔 **Actualités** | Liste des actus (issues de Facebook `#MAT` ou créées à la main) ; suppression ; publication manuelle, **jusqu'à 6 photos** (voir §5quater) et **une vidéo ou un son** (§5quinquies) |
 | 📢 **Info/Alerte** | Bandeau d'information/alerte affiché en haut de l'app |
 | 🚨 **Signalements** | Signalements citoyens (remontés vers Trello) |
 | 💡 **Idées** | Boîte à idées citoyenne — puces de filtre par statut de résolution (⏳ Sans statut / 🔍 En cours d'étude / ✅ Retenues / ❌ Non retenues / Toutes), avec compteurs |
@@ -388,6 +388,38 @@ depuis l'admin pour récupérer les autres.
 | La mairie supprime une actu : les images sont-elles libérées ? | Oui, **toutes** (v4.109). Avant, seule la couverture l'était. |
 
 ---
+
+## 5quinquies. Joindre une vidéo ou un son à une actualité (v4.130)
+
+Champ « Vidéo ou son » du formulaire de publication : **un** fichier, **100 Mo** maximum.
+Vidéo : MP4 ou WEBM. Son : MP3 ou M4A.
+
+- ⛔ **Case d'accessibilité obligatoire**, revérifiée par le serveur :
+  - **vidéo** → sous-titres **incrustés** dans l'image, et tout ce qui compte est
+    **dit à l'oral** (une information seulement écrite ou montrée à l'écran manque
+    aux personnes aveugles) ;
+  - **son** → la **description** reprend ce qui est dit (transcription).
+  Sans elle, la publication est refusée et le fichier supprimé. C'est ce qui garde
+  l'app à **100 % RGAA** : regarder/écouter le fichier avant de cocher.
+- Le fichier part **directement** chez Cloudinary au clic sur « Publier » (barre de
+  progression sur le bouton), dossier `mat/actus-media`. Route :
+  `POST /admin/actus/media/signature` ; relecture et validation : `lib/actu-media.js`.
+- **Facebook ne reçoit pas le média** : le post part avec le texte et les photos, et le
+  récapitulatif l'indique en avertissement.
+- La liste des actualités affiche 🎬 / 🎧 à côté des photos.
+- Supprimer l'actu (ou la purger, ou annuler sa programmation) supprime le fichier.
+
+| Message | Cause |
+|---|---|
+| `Accessibilité non confirmée` | Case non cochée (ou client admin pas à jour). |
+| `Un son exige un texte d'actualité…` | Description vide avec un MP3. |
+| `Format « … » non accepté` / `Fichier trop lourd` | Le fichier a été refusé **et supprimé** de Cloudinary. |
+| `Média introuvable chez Cloudinary` | L'envoi n'a pas abouti — republier. |
+| `Envoi du média impossible : …` | Échec de l'envoi direct (réseau, quota Cloudinary). Rien n'est publié. |
+
+⚠️ Si la page se ferme pendant la publication **après** l'envoi du fichier, il peut
+rester orphelin dans `mat/actus-media` : le supprimer depuis la console Cloudinary.
+⚠️ La vidéo consomme vite les crédits Cloudinary de l'offre gratuite.
 
 ## 5bis. Notifications push citoyens (signalements / demandes / bugs)
 
